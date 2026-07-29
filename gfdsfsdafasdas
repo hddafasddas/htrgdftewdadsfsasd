@@ -205,6 +205,32 @@ AutoBodyPanicRange = 6,
 AutoBodyBounceSync = true,
 AutoBodyHandRevertDeadzone = 0.30,
 
+-- Auto Mix uses Hoopz's configured native dribble controls. F/G are resolved
+-- through Behind_the_back_left/right so remapped controls still work.
+AutoMix = false,
+AutoMixKey = nil, -- assign one in Keybinds; Auto Mix claims no key by default
+AutoMixMode = 'Smart Mix',
+AutoMixRange = 12,
+AutoMixManualOverride = true,
+AutoMixSpinCombos = true,
+AutoMixRotateSpins = true,
+AutoMixSpinDegrees = 240,
+AutoMixMovement = true,
+AutoMixManualInfluence = 0.72,
+AutoMixThreatSteerMax = 0.78,
+AutoMixMoveVariety = false,
+AutoMixBallSafetyMargin = 3.0,
+AutoMixActionRisk = 0.58,
+AutoMixPressureGrace = 0.20,
+AutoMixMinimumClearanceGain = 0.60,
+AutoMixUseAntiReach = true,
+AutoMixProtectDistance = 10,
+AutoMixEmergencyDistance = 5.2,
+AutoMixDecisionHold = 0.12,
+AutoMixPostMoveCooldown = 0.24,
+AutoMixComboGap = 0,
+AutoMixDecisionDelay = 0.01,
+
 AutoGetOpen = false,
 AutoGetOpenMode = 'Balanced',
 AutoGetOpenPreferredSpot = 'Best Available',
@@ -615,6 +641,7 @@ EngagedTarget = nil,
 LastJumpAt = 0,
 },
 AutoBodyEnabled = CONFIG.AutoBody,
+AutoMixEnabled = CONFIG.AutoMix,
 AutoGetOpenEnabled = CONFIG.AutoGetOpen,
 AutoGetOpenMode = CONFIG.AutoGetOpenMode,
 AutoGetOpenTarget = nil,
@@ -746,59 +773,33 @@ end
 return true
 end
 
-State.PowerBypass = {
-Enabled = false,
-Value = 85,
-}
-
+State.PowerBypass = { Enabled = false, Value = 85, SharedPower = nil, SuspendedUntil = 0 }
 function State.PowerBypass.ResolveSharedPowerTable()
-local Ok, SharedPower = pcall(function()
-return game:GetService('SharedTableRegistry'):GetSharedTable('PowerData')
-end)
-if Ok and SharedPower then
-return SharedPower
+if State.PowerBypass.SharedPower then return State.PowerBypass.SharedPower end
+local Ok, SharedPower = pcall(function() return game:GetService('SharedTableRegistry'):GetSharedTable('PowerData') end)
+if Ok then State.PowerBypass.SharedPower = SharedPower end
+return State.PowerBypass.SharedPower
 end
-return nil
-end
-
+function State.PowerBypass.Snap(Value) return math.clamp(math.floor(((tonumber(Value) or 85) + 2.5) / 5) * 5, 10, 85) end
 function State.PowerBypass.SyncChannels(Value)
-Value = math.clamp(math.floor((tonumber(Value) or 85) + 0.5), 10, 100)
-if safe_get_attribute(LP, 'Power') ~= Value then
-safe_set_attribute(LP, 'Power', Value)
-end
+Value = State.PowerBypass.Snap(Value)
+if safe_get_attribute(LP, 'Power') ~= Value then safe_set_attribute(LP, 'Power', Value) end
 local SharedPower = State.PowerBypass.ResolveSharedPowerTable()
-if SharedPower then
-pcall(function()
-if SharedPower.Power ~= Value then
-SharedPower.Power = Value
-end
-end)
-end
+if SharedPower then pcall(function() SharedPower.Power = Value end) end
 return Value
 end
-
-function State.PowerBypass.GetEffectivePower()
-return safe_get_attribute(LP, 'Power') or 85
-end
-
-function State.PowerBypass.Write(Value)
-return State.PowerBypass.SyncChannels(Value)
-end
-
-function State.PowerBypass.Suspend(Seconds) end
-function State.PowerBypass.PrepareShot(Seconds) end
-function State.PowerBypass.BeginInputShot() return nil end
-function State.PowerBypass.BeginSyntheticShot() return nil end
-function State.PowerBypass.CommitSyntheticShot(DesiredPower) end
-function State.PowerBypass.EndInputShot(DelaySeconds) end
-function State.PowerBypass.Apply() end
-function State.PowerBypass.SetEnabled(Enabled, ShouldNotify)
-State.PowerBypass.Enabled = false
-end
-function State.PowerBypass.SetValue(Value, ShouldNotify)
-State.PowerBypass.Value = 85
-end
-function State.PowerBypass.Cycle(ShouldNotify) end
+function State.PowerBypass.GetEffectivePower() return State.PowerBypass.Snap(safe_get_attribute(LP, 'Power') or 85) end
+function State.PowerBypass.Write(Value) return State.PowerBypass.SyncChannels(Value) end
+function State.PowerBypass.Suspend(Seconds) State.PowerBypass.SuspendedUntil = os.clock() + (tonumber(Seconds) or 0) end
+function State.PowerBypass.PrepareShot(Seconds) State.PowerBypass.Suspend(Seconds or 0.5) end
+function State.PowerBypass.BeginInputShot() State.PowerBypass.PreviousPower = State.PowerBypass.GetEffectivePower(); return State.PowerBypass.PreviousPower end
+function State.PowerBypass.BeginSyntheticShot() return State.PowerBypass.BeginInputShot() end
+function State.PowerBypass.CommitSyntheticShot(DesiredPower) return State.PowerBypass.SyncChannels(DesiredPower or State.PowerBypass.Value) end
+function State.PowerBypass.EndInputShot(DelaySeconds) task.delay(tonumber(DelaySeconds) or 0, function() if State.PowerBypass.PreviousPower then State.PowerBypass.SyncChannels(State.PowerBypass.PreviousPower); State.PowerBypass.PreviousPower=nil end end) end
+function State.PowerBypass.Apply() if State.PowerBypass.Enabled and os.clock() >= State.PowerBypass.SuspendedUntil then State.PowerBypass.SyncChannels(State.PowerBypass.Value) end end
+function State.PowerBypass.SetEnabled(Enabled, ShouldNotify) State.PowerBypass.Enabled=Enabled==true; State.PowerBypass.Apply() end
+function State.PowerBypass.SetValue(Value, ShouldNotify) State.PowerBypass.Value=State.PowerBypass.Snap(Value); State.PowerBypass.Apply() end
+function State.PowerBypass.Cycle(ShouldNotify) State.PowerBypass.SetValue(State.PowerBypass.Value >= 85 and 10 or State.PowerBypass.Value + 5, ShouldNotify) end
 
 State.MobileInput = {
 FlightUp = false,
@@ -1438,18 +1439,24 @@ end
 end
 
 function State.BallAssist.DiscoverExistingCandidates()
-for _, Ball in ipairs(CollectionService:GetTagged('BallHandle')) do
-State.BallAssist.RegisterCandidate(Ball)
+for _, Ball in ipairs(CollectionService:GetTagged('BallHandle')) do State.BallAssist.RegisterCandidate(Ball) end
+local Context = State.CourtContext and State.CourtContext.Get and State.CourtContext.Get()
+if Context and Context.CurrentBall then State.BallAssist.RegisterCandidate(Context.CurrentBall) end
+for _, Player in ipairs(Players:GetPlayers()) do
+local Basketball = Player.Character and Player.Character:FindFirstChild('Basketball')
+if Basketball then State.BallAssist.RegisterBasketballContainer(Basketball) end
+end
+local PracticeArea = safe_find(Workspace, 'PracticeArea')
+if PracticeArea then for _, Object in ipairs(PracticeArea:GetDescendants()) do
+if Object.Name == 'Basketball' and (Object:IsA('Model') or Object:IsA('Tool') or Object:IsA('Folder')) then State.BallAssist.RegisterBasketballContainer(Object) end
+end end
 end
 
-for _, Object in ipairs(Workspace:GetDescendants()) do
-if Object.Name == 'Basketball'
-and (Object:IsA('Model') or Object:IsA('Tool') or Object:IsA('Folder')) then
-State.BallAssist.RegisterBasketballContainer(Object)
-elseif Object:IsA('BasePart') then
-State.BallAssist.RegisterCandidate(Object)
-end
-end
+function State.BallAssist.CanDirectMove(Ball)
+if not (Ball and Ball:IsA('BasePart')) then return false end
+if State.BallAssist.IsPracticeBall(Ball) then return true end
+local Ok, Age = pcall(function() return Ball.ReceiveAge end)
+return Ok and Age == 0
 end
 
 function State.BallAssist.HasLocalBall()
@@ -2093,7 +2100,8 @@ and (not HasLocalBall or State.BallAssist.IsPracticeBall(Ball)) then
 local Offset = Target - Ball.Position
 local Distance = Offset.Magnitude
 
-if State.BallAssist.MagEnabled and Distance <= MagRadius and Distance > 0.05 then
+if State.BallAssist.MagEnabled and Distance <= MagRadius and Distance > 0.05
+and State.BallAssist.CanDirectMove(Ball) then
 pcall(function()
 local PullVelocity = Offset.Unit * math.min(MagSpeed, math.max(20, Distance * 7))
 Ball.AssemblyLinearVelocity = PullVelocity
@@ -2198,6 +2206,7 @@ State.BallAssist.DiscoverExistingCandidates()
 end
 
 function State.BallAssist.ResetTipOff(Status)
+if State.Runtime then State.Runtime.ReleaseMovement('TipOff') end
 State.BallAssist.TipOffArmed = false
 State.BallAssist.TipOffArmedAt = 0
 State.BallAssist.TipOffBallSeen = false
@@ -2281,10 +2290,11 @@ end
 
 local ApproachDistance = math.clamp(
 tonumber(CONFIG.AutoTipOffApproachDistance) or 38, 12, 60)
-local Horizontal = Vector3.new(
-Ball.Position.X - Root.Position.X, 0, Ball.Position.Z - Root.Position.Z)
+local Flight = math.clamp((Ball.Position.Y - Root.Position.Y) / math.max(8, math.abs(Ball.AssemblyLinearVelocity.Y) + 8), 0, 0.7)
+local Predicted = Ball.Position + Ball.AssemblyLinearVelocity * Flight + Vector3.new(0, -Workspace.Gravity * Flight * Flight * 0.5, 0)
+local Horizontal = Vector3.new(Predicted.X - Root.Position.X, 0, Predicted.Z - Root.Position.Z)
 if Distance <= ApproachDistance and Horizontal.Magnitude > 0.7 then
-HumanoidObject:Move(Horizontal.Unit, false)
+if State.Runtime.AcquireMovement('TipOff') then HumanoidObject:Move(Horizontal.Unit, false) end
 end
 
 local CatchRadius = math.clamp(
@@ -2398,6 +2408,7 @@ end)))
 
 GiveSignal(CollectionService:GetInstanceAddedSignal('BallHandle'):Connect(function(Ball)
 State.BallAssist.RegisterCandidate(Ball)
+if State.CourtContext then State.CourtContext.UpdatedAt = 0 end
 State.BallAssist.ColliderLastScanAt = 0
 end))
 GiveSignal(CollectionService:GetInstanceRemovedSignal('BallHandle'):Connect(function(Ball)
@@ -2408,16 +2419,8 @@ State.BallAssist.RestoreColliderTouch(Ball)
 State.BallAssist.ColliderProtectedUntil[Ball] = nil
 end))
 GiveSignal(Workspace.DescendantAdded:Connect(function(Object)
-State.BallAssist.ColliderLastScanAt = 0
-if Object:IsA('BasePart') then
-task.defer(State.BallAssist.RegisterCandidate, Object)
-elseif Object.Name == 'Basketball'
-and (Object:IsA('Model') or Object:IsA('Tool') or Object:IsA('Folder')) then
-task.delay(0.05, function()
-if Object and Object.Parent then
-State.BallAssist.RegisterBasketballContainer(Object)
-end
-end)
+if Object.Name == 'Basketball' and (Object:IsA('Model') or Object:IsA('Tool') or Object:IsA('Folder')) then
+task.delay(0.03, function() if Object.Parent then State.BallAssist.RegisterBasketballContainer(Object) end end)
 end
 end))
 GiveSignal(Workspace.DescendantRemoving:Connect(function(Object)
@@ -3515,12 +3518,6 @@ end
 end
 
 pcall(function()
-local PerfectEvent = ReplicatedStorage:WaitForChild('Remotes', 5):FindFirstChild('perfectEvent')
-if PerfectEvent then
-GiveSignal(PerfectEvent.OnClientEvent:Connect(function(Player, _, Position)
-if Player == LP then State.PerfectShotStyle.Trigger(Position) end
-end))
-end
 GiveSignal(Workspace.DescendantAdded:Connect(function(Object)
 if os.clock() <= State.PerfectShotStyle.ActiveUntil then
 task.defer(function() pcall(State.PerfectShotStyle.ApplyObject, Object) end)
@@ -6585,19 +6582,14 @@ end
 function State.Extras.SetDeviceSpoof(Enabled, DeviceName)
 Enabled = Enabled == true
 DeviceName = table.find({ 'Desktop', 'Mobile', 'Console' }, DeviceName) and DeviceName or 'Desktop'
-local PlayerData = State.ClientSettings.PlayerData
-local Data = PlayerData and PlayerData.storedData
-Data = type(Data) == 'table' and Data or nil
-if Enabled and State.Extras.OriginalDeviceData == nil and Data and type(Data.Config) == 'table' then
-State.Extras.OriginalDeviceData = Data.Config.Device
-end
-State.Extras.DeviceSpoofEnabled = Enabled
-CONFIG.DeviceSpoof = Enabled
-CONFIG.DeviceSpoofType = DeviceName
-if Data and type(Data.Config) == 'table' then
-Data.Config.Device = Enabled and DeviceName or State.Extras.OriginalDeviceData
-end
-safe_set_attribute(LP, 'Device', Enabled and DeviceName or State.Extras.OriginalDeviceAttribute)
+local Last = UserInputService:GetLastInputType()
+local RealProtocol = Last.Name:find('Gamepad') and 'Gamepad On' or (UserInputService.TouchEnabled and 'Mobile' or 'Desktop')
+local Protocol = Enabled and (DeviceName == 'Console' and 'Gamepad On' or DeviceName) or RealProtocol
+local Remotes = ReplicatedStorage:FindFirstChild('Remotes')
+local DeviceEvent = Remotes and Remotes:FindFirstChild('deviceEvent')
+if DeviceEvent then pcall(function() DeviceEvent:FireServer(Protocol) end) end
+State.Extras.DeviceSpoofEnabled, CONFIG.DeviceSpoof, CONFIG.DeviceSpoofType = Enabled, Enabled, DeviceName
+safe_set_attribute(LP, 'Device', Enabled and DeviceName or (UserInputService.TouchEnabled and 'Mobile' or 'Desktop'))
 end
 
 function State.Extras.IsAvatarVisualChild(Object)
@@ -8036,6 +8028,7 @@ Pending = nil,
 OffsetIndex = 1,
 Locked = false,
 Misses = 0,
+CalibrationSamples = {},
 Hits = 0,
 Attempts = 0,
 Streak = 0,
@@ -8136,17 +8129,21 @@ State.PerfectRelease.LastResult = 'PERFECT'
 if CONFIG.PerfectReleaseAutoCalibrate then
 local Adopted = math.clamp(
 State.PerfectRelease.GetBase() + (Pending.Offset or 0), 0.15, 0.45)
-State.PerfectRelease.Base = Adopted
+table.insert(State.PerfectRelease.CalibrationSamples, Adopted)
+if #State.PerfectRelease.CalibrationSamples >= 5 then
+table.sort(State.PerfectRelease.CalibrationSamples)
+State.PerfectRelease.Base = State.PerfectRelease.CalibrationSamples[math.ceil(#State.PerfectRelease.CalibrationSamples / 2)]
 State.PerfectRelease.OffsetIndex = 1
 State.PerfectRelease.Locked = true
 State.PerfectRelease.Save()
+end
 end
 return
 end
 
 State.PerfectRelease.Streak = 0
 State.PerfectRelease.Misses += 1
-State.PerfectRelease.LastResult = 'MISSED WINDOW'
+State.PerfectRelease.LastResult = 'NOT PERFECT'
 if not CONFIG.PerfectReleaseAutoCalibrate then return end
 if State.PerfectRelease.Misses >= 2 then
 State.PerfectRelease.Locked = false
@@ -8180,9 +8177,11 @@ local Remotes = ReplicatedStorage:FindFirstChild('Remotes')
 local PerfectEvent = Remotes and Remotes:FindFirstChild('perfectEvent')
 if not PerfectEvent then return end
 State.PerfectRelease.Connection = PerfectEvent.OnClientEvent:Connect(
-function(Shooter)
+function(Shooter, ...)
 if Shooter ~= LP then return end
 State.PerfectRelease.Resolve(true)
+local Position = select(2, ...)
+if State.PerfectShotStyle then State.PerfectShotStyle.Trigger(Position) end
 end
 )
 end)
@@ -8198,6 +8197,7 @@ State.PerfectRelease.Base = nil
 State.PerfectRelease.Locked = false
 State.PerfectRelease.OffsetIndex = 1
 State.PerfectRelease.Misses = 0
+table.clear(State.PerfectRelease.CalibrationSamples)
 State.PerfectRelease.Hits = 0
 State.PerfectRelease.Attempts = 0
 State.PerfectRelease.Streak = 0
@@ -10857,6 +10857,31 @@ local AUTO_GUARD_BIND_NAME = 'OBLITERATE_V2_AutoGuardMovement'
 local AUTO_BODY_BIND_NAME = 'OBLITERATE_V2_AutoBodyRotation'
 local AUTO_BODY_HAND_DEADZONE = 0.15
 
+State.Runtime = {
+MovementOwner = nil,
+MovementPriority = 0,
+MovementLeaseUntil = 0,
+MovementPriorities = { Guard = 30, GetOpen = 40, Offense = 50, AutoMix = 60, Dunk = 70, TipOff = 80 },
+}
+function State.Runtime.HasManualInput(Enabled)
+if Enabled == false then return false end
+for _, Key in ipairs(PerfCache.MovementOverrideKeys) do if UserInputService:IsKeyDown(Key) then return true end end
+local Ok, Inputs = pcall(UserInputService.GetGamepadState, UserInputService, Enum.UserInputType.Gamepad1)
+if Ok then for _, Input in ipairs(Inputs) do if Input.KeyCode == Enum.KeyCode.Thumbstick1 and Vector2.new(Input.Position.X, Input.Position.Y).Magnitude > 0.18 then return true end end end
+return false
+end
+function State.Runtime.AcquireMovement(Owner, Lease)
+local Now, Priority = os.clock(), State.Runtime.MovementPriorities[Owner] or 0
+if State.Runtime.MovementOwner == Owner or Now >= State.Runtime.MovementLeaseUntil or Priority >= State.Runtime.MovementPriority then
+State.Runtime.MovementOwner, State.Runtime.MovementPriority, State.Runtime.MovementLeaseUntil = Owner, Priority, Now + (Lease or 0.12)
+return true
+end
+return false
+end
+function State.Runtime.ReleaseMovement(Owner)
+if State.Runtime.MovementOwner == Owner then State.Runtime.MovementOwner, State.Runtime.MovementPriority, State.Runtime.MovementLeaseUntil = nil, 0, 0 end
+end
+
 local function GetClosestDribbler()
 local Character = LP.Character
 local Root = Character and Character:FindFirstChild('HumanoidRootPart')
@@ -10933,6 +10958,34 @@ end
 PerfCache.GuardOpponent[Player] = { At = Now, Value = Result }
 return Result
 end)
+
+State.CourtContext = { Value = nil, UpdatedAt = 0 }
+function State.CourtContext.Refresh()
+local Court, SlotName, Slot = ResolvePlayerCourt(LP)
+local Side = Court and ResolvePlayerCourtTeam(LP, Court, SlotName, Slot) or nil
+local Settings = Court and Court:FindFirstChild('_CourtSettings')
+local CurrentBallValue = Settings and Settings:FindFirstChild('CurrentBall')
+local CurrentBall = CurrentBallValue and CurrentBallValue.Value or nil
+if CurrentBall and not CurrentBall:IsA('BasePart') then CurrentBall = State.BallAssist and State.BallAssist.GetCanonicalBallPart(CurrentBall) or nil end
+local Teammates, Opponents = {}, {}
+for _, Player in ipairs(Players:GetPlayers()) do
+if Player ~= LP then
+local TheirCourt, TheirSlotName, TheirSlot = ResolvePlayerCourt(Player)
+if not Court or TheirCourt == Court then
+local TheirSide = TheirCourt and ResolvePlayerCourtTeam(Player, TheirCourt, TheirSlotName, TheirSlot) or nil
+if Side and TheirSide and Side == TheirSide then table.insert(Teammates, Player) else table.insert(Opponents, Player) end
+end
+end
+end
+local Hitboxes = Court and (Court:FindFirstChild('Hitboxes') or Court:FindFirstChild('HitboxesHome') or Court:FindFirstChild('HitboxesAway'))
+State.CourtContext.Value = { Court=Court, SlotName=SlotName, Side=Side, Teammates=Teammates, Opponents=Opponents, ScoringRim=FindPlayerScoringGoal(LP), CurrentBall=CurrentBall, PaintHome=Court and Court:FindFirstChild('PaintHome', true), PaintAway=Court and Court:FindFirstChild('PaintAway', true), Paint=Court and Court:FindFirstChild('Paint', true), Center=Court and Court:FindFirstChild('Center', true), Hitboxes=Hitboxes }
+State.CourtContext.UpdatedAt = os.clock()
+return State.CourtContext.Value
+end
+function State.CourtContext.Get()
+if not State.CourtContext.Value or os.clock() - State.CourtContext.UpdatedAt > 0.15 then return State.CourtContext.Refresh() end
+return State.CourtContext.Value
+end
 
 State.AutoBody = {
 Enabled = CONFIG.AutoBody,
@@ -11034,16 +11087,32 @@ State.AutoBody.HandSampleTrack = DribbleTrack
 return Hand, RestingTrack, DribbleTrack
 end
 
+
+function State.AutoBody.AttachAnimator(Character, Animator)
+if State.AutoBody.Animator == Animator then return end
+if State.AutoBody.AnimatorConnection then pcall(function() State.AutoBody.AnimatorConnection:Disconnect() end) end
+State.AutoBody.Animator, State.AutoBody.AnimatorConnection = Animator, nil
+if not Animator then return end
+State.AutoBody.AnimatorConnection = Animator.AnimationPlayed:Connect(function(Track)
+local Animation = Track.Animation
+local Id, Name = Animation and Animation.AnimationId, Animation and Animation.Name
+local Hand = (Id == State.AutoBody.RightDribbleAnimationId or Name == 'RTrack') and 'R'
+or ((Id == State.AutoBody.LeftDribbleAnimationId or Name == 'LTrack') and 'L' or nil)
+if Hand then State.AutoBody.StoreHandSample(Character, Hand, true, Track, os.clock()); State.AutoBody.WatchBounce(Track) end
+end)
+end
+
 function State.AutoBody.GetCurrentHand(Character, HumanoidObject, Root)
 local Now = os.clock()
 if State.AutoBody.HandSampleCharacter == Character
-and Now - State.AutoBody.HandSampleAt < 0.075 then
+and Now - State.AutoBody.HandSampleAt < (1 / 12) then
 return State.AutoBody.HandSampleHand,
 State.AutoBody.HandSampleResting,
 State.AutoBody.HandSampleTrack
 end
 
 local Animator = HumanoidObject and HumanoidObject:FindFirstChildOfClass('Animator')
+State.AutoBody.AttachAnimator(Character, Animator)
 if Now - State.AutoBody.DribbleAnimationCacheAt >= 5
 or not (State.AutoBody.RightDribbleAnimationId
 and State.AutoBody.LeftDribbleAnimationId) then
@@ -11157,7 +11226,8 @@ end
 local Range = math.max(4, tonumber(CONFIG.AutoBodyRange) or 25)
 local Total = Vector3.new()
 local Count = 0
-for _, Player in ipairs(Players:GetPlayers()) do
+local SharedOpponents = State.CourtContext and State.CourtContext.Get().Opponents or Players:GetPlayers()
+for _, Player in ipairs(SharedOpponents) do
 if IsGuardOpponent(Player) then
 local TargetRoot = GetAutoBodyTargetRig(Player)
 if TargetRoot then
@@ -11517,6 +11587,7 @@ end
 
 if (State.Movement and State.Movement.FlightEnabled)
 or (State.Extras and State.Extras.SpinbotEnabled)
+or (State.AutoMix and State.AutoMix.Rotating)
 or (State.AutoGetOpenEnabled and not safe_find(Character, 'Basketball')) then
 State.AutoBody.Status = 'PAUSED FOR MOVEMENT'
 State.AutoBody.ReleaseRotation()
@@ -11619,6 +11690,816 @@ State.AutoBody.ResetRuntime()
 UpdateAutoBodyBinding()
 if HubUI.Sync then HubUI.Sync() end
 end
+
+-- Native, animation-aware dribble mixer. It never fires ball/sound remotes;
+-- every move is produced through the player's configured Hoopz control.
+State.AutoMix = {
+Enabled = CONFIG.AutoMix == true,
+Status = CONFIG.AutoMix and 'READY' or 'OFF',
+CurrentHand = nil,
+Busy = false,
+SendingInput = false,
+LastMove = '--',
+LastTrack = nil,
+LastDefender = nil,
+NextAt = 0,
+Generation = 0,
+Sequence = {},
+SequenceIndex = 1,
+SpinDirection = 'L',
+AllMoveIndex = 0,
+LastMoveName = nil,
+LastDecisionAt = 0,
+ThreatSince = 0,
+ThreatKey = nil,
+ThreatLevel = 'CLEAR',
+RiskScore = 0,
+ClosingSpeed = 0,
+Plan = 'HOLD',
+DesiredMovement = nil,
+MovementUntil = 0,
+MovementStatus = 'IDLE',
+ManualDirection = Vector3.zero,
+BlendedDirection = Vector3.zero,
+BlendPercent = 0,
+PredictedBallClearance = 0,
+PredictedBallEndClearance = 0,
+PredictedBallSide = '--',
+SafestMove = '--',
+MoveLastUsed = {},
+MoveScores = {},
+CurrentBallClearance = 0,
+PressureSince = 0,
+LastNecessaryReason = 'NONE',
+AntiReachWasEnabled = nil,
+Rotating = false,
+SpinRoot = nil,
+SpinHumanoid = nil,
+SpinOriginalAutoRotate = nil,
+SpinStartedAt = 0,
+SpinDuration = 0,
+SpinRadians = 0,
+SpinApplied = 0,
+SpinTarget = 0,
+ShiftLockActive = false,
+ShiftLockBindName = 'GoldenEagleAutoMixShiftLock',
+Animator = nil,
+AnimatorConnection = nil,
+TrackConnection = nil,
+}
+
+State.AutoMix.Moves = {
+BehindLeft = { Action = 'Behind_the_back_left', Track = 'FTrack', EndHand = 'R', Timeout = 0.42, SpinSign = 1, Label = 'SPIN LEFT (F)' },
+BehindRight = { Action = 'Behind_the_back_right', Track = 'GTrack', EndHand = 'L', Timeout = 0.42, SpinSign = -1, Label = 'SPIN RIGHT (G)' },
+CrossUp = { Action = 'Cross_up', Timeout = 0.56, Label = 'CROSS SPIN' },
+FakeBehindLeft = { Action = 'Fake_behind_left', Track = 'VTrack', EndHand = 'L', Timeout = 0.42, Label = 'LEFT ESCAPE' },
+FakeBehindRight = { Action = 'Fake_behind_right', Track = 'BTrack', EndHand = 'R', Timeout = 0.42, Label = 'RIGHT ESCAPE' },
+FakeOut = { Action = 'Fake_out', Timeout = 0.35, Label = 'SPIN FAKE' },
+SwitchHandles = { Action = 'Switch_handles', Timeout = 0.36, DynamicEndHand = true, Label = 'SWITCH HANDLES' },
+}
+
+State.AutoMix.ProtectedGameActions = {
+'Shoot_ball', 'Dunk', 'Increase_power', 'Decrease_power',
+'Toggle_zoom', 'Toggle_shiftlock', 'Switch_handles',
+'Behind_the_back_left', 'Behind_the_back_right', 'Cross_up',
+'Fake_behind_left', 'Fake_behind_right', 'Fake_out',
+}
+
+State.AutoMix.TrackInfo = {
+FTrack = { EndHand = 'R', Move = 'BehindLeft' },
+GTrack = { EndHand = 'L', Move = 'BehindRight' },
+CRTrack = { EndHand = 'R', Move = 'CrossUp' },
+CLTrack = { EndHand = 'L', Move = 'CrossUp' },
+RFakeTrack = { EndHand = 'R', Move = 'FakeOut' },
+LFakeTrack = { EndHand = 'L', Move = 'FakeOut' },
+VTrack = { EndHand = 'L', Move = 'FakeBehindLeft' },
+BTrack = { EndHand = 'R', Move = 'FakeBehindRight' },
+}
+
+-- Root-relative X/Z paths reduced from the recorded Hoopz animations. They are
+-- used only for move selection; the native animation still owns the real ball.
+function State.AutoMix.GetMovePath(Name, Hand)
+local Side = Hand == 'L' and -1 or 1
+if Name == 'BehindLeft' then
+return { {0,-1.5,-1.85},{0.2,-1.8,-0.75},{0.5,0,1.2},{0.75,1.8,-0.3},{1,1.5,-1.85} }
+elseif Name == 'BehindRight' then
+return { {0,1.5,-1.85},{0.2,1.8,-0.75},{0.5,0,1.2},{0.75,-1.8,-0.3},{1,-1.5,-1.85} }
+elseif Name == 'CrossUp' then
+return { {0,Side*1.45,-1.85},{0.25,-Side*1.55,-1.85},{0.55,Side*1.45,-1.85},{0.78,-Side*0.1,-1.85},{1,Side*1.45,-1.85} }
+elseif Name == 'FakeBehindLeft' then
+return { {0,Side*1.45,-1.85},{0.35,-0.15,0.9},{0.62,-1.65,-0.2},{1,-1.45,-1.85} }
+elseif Name == 'FakeBehindRight' then
+return { {0,Side*1.45,-1.85},{0.35,0.15,0.9},{0.62,1.65,-0.2},{1,1.45,-1.85} }
+elseif Name == 'FakeOut' then
+return { {0,Side*1.45,-1.85},{0.35,Side*1.45,-0.65},{0.62,Side*1.45,0.1},{1,Side*1.45,-1.85} }
+elseif Name == 'SwitchHandles' then
+return { {0,Side*1.45,-1.85},{0.32,Side*0.55,-1.75},{0.62,-Side*0.25,-1.7},{1,-Side*1.45,-1.85} }
+end
+return { {0,Side*1.45,-1.85},{1,Side*1.45,-1.85} }
+end
+
+function State.AutoMix.GetExpectedHand(Name, Hand)
+local Move = State.AutoMix.Moves[Name]
+if Move and Move.DynamicEndHand then return Hand == 'R' and 'L' or 'R' end
+return Move and Move.EndHand or Hand
+end
+
+function State.AutoMix.EvaluateBallSafety(Name, Root, Hand, Threat)
+local Move = State.AutoMix.Moves[Name]
+if not Move or not Threat or not Threat.Root then return -math.huge, 0, Hand end
+local Key = State.AutoMix.ResolveKey(Move.Action)
+if not Key then return -math.huge, 0, Hand end
+local Duration = Move.Timeout or 0.42
+local Margin = math.max(1.5, tonumber(CONFIG.AutoMixBallSafetyMargin) or 3)
+local MinimumClearance, EndClearance = math.huge, 0
+local RelativeVelocity = Threat.Root.AssemblyLinearVelocity - Root.AssemblyLinearVelocity
+local Path = State.AutoMix.GetMovePath(Name, Hand)
+for Index, Point in ipairs(Path) do
+local T, X, Z = Point[1], Point[2], Point[3]
+local PredictedDefender = Threat.Root.Position + RelativeVelocity * (T * Duration)
+local BallWorld = Root.CFrame:PointToWorldSpace(Vector3.new(X, 0, Z))
+local Offset = Vector3.new(BallWorld.X - PredictedDefender.X, 0, BallWorld.Z - PredictedDefender.Z)
+local Clearance = Offset.Magnitude - Margin
+MinimumClearance = math.min(MinimumClearance, Clearance)
+if Index == #Path then EndClearance = Clearance end
+end
+local ExpectedHand = State.AutoMix.GetExpectedHand(Name, Hand)
+local Score = MinimumClearance * 2.5 + EndClearance * 1.15 - Duration * 0.75
+if ExpectedHand ~= Threat.Side then Score += 2.2 else Score -= 2.3 end
+if State.AutoMix.LastMoveName == Name then Score -= 3.4 end
+if Threat.Level == 'EMERGENCY' then
+if Name == 'BehindLeft' or Name == 'BehindRight' then Score += 1.8 end
+if Name == 'CrossUp' then Score -= 1.2 end
+if Name == 'SwitchHandles' then Score += 0.65 end
+end
+local LastUsed = State.AutoMix.MoveLastUsed[Name] or 0
+if CONFIG.AutoMixMoveVariety then Score += math.clamp((os.clock() - LastUsed) / 9, 0, 1.4) end
+return Score, MinimumClearance, ExpectedHand, EndClearance
+end
+
+function State.AutoMix.ChooseSafestMove(Root, Hand, Threat)
+local Candidates = { 'BehindLeft','BehindRight','CrossUp','FakeBehindLeft','FakeBehindRight','FakeOut','SwitchHandles' }
+local Ranked = {}
+State.AutoMix.MoveScores = {}
+for _, Name in ipairs(Candidates) do
+local Score, Clearance, EndHand, EndClearance = State.AutoMix.EvaluateBallSafety(Name, Root, Hand, Threat)
+State.AutoMix.MoveScores[Name] = Score
+if Score > -math.huge then table.insert(Ranked, { Name=Name, Score=Score, Clearance=Clearance, EndHand=EndHand, EndClearance=EndClearance }) end
+end
+table.sort(Ranked, function(A,B) return A.Score > B.Score end)
+if #Ranked == 0 then return nil end
+local Choice = Ranked[1]
+-- Variety is allowed only inside the near-best safety tier, so it never picks
+-- a clearly exposed animation just to cycle moves.
+if CONFIG.AutoMixMoveVariety then
+local SafeTier = {}
+for _, Item in ipairs(Ranked) do if Item.Score >= Ranked[1].Score - 1.25 then table.insert(SafeTier, Item) end end
+table.sort(SafeTier, function(A,B)
+return (State.AutoMix.MoveLastUsed[A.Name] or 0) < (State.AutoMix.MoveLastUsed[B.Name] or 0)
+end)
+Choice = SafeTier[1] or Choice
+end
+State.AutoMix.PredictedBallClearance = Choice.Clearance
+State.AutoMix.PredictedBallEndClearance = Choice.EndClearance or Choice.Clearance
+State.AutoMix.PredictedBallSide = Choice.EndHand
+State.AutoMix.SafestMove = Choice.Name
+return Choice.Name
+end
+
+function State.AutoMix.RawKey(Action)
+local Value
+local Controls = safe_find(LP, 'Controls1')
+if Controls then pcall(function() Value = safe_get_attribute(Controls, Action) end) end
+if Value == nil then
+local PlayerData = State.ClientSettings.PlayerData
+if PlayerData and type(PlayerData.Get) == 'function' then
+pcall(function() Value = PlayerData.Get('Controls_Keyboard', Action) end)
+end
+end
+if typeof(Value) == 'EnumItem' then return Value end
+if type(Value) ~= 'string' or Value == '' then return nil end
+Value = Value:gsub('Enum%.KeyCode%.', '')
+local Ok, Key = pcall(function() return Enum.KeyCode[Value] end)
+return Ok and Key or nil
+end
+
+function State.AutoMix.GetKeyConflict(Action, Key)
+if not Key then return 'UNBOUND' end
+local Token = 'KC:' .. Key.Name
+local Manager = HubUI and HubUI.KeybindManager
+if Manager and Manager.Ordered then
+for _, Entry in ipairs(Manager.Ordered) do
+if Entry.Id ~= 'AutoMix' and Entry.Key == Token then
+return 'HUB: ' .. tostring(Entry.Label or Entry.Id)
+end
+end
+end
+local Controls = safe_find(LP, 'Controls1')
+if Controls then
+local Ok, Attributes = pcall(function() return Controls:GetAttributes() end)
+if Ok and type(Attributes) == 'table' then
+for OtherAction, Value in pairs(Attributes) do
+if OtherAction ~= Action then
+local Name = typeof(Value) == 'EnumItem' and Value.Name
+or tostring(Value or ''):gsub('Enum%.KeyCode%.', '')
+if Name == Key.Name then return 'GAME: ' .. tostring(OtherAction) end
+end
+end
+end
+end
+local PlayerData = State.ClientSettings.PlayerData
+if PlayerData and type(PlayerData.Get) == 'function' then
+for _, OtherAction in ipairs(State.AutoMix.ProtectedGameActions) do
+if OtherAction ~= Action then
+local OtherValue
+pcall(function() OtherValue = PlayerData.Get('Controls_Keyboard', OtherAction) end)
+local OtherName = typeof(OtherValue) == 'EnumItem' and OtherValue.Name
+or tostring(OtherValue or ''):gsub('Enum%.KeyCode%.', '')
+if OtherName == Key.Name then return 'GAME: ' .. OtherAction end
+end
+end
+end
+return nil
+end
+
+function State.AutoMix.ResolveKey(Action)
+local Key = State.AutoMix.RawKey(Action)
+local Conflict = State.AutoMix.GetKeyConflict(Action, Key)
+return Conflict and nil or Key, Conflict
+end
+
+function State.AutoMix.HasManualDribbleInput()
+if not CONFIG.AutoMixManualOverride or State.AutoMix.SendingInput then return false end
+for _, Move in pairs(State.AutoMix.Moves) do
+local Key = State.AutoMix.RawKey(Move.Action)
+if Key and UserInputService:IsKeyDown(Key) then return true end
+end
+return false
+end
+
+function State.AutoMix.IsShiftLockActive()
+local Camera = Workspace.CurrentCamera
+if not Camera or UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then return false end
+local Distance = 0
+pcall(function() Distance = (Camera.CFrame.Position - Camera.Focus.Position).Magnitude end)
+-- First person also locks the cursor, so require a third-person camera offset.
+return Distance > 0.75
+end
+
+function State.AutoMix.GetCameraBasis(Root)
+local Camera = Workspace.CurrentCamera
+local Look = Camera and Camera.CFrame.LookVector or (Root and Root.CFrame.LookVector) or Vector3.zAxis
+local Right = Camera and Camera.CFrame.RightVector or (Root and Root.CFrame.RightVector) or Vector3.xAxis
+local Forward = Vector3.new(Look.X, 0, Look.Z)
+local Side = Vector3.new(Right.X, 0, Right.Z)
+if Forward.Magnitude <= 0.001 and Root then Forward = Vector3.new(Root.CFrame.LookVector.X, 0, Root.CFrame.LookVector.Z) end
+if Side.Magnitude <= 0.001 and Root then Side = Vector3.new(Root.CFrame.RightVector.X, 0, Root.CFrame.RightVector.Z) end
+if Forward.Magnitude > 0.001 then Forward = Forward.Unit end
+if Side.Magnitude > 0.001 then Side = Side.Unit end
+return Forward, Side
+end
+
+function State.AutoMix.ApplyShiftLockSpin(Root, Target)
+if not Root or not Root.Parent or Root.Anchored then return end
+local Forward = State.AutoMix.GetCameraBasis(Root)
+if Forward.Magnitude <= 0.001 then return end
+-- Rebuild from camera yaw every frame. Shift lock may rewrite root yaw, so an
+-- incremental rotation alone would be lost before the next rendered frame.
+local Position = Root.Position
+Root.CFrame = CFrame.lookAt(Position, Position + Forward) * CFrame.Angles(0, Target or 0, 0)
+end
+
+function State.AutoMix.StopSpin()
+if State.AutoMix.SpinHumanoid and State.AutoMix.SpinHumanoid.Parent then
+pcall(function()
+State.AutoMix.SpinHumanoid.AutoRotate = State.AutoMix.SpinOriginalAutoRotate ~= false
+end)
+end
+State.AutoMix.Rotating = false
+State.AutoMix.SpinRoot = nil
+State.AutoMix.SpinHumanoid = nil
+State.AutoMix.SpinOriginalAutoRotate = nil
+State.AutoMix.SpinApplied = 0
+State.AutoMix.SpinTarget = 0
+end
+
+function State.AutoMix.StartSpin(Move)
+if not CONFIG.AutoMixRotateSpins or not Move or not Move.SpinSign then return end
+local Character = LP.Character
+local Root = Character and safe_find(Character, 'HumanoidRootPart')
+local HumanoidObject = Character and safe_find(Character, 'Humanoid')
+if not Root or not HumanoidObject or Root.Anchored then return end
+State.AutoMix.StopSpin()
+State.AutoMix.Rotating = true
+State.AutoMix.SpinRoot = Root
+State.AutoMix.SpinHumanoid = HumanoidObject
+State.AutoMix.SpinOriginalAutoRotate = HumanoidObject.AutoRotate
+State.AutoMix.SpinStartedAt = os.clock()
+State.AutoMix.SpinDuration = math.max(0.25, Move.Timeout or 0.42)
+State.AutoMix.SpinRadians = math.rad(math.clamp(tonumber(CONFIG.AutoMixSpinDegrees) or 240, 90, 360)) * Move.SpinSign
+State.AutoMix.SpinApplied = 0
+State.AutoMix.SpinTarget = 0
+State.AutoMix.ShiftLockActive = State.AutoMix.IsShiftLockActive()
+HumanoidObject.AutoRotate = false
+end
+
+function State.AutoMix.AttachAnimator(Character, HumanoidObject)
+local Animator = HumanoidObject and safe_find(HumanoidObject, 'Animator')
+if not Animator or State.AutoMix.Animator == Animator then return end
+if State.AutoMix.AnimatorConnection then pcall(function() State.AutoMix.AnimatorConnection:Disconnect() end) end
+State.AutoMix.Animator = Animator
+State.AutoMix.AnimatorConnection = Animator.AnimationPlayed:Connect(function(Track)
+local Name = Track and Track.Name or ''
+if Name == 'RTrack' then State.AutoMix.CurrentHand = 'R'; return end
+if Name == 'LTrack' then State.AutoMix.CurrentHand = 'L'; return end
+local Info = State.AutoMix.TrackInfo[Name]
+if not Info then return end
+State.AutoMix.Busy = true
+State.AutoMix.LastTrack = Track
+State.AutoMix.LastMove = State.AutoMix.Moves[Info.Move] and State.AutoMix.Moves[Info.Move].Label or Info.Move
+if State.AutoMix.TrackConnection then pcall(function() State.AutoMix.TrackConnection:Disconnect() end) end
+State.AutoMix.TrackConnection = Track.Stopped:Connect(function()
+State.AutoMix.CurrentHand = Info.EndHand or State.AutoMix.CurrentHand
+State.AutoMix.Busy = false
+State.AutoMix.LastTrack = nil
+State.AutoMix.StopSpin()
+State.AutoMix.ScheduleNext()
+end)
+end)
+end
+
+function State.AutoMix.ReadHand(Character, HumanoidObject, Root)
+local Hand
+pcall(function() Hand = State.AutoBody.GetCurrentHand(Character, HumanoidObject, Root) end)
+if Hand == 'L' or Hand == 'R' then State.AutoMix.CurrentHand = Hand end
+if not State.AutoMix.CurrentHand then
+local Ball = Character and safe_find(Character, 'Basketball')
+local BallPart = Ball and (safe_find(Ball, 'Ball') or Ball.PrimaryPart or Ball:FindFirstChildWhichIsA('BasePart'))
+if BallPart and Root then
+State.AutoMix.CurrentHand = Root.CFrame:PointToObjectSpace(BallPart.Position).X >= 0 and 'R' or 'L'
+end
+end
+return State.AutoMix.CurrentHand or 'R'
+end
+
+function State.AutoMix.GetDefender(Root)
+local Player, Distance
+pcall(function() Player, Distance = State.AutoBody.FindDefender(Root) end)
+local Character = Player and Player.Character
+local TargetRoot = Character and safe_find(Character, 'HumanoidRootPart')
+if not TargetRoot then return nil, nil, math.huge end
+return Player, TargetRoot, Distance or (TargetRoot.Position - Root.Position).Magnitude
+end
+
+function State.AutoMix.GetManualDirection(HumanoidObject)
+if UserInputService:GetFocusedTextBox() then return Vector3.zero end
+local Character = LP.Character
+local Root = Character and safe_find(Character, 'HumanoidRootPart')
+State.AutoMix.ShiftLockActive = State.AutoMix.IsShiftLockActive()
+local Forward, Side = State.AutoMix.GetCameraBasis(Root)
+local Direction = Vector3.zero
+if UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.Up) then Direction += Forward end
+if UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.Down) then Direction -= Forward end
+if UserInputService:IsKeyDown(Enum.KeyCode.D) or UserInputService:IsKeyDown(Enum.KeyCode.Right) then Direction += Side end
+if UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.Left) then Direction -= Side end
+if Direction.Magnitude <= 0.05 and UserInputService.TouchEnabled and HumanoidObject then
+local Touch = Vector3.new(HumanoidObject.MoveDirection.X, 0, HumanoidObject.MoveDirection.Z)
+if Touch.Magnitude > 0.05 then Direction = Touch end
+end
+return Direction.Magnitude > 1 and Direction.Unit or Direction
+end
+
+function State.AutoMix.GetThreatSteerWeight(HasManual)
+if not HasManual then return 1 end
+local Weights = { CLEAR = 0.12, WATCH = 0.26, PRESSURE = 0.50, EMERGENCY = 0.78 }
+return math.min(Weights[State.AutoMix.ThreatLevel] or 0.20,
+math.clamp(tonumber(CONFIG.AutoMixThreatSteerMax) or 0.78, 0.1, 1))
+end
+
+function State.AutoMix.StopMovement()
+State.AutoMix.DesiredMovement = nil
+State.AutoMix.MovementUntil = 0
+State.AutoMix.MovementStatus = 'IDLE'
+State.AutoMix.BlendedDirection = Vector3.zero
+State.AutoMix.BlendPercent = 0
+if State.Runtime then State.Runtime.ReleaseMovement('AutoMix') end
+end
+
+function State.AutoMix.ScheduleNext()
+local HasQueued = State.AutoMix.Sequence[State.AutoMix.SequenceIndex] ~= nil
+State.AutoMix.NextAt = os.clock() + (HasQueued and 0
+or math.max(0.08, tonumber(CONFIG.AutoMixPostMoveCooldown) or 0.24))
+end
+
+function State.AutoMix.GetOpponents()
+local Context = State.CourtContext and State.CourtContext.Get()
+return Context and Context.Opponents or Players:GetPlayers()
+end
+
+function State.AutoMix.ChooseOpenDirection(Root, TargetRoot)
+local Away = TargetRoot and Vector3.new(Root.Position.X - TargetRoot.Position.X, 0, Root.Position.Z - TargetRoot.Position.Z) or Vector3.new()
+if Away.Magnitude > 0.05 then Away = Away.Unit else Away = -Root.CFrame.LookVector end
+Away = Vector3.new(Away.X, 0, Away.Z)
+local Left = Vector3.new(-Away.Z, 0, Away.X)
+local Right = -Left
+local RimPosition = State.AutoBody.GetRimPosition()
+local ToRim = RimPosition and Vector3.new(RimPosition.X - Root.Position.X, 0, RimPosition.Z - Root.Position.Z) or Root.CFrame.LookVector
+if ToRim.Magnitude > 0.05 then ToRim = ToRim.Unit end
+local Candidates = { Away, (Away * 0.65 + Left * 0.76).Unit, (Away * 0.65 + Right * 0.76).Unit, Left, Right, (ToRim * 0.65 + Away * 0.35).Unit }
+local Best, BestScore = Away, -math.huge
+for _, Direction in ipairs(Candidates) do
+local Probe = Root.Position + Direction * 5.5
+local MinimumRoom = 40
+for _, Player in ipairs(State.AutoMix.GetOpponents()) do
+if Player ~= LP and IsGuardOpponent(Player) then
+local TheirRoot = GetAutoBodyTargetRig(Player)
+if TheirRoot then
+local Predicted = TheirRoot.Position + TheirRoot.AssemblyLinearVelocity * 0.18
+local Room = (Vector3.new(Probe.X, 0, Probe.Z) - Vector3.new(Predicted.X, 0, Predicted.Z)).Magnitude
+MinimumRoom = math.min(MinimumRoom, Room)
+end
+end
+end
+local Score = MinimumRoom + Direction:Dot(Away) * 2.4 + Direction:Dot(ToRim) * 0.8
+if Score > BestScore then Best, BestScore = Direction, Score end
+end
+return Best.Magnitude > 0.05 and Best.Unit or Away
+end
+
+function State.AutoMix.SetMovement(Direction, Duration, Status)
+if not CONFIG.AutoMixMovement or not Direction or Direction.Magnitude <= 0.05 then State.AutoMix.StopMovement(); return end
+State.AutoMix.DesiredMovement = Vector3.new(Direction.X, 0, Direction.Z).Unit
+State.AutoMix.MovementUntil = os.clock() + math.max(0.08, Duration or 0.25)
+State.AutoMix.MovementStatus = Status or 'ESCAPING'
+end
+
+function State.AutoMix.ReadThreat(Root, Hand)
+local Player, TargetRoot, Distance = State.AutoMix.GetDefender(Root)
+State.AutoMix.LastDefender = Player
+if not TargetRoot then
+State.AutoMix.RiskScore, State.AutoMix.ClosingSpeed, State.AutoMix.ThreatLevel = 0, 0, 'CLEAR'
+State.AutoMix.PredictedBallClearance = 0
+State.AutoMix.PredictedBallEndClearance = 0
+State.AutoMix.PredictedBallSide = Hand or '--'
+State.AutoMix.SafestMove = '--'
+return nil
+end
+local Relative = Root.CFrame:PointToObjectSpace(TargetRoot.Position)
+local Horizontal = Vector3.new(TargetRoot.Position.X - Root.Position.X, 0, TargetRoot.Position.Z - Root.Position.Z)
+local RelativeVelocity = TargetRoot.AssemblyLinearVelocity - Root.AssemblyLinearVelocity
+local Closing = Horizontal.Magnitude > 0.05 and -RelativeVelocity:Dot(Horizontal.Unit) or 0
+local Side = Relative.X >= 0 and 'R' or 'L'
+local SameSide = Side == Hand
+local Protect = math.max(5, tonumber(CONFIG.AutoMixRange) or tonumber(CONFIG.AutoMixProtectDistance) or 10)
+local Risk = math.clamp((Protect - Distance) / Protect, 0, 1) + math.clamp(Closing / 14, 0, 0.7) + (SameSide and 0.20 or 0) + (math.abs(Relative.X) < 1.35 and 0.08 or 0)
+local Emergency = math.max(3.5, tonumber(CONFIG.AutoMixEmergencyDistance) or 5.2)
+local Level = (Distance <= Emergency or Closing >= 8) and 'EMERGENCY' or (Risk >= 0.48 and 'PRESSURE' or (Risk >= 0.20 and 'WATCH' or 'CLEAR'))
+State.AutoMix.RiskScore, State.AutoMix.ClosingSpeed, State.AutoMix.ThreatLevel = Risk, Closing, Level
+return { Player=Player, Root=TargetRoot, Distance=Distance, Relative=Relative, Side=Side, SameSide=SameSide, Closing=Closing, Risk=Risk, Level=Level }
+end
+
+function State.AutoMix.Perform(Name)
+local Move = State.AutoMix.Moves[Name]
+if not Move or State.AutoMix.Busy then return false end
+local Key, Conflict = State.AutoMix.ResolveKey(Move.Action)
+if not Key then
+State.AutoMix.Status = Conflict and ('BIND CONFLICT: ' .. Conflict) or ('NO BIND: ' .. Move.Action)
+State.AutoMix.NextAt = os.clock() + 0.25
+return false
+end
+State.AutoMix.Generation += 1
+local Generation = State.AutoMix.Generation
+local ExpectedEndHand = State.AutoMix.GetExpectedHand(Name, State.AutoMix.CurrentHand or 'R')
+State.AutoMix.Busy = true
+State.AutoMix.LastMove = Move.Label
+State.AutoMix.LastMoveName = Name
+State.AutoMix.MoveLastUsed[Name] = os.clock()
+State.AutoMix.Status = Move.Label
+State.AutoMix.SendingInput = true
+if State.AutoMix.DesiredMovement then
+State.AutoMix.MovementUntil = os.clock() + (Move.Timeout or 0.42)
++ math.max(0.08, tonumber(CONFIG.AutoMixPostMoveCooldown) or 0.24)
+end
+State.AutoMix.StartSpin(Move)
+local Pressed = pcall(function() VirtualInputManager:SendKeyEvent(true, Key, false, game) end)
+task.delay(0.03, function()
+pcall(function() VirtualInputManager:SendKeyEvent(false, Key, false, game) end)
+State.AutoMix.SendingInput = false
+end)
+if not Pressed then State.AutoMix.StopSpin() end
+task.delay(Move.Timeout or 0.42, function()
+if State.Active and State.AutoMix.Generation == Generation and State.AutoMix.Busy then
+State.AutoMix.Busy = false
+if ExpectedEndHand then State.AutoMix.CurrentHand = ExpectedEndHand end
+State.AutoMix.StopSpin()
+State.AutoMix.ScheduleNext()
+end
+end)
+return Pressed
+end
+
+function State.AutoMix.SetSequence(Names)
+State.AutoMix.Sequence = Names or {}
+State.AutoMix.SequenceIndex = 1
+end
+
+function State.AutoMix.BuildSpinSequence(Mode, Hand)
+if Mode == 'All Moves' then
+local Order = { 'SwitchHandles','FakeOut','CrossUp','FakeBehindLeft','FakeBehindRight','BehindLeft','BehindRight' }
+State.AutoMix.AllMoveIndex = (State.AutoMix.AllMoveIndex % #Order) + 1
+return { Order[State.AutoMix.AllMoveIndex] }
+end
+if Mode == 'Spin Left' then return { 'BehindLeft' } end
+if Mode == 'Spin Right' then return { 'BehindRight' } end
+if Mode == 'Spin Chain' then
+State.AutoMix.SpinDirection = State.AutoMix.SpinDirection == 'L' and 'R' or 'L'
+return State.AutoMix.SpinDirection == 'L'
+and { 'BehindLeft', 'BehindRight', 'SwitchHandles', 'CrossUp' }
+or { 'BehindRight', 'BehindLeft', 'SwitchHandles', 'CrossUp' }
+end
+if Mode == 'Spin Fake' then
+return Hand == 'R' and { 'BehindRight', 'FakeOut' }
+or { 'BehindLeft', 'FakeOut' }
+end
+return nil
+end
+
+function State.AutoMix.AvoidRepeat(Primary, Alternate)
+if State.AutoMix.LastMoveName == Primary and Alternate then return Alternate end
+return Primary
+end
+
+function State.AutoMix.GetCurrentBallClearance(Root, Hand, Threat)
+if not Threat or not Threat.Root then return math.huge end
+local Side = Hand == 'L' and -1 or 1
+local BallWorld = Root.CFrame:PointToWorldSpace(Vector3.new(Side * 1.45, 0, -1.85))
+local Offset = Vector3.new(BallWorld.X - Threat.Root.Position.X, 0, BallWorld.Z - Threat.Root.Position.Z)
+local Margin = math.max(1.5, tonumber(CONFIG.AutoMixBallSafetyMargin) or 3)
+return Offset.Magnitude - Margin
+end
+
+function State.AutoMix.SelectSmartMove(Root, Hand)
+local Threat = State.AutoMix.ReadThreat(Root, Hand)
+State.AutoMix.LastDecisionAt = os.clock()
+if not Threat then
+State.AutoMix.Plan = 'HOLD - NO THREAT'
+State.AutoMix.Status = 'NO ACTION NEEDED'
+State.AutoMix.LastNecessaryReason = 'NONE'
+State.AutoMix.StopMovement()
+State.AutoMix.NextAt = os.clock() + 0.22
+return nil
+end
+local OpenDirection = State.AutoMix.ChooseOpenDirection(Root, Threat.Root)
+State.AutoMix.CurrentBallClearance = State.AutoMix.GetCurrentBallClearance(Root, Hand, Threat)
+if Threat.Level == 'CLEAR' then
+State.AutoMix.Plan = 'HOLD - BALL SAFE'
+State.AutoMix.Status = 'NO ACTION NEEDED'
+State.AutoMix.LastNecessaryReason = 'CLEAR'
+State.AutoMix.StopMovement()
+State.AutoMix.NextAt = os.clock() + 0.18
+State.AutoMix.ThreatSince, State.AutoMix.ThreatKey, State.AutoMix.PressureSince = 0, nil, 0
+return nil
+end
+
+-- WATCH never spends a dribble. A small blended step is enough until the
+-- defender commits and creates genuine pressure.
+if Threat.Level == 'WATCH' then
+State.AutoMix.Plan = 'POSITION ONLY'
+State.AutoMix.Status = 'WATCHING - NO MOVE'
+State.AutoMix.LastNecessaryReason = 'WATCH'
+State.AutoMix.SetMovement(OpenDirection, 0.16, 'SMALL CORRECTION')
+State.AutoMix.NextAt = os.clock() + 0.10
+State.AutoMix.PressureSince = 0
+return nil
+end
+
+local ThreatKey = Threat.Level .. ':' .. Threat.Side
+if State.AutoMix.ThreatKey ~= ThreatKey then
+State.AutoMix.ThreatKey, State.AutoMix.ThreatSince = ThreatKey, os.clock()
+end
+local StableFor = os.clock() - (State.AutoMix.ThreatSince or 0)
+local Hold = math.max(0.04, tonumber(CONFIG.AutoMixDecisionHold) or 0.12)
+if Threat.Level ~= 'EMERGENCY' and StableFor < Hold then
+State.AutoMix.Plan = 'CONFIRMING PRESSURE'
+State.AutoMix.Status = 'WAITING - NO MOVE'
+State.AutoMix.LastNecessaryReason = 'UNCONFIRMED'
+State.AutoMix.SetMovement(OpenDirection, Hold - StableFor + 0.04, 'POSITION FIRST')
+State.AutoMix.NextAt = os.clock() + 0.03
+return nil
+end
+
+if Threat.Level == 'PRESSURE' then
+if State.AutoMix.PressureSince <= 0 then State.AutoMix.PressureSince = os.clock() end
+local Grace = math.max(0.08, tonumber(CONFIG.AutoMixPressureGrace) or 0.20)
+local ActionRisk = math.clamp(tonumber(CONFIG.AutoMixActionRisk) or 0.58, 0.3, 1.5)
+-- Reposition first. If risk falls during this grace window, no dribble is used.
+if Threat.Risk < ActionRisk or os.clock() - State.AutoMix.PressureSince < Grace then
+State.AutoMix.Plan = 'REPOSITION BEFORE MOVE'
+State.AutoMix.Status = 'SOLVING WITH MOVEMENT'
+State.AutoMix.LastNecessaryReason = 'POSITIONING'
+State.AutoMix.SetMovement(OpenDirection, Grace + 0.06, 'PROTECTIVE STEP')
+State.AutoMix.NextAt = os.clock() + 0.05
+return nil
+end
+else
+State.AutoMix.PressureSince = 0
+end
+
+State.AutoMix.SetMovement(OpenDirection, 0.52,
+Threat.Level == 'EMERGENCY' and 'EMERGENCY ESCAPE' or 'NECESSARY ESCAPE')
+local Safest = State.AutoMix.ChooseSafestMove(Root, Hand, Threat)
+if not Safest then
+State.AutoMix.Plan = 'NO SAFE BOUND MOVE'
+State.AutoMix.Status = 'HOLDING BALL'
+State.AutoMix.LastNecessaryReason = 'NO SAFE MOVE'
+State.AutoMix.NextAt = os.clock() + 0.18
+return nil
+end
+
+-- Under ordinary pressure, require the animation to materially improve ball
+-- clearance. Emergency pressure may act immediately even if every path is tight.
+local MinimumGain = math.max(0, tonumber(CONFIG.AutoMixMinimumClearanceGain) or 0.60)
+local Gain = State.AutoMix.PredictedBallEndClearance - State.AutoMix.CurrentBallClearance
+if Threat.Level ~= 'EMERGENCY' and Gain < MinimumGain then
+State.AutoMix.Plan = string.format('HOLD - GAIN %.1f TOO SMALL', Gain)
+State.AutoMix.Status = 'MOVE NOT NECESSARY'
+State.AutoMix.LastNecessaryReason = 'LOW GAIN'
+State.AutoMix.SetMovement(OpenDirection, 0.16, 'POSITION ONLY')
+State.AutoMix.NextAt = os.clock() + 0.12
+return nil
+end
+
+State.AutoMix.PressureSince = 0
+State.AutoMix.LastNecessaryReason = Threat.Level == 'EMERGENCY' and 'EMERGENCY' or 'PERSISTENT PRESSURE'
+State.AutoMix.Plan = string.format('NECESSARY: %s | GAIN %.1f', Safest, Gain)
+return { Safest }
+end
+
+function State.AutoMix.SetEnabled(Enabled)
+Enabled = Enabled == true
+if Enabled and not State.Active then return end
+State.AutoMix.Enabled = Enabled
+State.AutoMixEnabled = Enabled
+CONFIG.AutoMix = Enabled
+State.AutoMix.Generation += 1
+State.AutoMix.Busy = false
+State.AutoMix.StopSpin()
+State.AutoMix.StopMovement()
+if Enabled and CONFIG.AutoMixUseAntiReach and State.BallAssist then
+if State.AutoMix.AntiReachWasEnabled == nil then State.AutoMix.AntiReachWasEnabled = State.BallAssist.AntiReachEnabled == true end
+if not State.BallAssist.AntiReachEnabled then State.BallAssist.SetAntiReach(true) end
+elseif not Enabled and State.AutoMix.AntiReachWasEnabled ~= nil and State.BallAssist then
+State.BallAssist.SetAntiReach(State.AutoMix.AntiReachWasEnabled)
+State.AutoMix.AntiReachWasEnabled = nil
+end
+State.AutoMix.Sequence = {}
+State.AutoMix.SequenceIndex = 1
+State.AutoMix.NextAt = os.clock() + 0.15
+State.AutoMix.Status = Enabled and 'READY' or 'OFF'
+if HubUI.Sync then HubUI.Sync() end
+end
+
+GiveSignal(RunService.Heartbeat:Connect(function()
+local Now = os.clock()
+if State.AutoMix.Rotating then
+local Root = State.AutoMix.SpinRoot
+if not State.Active or not State.AutoMix.Enabled or not Root or not Root.Parent then
+State.AutoMix.StopSpin()
+else
+local Progress = math.clamp((Now - State.AutoMix.SpinStartedAt) / State.AutoMix.SpinDuration, 0, 1)
+local Smoothed = Progress * Progress * (3 - 2 * Progress)
+local Target = State.AutoMix.SpinRadians * Smoothed
+local Delta = Target - State.AutoMix.SpinApplied
+State.AutoMix.SpinTarget = Target
+State.AutoMix.ShiftLockActive = State.AutoMix.IsShiftLockActive()
+if State.AutoMix.ShiftLockActive then
+State.AutoMix.ApplyShiftLockSpin(Root, Target)
+elseif math.abs(Delta) > 0.0001 then
+Root.CFrame = Root.CFrame * CFrame.Angles(0, Delta, 0)
+end
+State.AutoMix.SpinApplied = Target
+if Progress >= 1 then State.AutoMix.StopSpin() end
+end
+end
+local Character = LP.Character
+local HumanoidObject = Character and safe_find(Character, 'Humanoid')
+local ThreatDirection = State.AutoMix.DesiredMovement
+local ManualDirection = State.AutoMix.GetManualDirection(HumanoidObject)
+State.AutoMix.ManualDirection = ManualDirection
+local HasManual = ManualDirection.Magnitude > 0.05
+if State.AutoMix.Enabled and CONFIG.AutoMixMovement and ThreatDirection
+and Now < State.AutoMix.MovementUntil and HumanoidObject and HumanoidObject.Health > 0 then
+local ThreatWeight = State.AutoMix.GetThreatSteerWeight(HasManual)
+local ManualWeight = HasManual and math.clamp(tonumber(CONFIG.AutoMixManualInfluence) or 0.72, 0.1, 1) or 0
+local Blended = ThreatDirection * ThreatWeight + ManualDirection * ManualWeight
+if Blended.Magnitude > 0.05 then
+Blended = Blended.Unit
+State.AutoMix.BlendedDirection = Blended
+State.AutoMix.BlendPercent = math.floor(ThreatWeight * 100 + 0.5)
+State.AutoMix.MovementStatus = HasManual
+and string.format('MANUAL + THREAT %d%%', State.AutoMix.BlendPercent)
+or 'THREAT CONTROL'
+if State.Runtime.AcquireMovement('AutoMix', 0.08) then HumanoidObject:Move(Blended, false) end
+end
+else
+State.Runtime.ReleaseMovement('AutoMix')
+State.AutoMix.BlendedDirection = ManualDirection
+State.AutoMix.BlendPercent = 0
+if Now >= State.AutoMix.MovementUntil then State.AutoMix.DesiredMovement=nil; State.AutoMix.MovementStatus = HasManual and 'MANUAL' or 'IDLE' end
+end
+end))
+
+pcall(function() RunService:UnbindFromRenderStep(State.AutoMix.ShiftLockBindName) end)
+RunService:BindToRenderStep(
+State.AutoMix.ShiftLockBindName,
+Enum.RenderPriority.Camera.Value + 5,
+function()
+if not State.Active or not State.AutoMix.Enabled or not State.AutoMix.Rotating then return end
+local Root = State.AutoMix.SpinRoot
+State.AutoMix.ShiftLockActive = State.AutoMix.IsShiftLockActive()
+if State.AutoMix.ShiftLockActive then
+State.AutoMix.ApplyShiftLockSpin(Root, State.AutoMix.SpinTarget)
+end
+end
+)
+
+task.spawn(function()
+while State.Active do
+if State.AutoMix.Enabled then
+local Character = LP.Character
+local HumanoidObject = Character and safe_find(Character, 'Humanoid')
+local Root = Character and safe_find(Character, 'HumanoidRootPart')
+if not Character or not HumanoidObject or not Root or HumanoidObject.Health <= 0 then
+State.AutoMix.Status = 'WAITING FOR CHARACTER'
+elseif not safe_find(Character, 'Basketball') then
+State.AutoMix.Status = 'WAITING FOR BALL'
+State.AutoMix.Generation += 1
+State.AutoMix.Busy = false
+State.AutoMix.StopSpin()
+State.AutoMix.StopMovement()
+State.AutoMix.Sequence = {}
+elseif UserInputService:GetFocusedTextBox() then
+State.AutoMix.Status = 'PAUSED FOR TYPING'
+elseif State.AutoMix.HasManualDribbleInput() then
+State.AutoMix.Status = 'MANUAL OVERRIDE'
+State.AutoMix.Generation += 1
+State.AutoMix.Busy = false
+State.AutoMix.StopSpin()
+State.AutoMix.StopMovement()
+State.AutoMix.Sequence = {}
+State.AutoMix.NextAt = os.clock() + 0.35
+elseif State.PassInProgress or State.silentShootActive
+or (State.AutoDunk and State.AutoDunk.InProgress) then
+State.AutoMix.Status = 'PAUSED FOR ACTION'
+State.AutoMix.Generation += 1
+State.AutoMix.Busy = false
+State.AutoMix.StopSpin()
+State.AutoMix.StopMovement()
+State.AutoMix.Sequence = {}
+else
+State.AutoMix.AttachAnimator(Character, HumanoidObject)
+local Hand = State.AutoMix.ReadHand(Character, HumanoidObject, Root)
+local Mode = tostring(CONFIG.AutoMixMode or 'Smart Mix')
+-- Strategic cooldowns prevent spam, but an actual steal emergency can break
+-- the cooldown and react on the first available frame.
+if not State.AutoMix.Busy and os.clock() < State.AutoMix.NextAt then
+local EmergencyThreat = State.AutoMix.ReadThreat(Root, Hand)
+if EmergencyThreat and EmergencyThreat.Level == 'EMERGENCY' then
+State.AutoMix.NextAt = os.clock()
+end
+end
+if not State.AutoMix.Busy and os.clock() >= State.AutoMix.NextAt then
+if Mode == 'Smart Mix' and State.AutoMix.Sequence[State.AutoMix.SequenceIndex] then
+State.AutoMix.SetSequence({})
+end
+local Name = State.AutoMix.Sequence[State.AutoMix.SequenceIndex]
+if Name then
+State.AutoMix.SequenceIndex += 1
+State.AutoMix.Perform(Name)
+else
+local NecessarySequence = State.AutoMix.SelectSmartMove(Root, Hand)
+local Sequence = NecessarySequence
+if NecessarySequence and Mode ~= 'Smart Mix' then
+local Styled = State.AutoMix.BuildSpinSequence(Mode, Hand)
+-- Even combo styles spend only one move per confirmed threat. The situation is
+-- re-read after that move before anything else is allowed.
+Sequence = Styled and Styled[1] and { Styled[1] } or NecessarySequence
+end
+State.AutoMix.SetSequence(Sequence or {})
+Name = State.AutoMix.Sequence[State.AutoMix.SequenceIndex]
+if Name then
+State.AutoMix.SequenceIndex += 1
+State.AutoMix.Perform(Name)
+elseif State.AutoMix.NextAt <= os.clock() then
+State.AutoMix.NextAt = os.clock() + 0.12
+end
+end
+end
+end
+end
+task.wait(0.01)
+end
+end)
 
 local GetClosestOffBallOpponent
 
@@ -11947,7 +12828,7 @@ State.AutoHeadRide.Enabled and 'ON-BALL | NORMAL GUARD' or 'OFF'
 end
 end
 
-if not HeadRideOffBall and LocalHumanoid.MoveDirection.Magnitude > 0 then return end
+if not HeadRideOffBall and State.Runtime.HasManualInput(true) then State.Runtime.ReleaseMovement('Guard'); return end
 
 if Target and Target.Character and Target.Character:FindFirstChild('HumanoidRootPart') then
 if Target ~= JumpTarget then
@@ -11981,7 +12862,7 @@ JumpTarget = nil
 TargetWasJumping = false
 end
 
-if GuardPosition then
+if GuardPosition and State.Runtime.AcquireMovement('Guard') then
 local Difference = GuardPosition - LocalRoot.Position
 local Horizontal = Vector3.new(Difference.X, 0, Difference.Z)
 local StopDistance = State.AutoGuardStyle == 'Blatant Mirror' and 0.35 or 1.5
@@ -13463,7 +14344,7 @@ State.AutoGetOpenOOBGuard = OOBGuard
 State.AutoGetOpenHandlerSpacing = HandlerEmergency
 State.AutoGetOpenLastDirection = Direction
 State.AutoGetOpenLastMoveAt = Now
-HumanoidObject:Move(Direction * Scale, false)
+if State.Runtime.AcquireMovement('GetOpen') then HumanoidObject:Move(Direction * Scale, false) end
 return Direction
 end
 
@@ -13575,6 +14456,13 @@ if CONFIG.AutoGetOpenTempo == 'Aggressive' then return 0.045 end
 return CONFIG.AutoGetOpenRetargetDelay
 end
 
+function State.AutoGetOpen.GetLandmarkAnchors(Context)
+local Shared = State.CourtContext.Get()
+local Anchors = {}
+for _, Part in ipairs({ Shared.PaintHome, Shared.PaintAway, Shared.Paint, Shared.Center, Shared.ScoringRim }) do if Part and Part:IsA('BasePart') then table.insert(Anchors, Part.Position) end end
+return Anchors
+end
+
 local function UpdateAutoGetOpenBinding()
 pcall(function() RunService:UnbindFromRenderStep(AUTO_GET_OPEN_BIND_NAME) end)
 
@@ -13616,7 +14504,7 @@ local HumanoidObject = Character and Character:FindFirstChildOfClass('Humanoid')
 if HumanoidObject and HumanoidObject.Health > 0
 and not safe_find(Character, 'Basketball')
 and State.AutoGetOpenLastDirection then
-HumanoidObject:Move(State.AutoGetOpenLastDirection, false)
+if State.Runtime.AcquireMovement('GetOpen') then HumanoidObject:Move(State.AutoGetOpenLastDirection, false) end
 end
 return
 end
@@ -13694,6 +14582,7 @@ end
 
 local CurrentOffset = Root.Position - Context.Center
 local OffensiveDepth = CurrentOffset:Dot(Context.ToOffense)
+State.AutoGetOpenPhase = OffensiveDepth < 0 and 'Backcourt advance' or (OffensiveDepth < 8 and 'Cross half court' or 'Read defender')
 local DecisionDepth = tonumber(CONFIG.AutoGetOpenDecisionDepth) or 1.5
 if OffensiveDepth < DecisionDepth then
 State.AutoGetOpenPressureCutTarget = nil
@@ -13725,6 +14614,7 @@ local PressureDirection = Vector3.new(
 PressureTarget.X - Root.Position.X, 0,
 PressureTarget.Z - Root.Position.Z)
 State.AutoGetOpenTarget = PressureTarget
+State.AutoGetOpenPhase = 'Hash/bottom/paint cut'
 State.AutoGetOpenRoute =
 (PressureSide or 1) < 0 and 'Pressure cut left' or 'Pressure cut right'
 State.AutoGetOpenStatus = string.format(
@@ -13752,6 +14642,7 @@ RouteName = 'Fallback lateral cut'
 IsOpen, Arrived = false, false
 end
 State.AutoGetOpenTarget = Target
+State.AutoGetOpenPhase = 'Re-space'
 State.AutoGetOpenRoute = RouteName or 'Holding spot'
 
 if Candidate and Candidate.JumpCut then
@@ -13984,7 +14875,7 @@ MoveDirection = TargetMove.Unit
 else
 MoveDirection = Vector3.zero
 end
-HumanoidObject:Move(MoveDirection, false)
+if State.Runtime.AcquireMovement('Guard') then HumanoidObject:Move(MoveDirection, false) end
 
 local JumpDistance = math.max(
 tonumber(CONFIG.AutoHeadRideJumpDistance) or 2.8, 1)
@@ -14040,7 +14931,13 @@ LaneOpenCached = true,
 }
 
 function State.AutoDunk.GetKeyCode()
-return Enum.KeyCode.T
+local PlayerData = State.AutoDunk.GetPlayerData()
+local Stored = PlayerData and PlayerData.storedData
+local Controls = Stored and Stored.Config and Stored.Config[UserInputService.GamepadEnabled and 'Controls_Controller' or 'Controls_Keyboard']
+local Bind = Controls and Controls.Dunk
+if typeof(Bind) == 'EnumItem' then return Bind end
+if type(Bind) == 'string' and Enum.KeyCode[Bind] then return Enum.KeyCode[Bind] end
+return UserInputService.GamepadEnabled and Enum.KeyCode.ButtonX or Enum.KeyCode.T
 end
 
 function State.AutoDunk.GetPlayerData()
@@ -14307,6 +15204,7 @@ return true
 end
 
 function State.AutoDunk.ReleaseKey()
+State.Runtime.ReleaseMovement('Dunk')
 local Key = State.AutoDunk.HeldKey
 if Key then
 State.AutoDunk.SendingInput = true
@@ -14337,7 +15235,7 @@ State.AutoDunk.HeldKey = Key
 State.AutoDunk.StartedAt = os.clock()
 State.AutoDunk.LastAttempt = State.AutoDunk.StartedAt
 State.AutoDunk.Target = Target
-State.AutoDunkStatus = 'HOLDING T'
+State.AutoDunkStatus = 'HOLDING ' .. tostring(State.AutoDunk.HeldKey or State.AutoDunk.GetKeyCode())
 StopLegitAimTween()
 SilentAim.ClearActorAim()
 
@@ -14404,9 +15302,9 @@ end
 if Target then
 local Delta = Target.Position - Root.Position
 local Horizontal = Vector3.new(Delta.X, 0, Delta.Z)
-if Horizontal.Magnitude > 1 then LocalHumanoid:Move(Horizontal.Unit, false) end
+if Horizontal.Magnitude > 1 then if State.Runtime.AcquireMovement('Dunk') then LocalHumanoid:Move(Horizontal.Unit, false) end end
 end
-State.AutoDunkStatus = 'HOLDING T'
+State.AutoDunkStatus = 'HOLDING ' .. tostring(State.AutoDunk.HeldKey or State.AutoDunk.GetKeyCode())
 return
 end
 
@@ -14447,7 +15345,7 @@ State.AutoDunkStatus = 'LANE BLOCKED'
 return
 end
 
-local TriggerDistance = 11.0
+local TriggerDistance = math.clamp(tonumber(CONFIG.AutoDunkTriggerDistance) or 11, 5, 20)
 local Now = os.clock()
 if Distance <= TriggerDistance then
 if LocalHumanoid.PlatformStand or LocalHumanoid.FloorMaterial == Enum.Material.Air then
@@ -14460,7 +15358,7 @@ return
 end
 local Delta = Target.Position - Root.Position
 local Horizontal = Vector3.new(Delta.X, 0, Delta.Z)
-if Horizontal.Magnitude > 0.1 then LocalHumanoid:Move(Horizontal.Unit, false) end
+if Horizontal.Magnitude > 0.1 then if State.Runtime.AcquireMovement('Dunk') then LocalHumanoid:Move(Horizontal.Unit, false) end end
 State.AutoDunk.Begin(Target)
 return
 end
@@ -14476,7 +15374,7 @@ if Distance <= ApproachDistance then
 local Delta = Target.Position - Root.Position
 local Horizontal = Vector3.new(Delta.X, 0, Delta.Z)
 if Horizontal.Magnitude > TriggerDistance then
-LocalHumanoid:Move(Horizontal.Unit, false)
+if State.Runtime.AcquireMovement('Dunk') then LocalHumanoid:Move(Horizontal.Unit, false) end
 State.AutoDunkStatus = string.format('APPROACHING | %.1f', Distance)
 end
 else
@@ -14803,47 +15701,35 @@ local function GetDirectPassFormulaTarget(Teammate)
 local Character = LP.Character
 local TargetCharacter = Teammate and Teammate.Character
 local TargetRoot = TargetCharacter and TargetCharacter:FindFirstChild('HumanoidRootPart')
+local TargetHumanoid = TargetCharacter and TargetCharacter:FindFirstChildOfClass('Humanoid')
 local Head = Character and Character:FindFirstChild('Head')
 if not (Character and TargetRoot and Head) then return nil end
-
 local Basketball = Character:FindFirstChild('Basketball')
 local Ball = Basketball and Basketball:FindFirstChild('Ball', true)
-local ReleaseY = Ball and Ball:IsA('BasePart') and Ball.Position.Y or Head.Position.Y
-local ReleaseOrigin = Vector3.new(Head.Position.X, ReleaseY, Head.Position.Z)
-
+local ReleaseOrigin = Ball and Ball:IsA('BasePart') and Ball.Position or Head.Position
+local Airborne = TargetHumanoid and TargetHumanoid.FloorMaterial == Enum.Material.Air
+local CatchOffset = Vector3.new(0, Airborne and 1.1 or 1.8, 0)
+local BaseCatch = TargetRoot.Position + CatchOffset
+local AimPosition = BaseCatch
 local ArcMode = CONFIG.PassArcMode == 'Low' and 'Low' or 'High'
 local LeadFactor = math.clamp(tonumber(CONFIG.PassLead) or 0, 0, 100) / 100
-
-local AimPosition = TargetRoot.Position
+local Angle, FlightTime, Flat, Distance
+for _ = 1, 2 do
 local Delta = AimPosition - ReleaseOrigin
-local Flat = Vector3.new(Delta.X, 0, Delta.Z)
-local Distance = Flat.Magnitude
+Flat = Vector3.new(Delta.X, 0, Delta.Z)
+Distance = Flat.Magnitude
 if Distance <= 0.0001 then return nil end
-
-local Angle, FlightTime = SolveFormulaArc(
-Distance, Delta.Y, CONFIG.PassPower, ArcMode)
+Angle, FlightTime = SolveFormulaArc(Distance, Delta.Y, CONFIG.PassPower, ArcMode)
 if not Angle then return nil end
-
-if LeadFactor > 0 and FlightTime and FlightTime > 0 then
-local Velocity = TargetRoot.AssemblyLinearVelocity
-local FlatVelocity = Vector3.new(Velocity.X, 0, Velocity.Z)
-if FlatVelocity.Magnitude > 0.5 then
-local LedDelta = (AimPosition + FlatVelocity * FlightTime * LeadFactor)
-- ReleaseOrigin
-local LedFlat = Vector3.new(LedDelta.X, 0, LedDelta.Z)
-local LedDistance = LedFlat.Magnitude
-if LedDistance > 0.0001 then
-local LedAngle = SolveFormulaArc(
-LedDistance, LedDelta.Y, CONFIG.PassPower, ArcMode)
-if LedAngle then
-Angle, Flat, Distance = LedAngle, LedFlat, LedDistance
+AimPosition = BaseCatch + TargetRoot.AssemblyLinearVelocity * math.max(FlightTime or 0, 0) * LeadFactor
 end
+local Context = State.CourtContext and State.CourtContext.Get()
+for _, Defender in ipairs(Context and Context.Opponents or {}) do
+local DefenderRoot = Defender.Character and Defender.Character:FindFirstChild('HumanoidRootPart')
+if DefenderRoot and State.AutoGetOpen.DistanceToSegmentXZ(DefenderRoot.Position, ReleaseOrigin, AimPosition) < 3.5 then return nil end
 end
-end
-end
-local Direction = Flat.Unit * math.cos(Angle)
-+ Vector3.new(0, math.sin(Angle), 0)
-return Head.Position + Direction * 1000, Distance
+local Direction = Flat.Unit * math.cos(Angle) + Vector3.new(0, math.sin(Angle), 0)
+return ReleaseOrigin + Direction * 1000, Distance
 end
 
 local function ExecutePassAt(TargetPosition, Generation)
@@ -14880,7 +15766,9 @@ Camera.Focus = CFrame.new(TargetPosition)
 end
 end
 
+local Possession = GetHeldBasketballModel(LP)
 for Attempt = 1, 2 do
+if not Possession or GetHeldBasketballModel(LP) ~= Possession then break end
 SilentAim.FireActorAim(TargetPosition)
 RunService.RenderStepped:Wait()
 SilentAim.FireActorAim(TargetPosition)
@@ -14890,8 +15778,8 @@ task.wait(0.045)
 VirtualInputManager:SendMouseButtonEvent(CenterX, CenterY, 0, false, game, 1)
 MouseDown = false
 if Attempt == 1 then
-task.wait(0.20)
-if not GetHeldBasketballModel(LP) then break end
+for _ = 1, 10 do task.wait(0.02); if GetHeldBasketballModel(LP) ~= Possession then break end end
+if GetHeldBasketballModel(LP) ~= Possession then break end
 end
 end
 end)
@@ -15741,6 +16629,7 @@ return CurrentHand
 end
 
 function State.AutoOffense.ResetMovement(Humanoid)
+State.Runtime.ReleaseMovement('Offense')
 if State.AutoOffense.MovementIsReset then return end
 State.AutoOffense.MovementIsReset = true
 State.AutoOffense.ReleaseBackdown()
@@ -16440,7 +17329,7 @@ return
 end
 
 local Refused = State.AutoOffense.Status
-Humanoid:Move(Forward, false)
+if State.Runtime.AcquireMovement('Offense') then Humanoid:Move(Forward, false) end
 if RefreshStatus then
 State.AutoOffense.Status = string.format('CLOSING %.1f | %s', Distance, Refused)
 end
@@ -16448,7 +17337,7 @@ return
 end
 
 if Driving then
-Humanoid:Move(Forward, false)
+if State.Runtime.AcquireMovement('Offense') then Humanoid:Move(Forward, false) end
 if RefreshStatus then
 State.AutoOffense.Status = string.format(
 'DRIVING | %.1f TO SHOT | H %s',
@@ -16504,7 +17393,7 @@ State.AutoOffense.Status = 'OOB BLOCKED | HOLDING'
 return
 end
 
-Humanoid:Move(Forward, false)
+if State.Runtime.AcquireMovement('Offense') then Humanoid:Move(Forward, false) end
 if RefreshStatus then
 State.AutoOffense.Status = string.format(
 'OOB AVOID | FORWARD | %.1f TO SHOT',
@@ -16559,7 +17448,7 @@ tostring(State.AutoOffense.HandStatus or '-')
 end
 return
 end
-Humanoid:Move(Pressure.Unit, false)
+if State.Runtime.AcquireMovement('Offense') then Humanoid:Move(Pressure.Unit, false) end
 
 if TurnAround then
 if RefreshStatus then
@@ -18643,6 +19532,14 @@ GroupTransparency = 1,
 Visible = false,
 ZIndex = 4,
 }, Content)
+Pages.AutoMix = New('CanvasGroup', {
+Size = UDim2.fromScale(1, 1),
+BackgroundTransparency = 1,
+BorderSizePixel = 0,
+GroupTransparency = 1,
+Visible = false,
+ZIndex = 4,
+}, Content)
 Pages.Queue = New('CanvasGroup', {
 Size = UDim2.fromScale(1, 1),
 BackgroundTransparency = 1,
@@ -18726,6 +19623,7 @@ local TabDefinitions = {
 { Name = 'GetOpen', DisplayName = 'Get Open', Category = 'AUTOMATION', Search = 'get open auto cut destination corner wing slot top backdoor practice spacing pass lane off ball' },
 { Name = 'Guard', Category = 'AUTOMATION', Search = 'guard auto guard defense on ball off ball predictive head ride mount jump close range' },
 { Name = 'Body', Category = 'AUTOMATION', Search = 'body auto body defender back face rotate smooth tween hand switch crossover dribble opposite side space separation shoulder angle stickiness cooldown left right anti reach offense' },
+{ Name = 'AutoMix', DisplayName = 'Auto Mix', Category = 'AUTOMATION', Search = 'auto mix dribble spin threat strategic movement manual blend steal protection f g cross fake escape' },
 { Name = 'Queue', Category = 'AUTOMATION', Search = 'queue auto queue court match requeue' },
 { Name = 'Movement', Category = 'PLAYER', Search = 'movement walkspeed speed infinite jump jump power noclip flight air walk' },
 { Name = 'Ball', Category = 'PLAYER', Search = 'ball reach mag magnet loose held steal pickup catch rebound basketball opponent collider collision touch force safe grace' },
@@ -18747,6 +19645,7 @@ Aim = 'AIM  /  SHOOTING', Pass = 'PASS  /  PLAYMAKING', Dunk = 'DUNK  /  FINISHI
 Offense = 'OFFENSE  /  AUTO BALL HANDLING',
 GetOpen = 'GET OPEN  /  OFF-BALL',
 Guard = 'GUARD  /  DEFENSE', Body = 'BODY  /  BALL PROTECTION',
+AutoMix = 'AUTO MIX  /  STRATEGIC HANDLES + MOVEMENT',
 Queue = 'QUEUE  /  MATCHMAKING',
 Movement = 'MOVEMENT  /  LOCAL', Ball = 'BALL  /  REACH + MAG', Privacy = 'PRIVACY  /  LOCAL', Cosmetics = 'COSMETICS  /  LOCAL',
 BallStudio = 'CUSTOMIZATION  /  BALL + TRAIL + SHOT FX',
@@ -19325,6 +20224,8 @@ local GetOpenGroup = CreateGroup('Auto Get Open', Pages.GetOpen, UDim2.fromOffse
 local GuardGroup = CreateGroup('Auto Guard', Pages.Guard, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
 local BodyGroup = CreateGroup('Auto Body', Pages.Body, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local BodySettingsGroup = CreateGroup('Body Settings', Pages.Body, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+local AutoMixControlGroup = CreateGroup('Auto Mix Controls', Pages.AutoMix, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+local AutoMixStrategyGroup = CreateGroup('Threat Strategy', Pages.AutoMix, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local QueueGroup = CreateGroup('Auto Queue', Pages.Queue, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
 local StatusGroup = CreateGroup('Shot Status', Pages.Status, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 HubUI.SyncGroup = CreateGroup('Desync & Outlines', Pages.Status, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
@@ -22625,7 +23526,114 @@ CreateParagraph(
 BodySettingsGroup,
 UDim2.fromOffset(8, 315),
 UDim2.new(1, -16, 0, 139),
-'Defenders are scored on distance, closing speed, whether they are in front of you, and whether they sit between you and the hoop. Shield keeps your back to the pressure, Drive Lane favors the hoop, Square Up faces it outright. Handle switches wait for the dribble bounce so the input is never eaten.'
+'Defenders are scored on distance, closing speed, position and the hoop lane. Shield protects the ball, Drive Lane favors the rim, and Square Up keeps your shoulders forward. Auto Mix now has its own tab.'
+)
+
+CreateSectionHeader(AutoMixControlGroup, 11, 'Core controls')
+HubUI.Controls.AutoMix = CreateCheckbox(
+AutoMixControlGroup, 31, 'Auto Mix', State.AutoMix.Enabled,
+function(Value) State.AutoMix.SetEnabled(Value) end
+)
+HubUI.Controls.AutoMixMode = CreateSelector(
+AutoMixControlGroup, 61, 'Mix style',
+{ 'Smart Mix', 'All Moves', 'Spin Left', 'Spin Right', 'Spin Chain', 'Spin Fake' },
+CONFIG.AutoMixMode,
+function(Value)
+CONFIG.AutoMixMode = Value
+State.AutoMix.SetSequence({})
+State.AutoMix.NextAt = os.clock() + 0.10
+end,
+118
+)
+HubUI.Controls.AutoMixRange = CreateNumberInput(
+AutoMixControlGroup, 91, 'Read defender range', CONFIG.AutoMixRange, 4, 30, 0,
+function(Value) CONFIG.AutoMixRange = Value end
+)
+HubUI.Controls.AutoMixMovement = CreateCheckbox(
+AutoMixControlGroup, 121, 'Blend strategic movement', CONFIG.AutoMixMovement,
+function(Value)
+CONFIG.AutoMixMovement = Value
+if not Value then State.AutoMix.StopMovement() end
+end
+)
+HubUI.Controls.AutoMixRotateSpins = CreateCheckbox(
+AutoMixControlGroup, 151, 'Rotate during F / G spins', CONFIG.AutoMixRotateSpins,
+function(Value)
+CONFIG.AutoMixRotateSpins = Value
+if not Value then State.AutoMix.StopSpin() end
+end
+)
+CreateSectionHeader(AutoMixControlGroup, 183, 'Decision timing')
+HubUI.Controls.AutoMixDecisionHold = CreateNumberInput(
+AutoMixControlGroup, 203, 'Threat confirmation', CONFIG.AutoMixDecisionHold, 0.04, 0.35, 2,
+function(Value) CONFIG.AutoMixDecisionHold = Value end
+)
+HubUI.Controls.AutoMixPostMoveCooldown = CreateNumberInput(
+AutoMixControlGroup, 233, 'Post-move cooldown', CONFIG.AutoMixPostMoveCooldown, 0.08, 0.8, 2,
+function(Value) CONFIG.AutoMixPostMoveCooldown = Value end
+)
+HubUI.Controls.AutoMixEmergencyDistance = CreateNumberInput(
+AutoMixControlGroup, 263, 'Emergency distance', CONFIG.AutoMixEmergencyDistance, 3.5, 9, 1,
+function(Value) CONFIG.AutoMixEmergencyDistance = Value end
+)
+CreateSectionHeader(AutoMixControlGroup, 295, 'Protection')
+HubUI.Controls.AutoMixUseAntiReach = CreateCheckbox(
+AutoMixControlGroup, 315, 'Use Anti Reach while active', CONFIG.AutoMixUseAntiReach,
+function(Value)
+CONFIG.AutoMixUseAntiReach = Value
+if State.AutoMix.Enabled then
+if Value and not State.BallAssist.AntiReachEnabled then
+State.BallAssist.SetAntiReach(true)
+elseif not Value and State.AutoMix.AntiReachWasEnabled == false then
+State.BallAssist.SetAntiReach(false)
+end
+end
+end
+)
+HubUI.Controls.AutoMixMoveVariety = CreateCheckbox(
+AutoMixControlGroup, 345, 'Allow safe move variety', CONFIG.AutoMixMoveVariety,
+function(Value) CONFIG.AutoMixMoveVariety = Value end
+)
+CreateParagraph(
+AutoMixControlGroup,
+UDim2.fromOffset(8, 383),
+UDim2.new(1, -16, 0, 98),
+'Smart Mix waits for a stable read instead of spamming. Emergency pressure bypasses the cooldown. Manual dribble buttons still cancel automation, while W/A/S/D is blended with the selected escape lane.'
+)
+
+CreateSectionHeader(AutoMixStrategyGroup, 11, 'Live threat read')
+local AutoMixStatusText = CreateParagraph(
+AutoMixStrategyGroup,
+UDim2.fromOffset(8, 31),
+UDim2.new(1, -16, 0, 146),
+'STATUS  OFF\nTHREAT  CLEAR\nPLAN    HOLD\nRISK    0.00\nMOVE    IDLE'
+)
+CreateSectionHeader(AutoMixStrategyGroup, 189, 'Manual movement blend')
+HubUI.Controls.AutoMixManualInfluence = CreateNumberInput(
+AutoMixStrategyGroup, 209, 'Manual influence', CONFIG.AutoMixManualInfluence, 0.1, 1, 2,
+function(Value) CONFIG.AutoMixManualInfluence = Value end
+)
+HubUI.Controls.AutoMixThreatSteerMax = CreateNumberInput(
+AutoMixStrategyGroup, 239, 'Maximum threat steer', CONFIG.AutoMixThreatSteerMax, 0.1, 1, 2,
+function(Value) CONFIG.AutoMixThreatSteerMax = Value end
+)
+HubUI.Controls.AutoMixBallSafetyMargin = CreateNumberInput(
+AutoMixStrategyGroup, 269, 'Defender reach margin', CONFIG.AutoMixBallSafetyMargin, 1.5, 5, 1,
+function(Value) CONFIG.AutoMixBallSafetyMargin = Value end
+)
+HubUI.Controls.AutoMixActionRisk = CreateNumberInput(
+AutoMixStrategyGroup, 299, 'Minimum action risk', CONFIG.AutoMixActionRisk, 0.3, 1.2, 2,
+function(Value) CONFIG.AutoMixActionRisk = Value end
+)
+HubUI.Controls.AutoMixMinimumClearanceGain = CreateNumberInput(
+AutoMixStrategyGroup, 329, 'Minimum clearance gain', CONFIG.AutoMixMinimumClearanceGain, 0, 3, 1,
+function(Value) CONFIG.AutoMixMinimumClearanceGain = Value end
+)
+CreateParagraph(
+AutoMixStrategyGroup,
+UDim2.fromOffset(8, 367),
+UDim2.new(1, -16, 0, 104),
+'Every style is threat-gated and shift-lock aware. W/A/S/D and threat steering stay camera-relative while locked. Spin yaw is reapplied after the camera update so shift lock cannot cancel F/G rotation.'
 )
 
 CreateSectionHeader(QueueGroup, 11, 'Queue controls')
@@ -23995,6 +25003,7 @@ SilentAim = KeyCodeToken(CONFIG.ToggleKey),
 SilentMode = KeyCodeToken(CONFIG.SilentModeToggleKey),
 AutoGuard = KeyCodeToken(CONFIG.AutoGuardOnBallKey),
 AutoGetOpen = KeyCodeToken(CONFIG.AutoGetOpenKey),
+AutoMix = KeyCodeToken(CONFIG.AutoMixKey),
 BallColliders = KeyCodeToken(Enum.KeyCode.B),
 }
 local ControlEntries = {}
@@ -24930,6 +25939,11 @@ CONFIG.AutoHeadRideMountSmoothness },
 CONFIG.AutoBodyAdaptiveSmoothing },
 { HubUI.Controls.AutoBodyPanicPivot, CONFIG.AutoBodyPanicPivot },
 { HubUI.Controls.AutoBodyBounceSync, CONFIG.AutoBodyBounceSync },
+{ HubUI.Controls.AutoMix, State.AutoMix.Enabled },
+{ HubUI.Controls.AutoMixMovement, CONFIG.AutoMixMovement },
+{ HubUI.Controls.AutoMixRotateSpins, CONFIG.AutoMixRotateSpins },
+{ HubUI.Controls.AutoMixUseAntiReach, CONFIG.AutoMixUseAntiReach },
+{ HubUI.Controls.AutoMixMoveVariety, CONFIG.AutoMixMoveVariety },
 { HubUI.Controls.AutoGetOpen, State.AutoGetOpenEnabled },
 { HubUI.Controls.AutoQueue, State.AutoQueueEnabled },
 { HubUI.Controls.AutoRequeue, CONFIG.AutoQueueRequeue },
@@ -24991,6 +26005,7 @@ end
 local SelectValues = {
 { HubUI.Controls.AutoPowerPreference, CONFIG.AutoPowerPreference },
 { HubUI.Controls.OffenseStyle, CONFIG.AutoOffenseStyle },
+{ HubUI.Controls.AutoMixMode, CONFIG.AutoMixMode },
 { HubUI.Controls.DunkMode, State.AutoDunkMode },
 { HubUI.Controls.AutoGetOpenDestination,
 State.AutoGetOpen.NormalizeSpot(CONFIG.AutoGetOpenPreferredSpot) },
@@ -25036,6 +26051,15 @@ CONFIG.AntiReachCounterRadius },
 { HubUI.Controls.AutoBodyPanicRange, CONFIG.AutoBodyPanicRange },
 { HubUI.Controls.AutoBodyHandRevertDeadzone,
 CONFIG.AutoBodyHandRevertDeadzone },
+{ HubUI.Controls.AutoMixRange, CONFIG.AutoMixRange },
+{ HubUI.Controls.AutoMixDecisionHold, CONFIG.AutoMixDecisionHold },
+{ HubUI.Controls.AutoMixPostMoveCooldown, CONFIG.AutoMixPostMoveCooldown },
+{ HubUI.Controls.AutoMixEmergencyDistance, CONFIG.AutoMixEmergencyDistance },
+{ HubUI.Controls.AutoMixManualInfluence, CONFIG.AutoMixManualInfluence },
+{ HubUI.Controls.AutoMixThreatSteerMax, CONFIG.AutoMixThreatSteerMax },
+{ HubUI.Controls.AutoMixBallSafetyMargin, CONFIG.AutoMixBallSafetyMargin },
+{ HubUI.Controls.AutoMixActionRisk, CONFIG.AutoMixActionRisk },
+{ HubUI.Controls.AutoMixMinimumClearanceGain, CONFIG.AutoMixMinimumClearanceGain },
 }
 for _, Data in ipairs(NumberValues) do
 if Data[1] and Data[1].Value ~= Data[2] then Data[1]:Set(Data[2], false) end
@@ -25644,6 +26668,22 @@ BodyTarget and string.format(
 '%.1f st/s', State.AutoBody.ClosingSpeed or 0) or '--',
 State.AutoBody.HandStatus
 )
+if AutoMixStatusText then
+AutoMixStatusText.Text = string.format(
+'STATUS %s | %s | %s\nPLAN   %s\nNEED   %s\nBALL   %s | CLEAR %.1f\nRISK   %.2f | CLOSE %.1f\nMOVE   %s | STEER %d%%',
+State.AutoMix.Status,
+State.AutoMix.ThreatLevel or 'CLEAR',
+State.AutoMix.ShiftLockActive and 'SHIFTLOCK' or 'FREE CAM',
+State.AutoMix.Plan or 'HOLD',
+State.AutoMix.LastNecessaryReason or 'NONE',
+State.AutoMix.PredictedBallSide or '--',
+State.AutoMix.PredictedBallClearance or 0,
+State.AutoMix.RiskScore or 0,
+State.AutoMix.ClosingSpeed or 0,
+State.AutoMix.MovementStatus or 'IDLE',
+State.AutoMix.BlendPercent or 0
+)
+end
 if HubUI.AntiReachStatusText then
 local Thief = State.BallAssist.AntiReachCounterHolder
 HubUI.AntiReachStatusText.Text = string.format(
@@ -26754,6 +27794,7 @@ pcall(function() State.Utility.SetAntiTravel(false) end)
 pcall(function() State.Utility.SetAntiFall(false) end)
 pcall(function() State.Utility.SetStreamerMode(false) end)
 pcall(function() State.Extras.SetSpinbot(false) end)
+pcall(function() State.AutoMix.SetEnabled(false) end)
 pcall(function() State.Desync.SetEnabled(false) end)
 pcall(function() State.Outline.SetEnabled(false) end)
 pcall(function() State.Extras.SetAnklesReach(false) end)
@@ -26846,6 +27887,7 @@ State.AutoDunk and State.AutoDunk.BindName,
 State.AutoOffense and State.AutoOffense.BindName,
 State.Outline and State.Outline.BindName,
 State.Movement and State.Movement.FlightRenderName,
+State.AutoMix and State.AutoMix.ShiftLockBindName,
 'GoldenEagleProfileStatsLock',
 }) do
 if BindName then pcall(function() RunService:UnbindFromRenderStep(BindName) end) end
