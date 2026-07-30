@@ -72,7 +72,6 @@ ShotModeRimOffset = 0.52,
 ShotModeRandomSpread = 0.28,
 ShotModeSideBankOffset = 0.65,
 ShotModeDefenderPathWidth = 7.5,
-ShotModeMovingLeadMultiplier = 1.0,
 LegitTweenAim = true,
 -- Legit mode directly steers the real camera toward the solved ballistic
 -- launch direction, but uses capped exponential easing so it still looks
@@ -93,10 +92,6 @@ LegitAimSwayDegrees = 0.45,
 LegitAimSwaySpeed = 5.2,
 LegitTweenHoldTime = 0.42,
 LegitTweenFadeTime = 0.22,
-MovingShotPrediction = true,
-MovingShotLeadExtra = 0.01,
-MovingShotMaxLead = 0.6,
-MovingShotMinimumSpeed = 0.05,
 PingAdaptiveRelease = false,
 PingAdaptiveBaseline = 60,
 PingAdaptiveStrength = 1,
@@ -10529,58 +10524,22 @@ end
 return Status
 end
 
+-- Always solve from the player's current position. Do not lead the shot using
+-- player velocity, release timing, or ping: the camera target points directly
+-- at the goal at the moment the shot is taken.
 function SilentAim.GetPredictedReleaseOffset()
-if not HumanoidRootPart then return Vector3.zero end
-local PingLead = State.PingAdaptive.GetLead()
-if not CONFIG.MovingShotPrediction and PingLead <= 0 then
 return Vector3.zero
-end
-local Ok, Velocity = pcall(function()
-return HumanoidRootPart.AssemblyLinearVelocity
-end)
-if not Ok or typeof(Velocity) ~= 'Vector3' then return Vector3.zero end
-local HorizontalVelocity = Vector3.new(Velocity.X, 0, Velocity.Z)
-local MinimumSpeed = tonumber(CONFIG.MovingShotMinimumSpeed) or 0.05
-if HorizontalVelocity.Magnitude < MinimumSpeed then return Vector3.zero end
-local Lead = 0
-if CONFIG.MovingShotPrediction then
-local Deadline = tonumber(SilentAim.ReleasePredictionDeadline) or 0
-if Deadline > 0 then
--- Predict to the actual configured release instant, not merely the
--- jump apex. The old apex estimate over-led shots whenever perfect
--- release fired earlier or later than the physical apex.
-Lead = math.max(0, Deadline - os.clock())
-elseif Workspace.Gravity > 0 and Velocity.Y > 0 then
-Lead = Velocity.Y / Workspace.Gravity
-end
-Lead += tonumber(CONFIG.MovingShotLeadExtra) or 0
-Lead = math.clamp(Lead, 0, tonumber(CONFIG.MovingShotMaxLead) or 0.6)
-end
-Lead = Lead + PingLead
-if Lead <= 0 then return Vector3.zero end
-return HorizontalVelocity * Lead
 end
 
 function SilentAim.GetPredictedReleasePosition()
 if not HumanoidRootPart then return nil end
-return HumanoidRootPart.Position + SilentAim.GetPredictedReleaseOffset()
+return HumanoidRootPart.Position
 end
 
 local GetPredictedReleaseDistance
 GetPredictedReleaseDistance = WYNF_JIT_MAX(function(Rim)
 if not HumanoidRootPart or not Rim then return math.huge end
-if not CONFIG.MovingShotPrediction then
 return GetHorizontalDistance(HumanoidRootPart.Position, Rim.Position)
-end
-local PredictedPosition = SilentAim.GetPredictedReleasePosition()
-if not PredictedPosition then return math.huge end
-return GetHorizontalDistance(PredictedPosition, Rim.Position)
-end)
-
-local GetMovingShotTarget
-GetMovingShotTarget = WYNF_INLINE(function(Rim, YOffset)
-if not Rim then return nil end
-return Rim.Position + Vector3.new(0, YOffset or 0, 0)
 end)
 
 local EvaluateFormulaHeight
@@ -10853,12 +10812,8 @@ local ReleaseOrigin
 if typeof(OriginOverride) == 'Vector3' then
 ReleaseOrigin = Vector3.new(OriginOverride.X, ReleaseY, OriginOverride.Z)
 else
-local Drift = SilentAim.GetPredictedReleaseOffset()
-if CONFIG.SilentMode == 'Moving Swish' then
-Drift *= math.max(1, tonumber(CONFIG.ShotModeMovingLeadMultiplier) or 1.0)
-end
-ReleaseOrigin = Vector3.new(
-Head.Position.X + Drift.X, ReleaseY, Head.Position.Z + Drift.Z)
+-- Aim from the current head position. No velocity or release-time lead.
+ReleaseOrigin = Vector3.new(Head.Position.X, ReleaseY, Head.Position.Z)
 end
 local BallRadius = 1.25
 if Ball and safe_is_a(Ball, 'BasePart') then
