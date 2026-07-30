@@ -34,7 +34,7 @@ PerfectReleaseMaximumPing = 300,
 PerfectReleaseCalibrationFile = 'GoldenEagleHub_Release.json',
 CameraIndependentFallback = false,
 AimMode = 'Legit',
-SilentMode = 'Normal',
+SilentMode = 'High',
 BackboardEnabled = false,
 NoJumpEnabled = false,
 FormulaVerticalBoost = 55,
@@ -425,6 +425,27 @@ LocalChatTagSecondaryColor = '#35D9FF',
 LocalChatTagGradientSpeed = 0.65,
 LocalGoalEffectSpoof = false,
 LocalGoalEffect = 'Effect_Default',
+CustomGoalEffectLua = [==[-- Runs locally when you score. Available: Scorer, Court, Goal, TweenService, Debris.
+local target = Goal
+if target and not target:IsA('BasePart') then
+    target = target:FindFirstChildWhichIsA('BasePart', true)
+end
+if not target then return end
+
+local attachment = Instance.new('Attachment')
+attachment.Parent = target
+local burst = Instance.new('ParticleEmitter')
+burst.Color = ColorSequence.new(Color3.fromRGB(255, 210, 45), Color3.fromRGB(255, 85, 20))
+burst.LightEmission = 0.8
+burst.Lifetime = NumberRange.new(0.45, 0.9)
+burst.Speed = NumberRange.new(12, 22)
+burst.SpreadAngle = Vector2.new(180, 180)
+burst.Rate = 0
+burst.Parent = attachment
+burst:Emit(80)
+Debris:AddItem(attachment, 2)
+]==],
+CustomGoalEffectPresetName = '',
 LocalELOSpoof = false,
 LocalELO = 0,
 LocalRepImageSpoof = false,
@@ -438,6 +459,8 @@ LeaderboardSecondaryColor = '#35D9FF',
 LeaderboardGradientSpeed = 0.65,
 LocalWins = 0,
 LocalLosses = 0,
+LocalShields = 0,
+LocalShieldEXP = 0,
 LocalGoals = 0,
 LocalAttempts = 0,
 LocalStreak = 0,
@@ -531,6 +554,7 @@ local RunService = game:GetService('RunService')
 local UserInputService = game:GetService('UserInputService')
 local Workspace = game:GetService('Workspace')
 local TweenService = game:GetService('TweenService')
+local Debris = game:GetService('Debris')
 local Lighting = game:GetService('Lighting')
 local GuiService = game:GetService('GuiService')
 local Teams = game:GetService('Teams')
@@ -734,6 +758,8 @@ LocalRepImage = CONFIG.LocalRepImage,
 LocalStatsSpoofEnabled = CONFIG.LocalStatsSpoof,
 LocalWins = CONFIG.LocalWins,
 LocalLosses = CONFIG.LocalLosses,
+LocalShields = CONFIG.LocalShields,
+LocalShieldEXP = CONFIG.LocalShieldEXP,
 LocalGoals = CONFIG.LocalGoals,
 LocalAttempts = CONFIG.LocalAttempts,
 LocalStreak = CONFIG.LocalStreak,
@@ -4744,6 +4770,7 @@ local BodyAuraOptions = GetLocalCosmeticOptions('Aura', 'Aura_Default', true)
 local TrailOptions = GetLocalCosmeticOptions('Trail', 'Trail_Default')
 local BallOptions = GetLocalCosmeticOptions('Ball', 'Ball_Default')
 local GoalEffectOptions = GetLocalCosmeticOptions('Effect', 'Effect_Default')
+if not table.find(GoalEffectOptions, 'Custom Lua') then table.insert(GoalEffectOptions, 2, 'Custom Lua') end
 
 State.LocalCosmeticExtras = {
 CourtSkinner = nil,
@@ -5402,9 +5429,11 @@ end
 State.LocalSpoofs.LeaderboardGradients[Gradient] = true
 State.LocalSpoofs.LeaderboardStyledLabels[Label] = true
 Gradient.Enabled = Mode ~= 'Solid'
+-- Roblox UIGradient renders the zero keypoint on the visual right at rotation 0.
+-- Reverse the sequence so PRIMARY matches the left picker and SECONDARY the right.
 Gradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0, Primary),
-ColorSequenceKeypoint.new(1, Secondary),
+ColorSequenceKeypoint.new(0, Secondary),
+ColorSequenceKeypoint.new(1, Primary),
 })
 -- Animated mode uses full rotation rather than a wrapping Offset. A 360°
 -- rotation ends at the exact same visual state it began with, so it loops
@@ -6215,6 +6244,7 @@ while #AwayNames > RequestedSize do table.remove(AwayNames) end
 local ELO = State.LocalELOSpoofEnabled and State.LocalELO or (LP:GetAttribute('ELO') or 0)
 local Wins=math.max(0,math.floor(tonumber(State.LocalWins) or 0)); local Losses=math.max(0,math.floor(tonumber(State.LocalLosses) or 0))
 local Streak=math.max(0,math.floor(tonumber(State.LocalStreak) or 0)); local Highest=math.max(Streak,math.floor(tonumber(State.LocalHighestStreak) or 0))
+local Shields=math.max(0,math.floor(tonumber(State.LocalShields) or 0))
 local function BuildInfo(Name,HomeSide,Index)
 local Player=Players:FindFirstChild(Name)
 local IsLocal=Player==LP or Name==LP.Name or Name==LP.DisplayName or Name==DefaultLocalName
@@ -6228,7 +6258,7 @@ Points=HomeSide and HomeScore or AwayScore,Assists=0,Steals=0,Turnovers=0,Result
 OLDWINS=math.max(0,Wins-(PlayerResult=='Win' and 1 or 0)),NEWWINS=Wins,
 OLDLOSSES=math.max(0,Losses-(PlayerResult=='Lose' and 1 or 0)),NEWLOSSES=Losses,
 OLDSTREAK=math.max(0,Streak-1),NEWSTREAK=Streak,
-OLDHIGHESTSTREAK=math.max(0,Highest-1),NEWHIGHESTSTREAK=Highest,OLDSHIELDS=0,NEWSHIELDS=0,
+OLDHIGHESTSTREAK=math.max(0,Highest-1),NEWHIGHESTSTREAK=Highest,OLDSHIELDS=Shields,NEWSHIELDS=Shields,
 }
 end
 local Home={};local Away={}
@@ -6296,6 +6326,8 @@ local Goals = math.max(0, math.floor(tonumber(State.LocalGoals) or 0))
 local Attempts = math.max(0, math.floor(tonumber(State.LocalAttempts) or 0))
 local Streak = math.max(0, math.floor(tonumber(State.LocalStreak) or 0))
 local Highest = math.max(0, math.floor(tonumber(State.LocalHighestStreak) or 0))
+local Shields = math.max(0, math.floor(tonumber(State.LocalShields) or 0))
+local ShieldEXP = math.clamp(math.floor(tonumber(State.LocalShieldEXP) or 0), 0, 100)
 local WinPercent = Wins + Losses > 0 and math.round(Wins / (Wins + Losses) * 100) or 0
 local ShootingPercent = Attempts > 0 and math.round(Goals / Attempts * 100) or 0
 local StreakPercent = Highest > 0 and math.round(Streak / Highest * 100) or 0
@@ -6331,6 +6363,20 @@ end
 end
 local SideStreak = Object:FindFirstChild('Streak')
 if SideStreak and SideStreak:FindFirstChild('AmountLabel') then State.LocalSpoofs.SetStatsUI(SideStreak.AmountLabel, 'Text', tostring(Streak)) end
+local ShieldFrame = Object:FindFirstChild('ShieldFrame')
+if ShieldFrame then
+local Description = ShieldFrame:FindFirstChild('DescriptionLabel')
+local Progress = ShieldFrame:FindFirstChild('ProgressLabel')
+local Fill = ShieldFrame:FindFirstChild('Frame')
+if Description then State.LocalSpoofs.SetStatsUI(Description, 'Text', tostring(Shields)..' 🛡️') end
+if Progress then State.LocalSpoofs.SetStatsUI(Progress, 'Text', tostring(ShieldEXP)..'/100') end
+if Fill then
+local Ratio = ShieldEXP / 100
+State.LocalSpoofs.SetStatsUI(Fill, 'Size', UDim2.fromScale(Ratio, 1))
+local Bar = Fill:FindFirstChild('Bar')
+if Bar then State.LocalSpoofs.SetStatsUI(Bar, 'Size', UDim2.fromScale(Ratio > 0 and 1 / Ratio or 1, 1)) end
+end
+end
 State.LocalSpoofs.ApplyStatsLock()
 end
 end
@@ -6383,6 +6429,66 @@ if not Results[1] then error(Results[2]) end
 return table.unpack(Results, 2, Results.n)
 end
 
+function State.LocalSpoofs.CompileCustomGoalEffect(Source)
+Source = tostring(Source or '')
+if type(loadstring) ~= 'function' then return nil, 'loadstring is unavailable in this environment.' end
+local Wrapped = "return function(Context)\n"
+.. "local Scorer, Court, Goal = Context.Scorer, Context.Court, Context.Goal\n"
+.. "local TweenService, Debris, Lighting, Workspace = Context.TweenService, Context.Debris, Context.Lighting, Context.Workspace\n"
+.. Source .. "\nend"
+local Chunk, CompileError = loadstring(Wrapped, 'GEH_CustomGoalEffect')
+if not Chunk then return nil, tostring(CompileError) end
+if type(setfenv) == 'function' then
+local SafeEnvironment = {
+Instance = Instance, Enum = Enum, Color3 = Color3, Vector2 = Vector2, Vector3 = Vector3,
+CFrame = CFrame, UDim = UDim, UDim2 = UDim2, Rect = Rect,
+NumberRange = NumberRange, NumberSequence = NumberSequence, NumberSequenceKeypoint = NumberSequenceKeypoint,
+ColorSequence = ColorSequence, ColorSequenceKeypoint = ColorSequenceKeypoint,
+TweenInfo = TweenInfo, RaycastParams = RaycastParams, OverlapParams = OverlapParams,
+math = math, string = string, table = table, task = task, coroutine = coroutine, utf8 = utf8,
+pairs = pairs, ipairs = ipairs, next = next, select = select, unpack = unpack,
+tonumber = tonumber, tostring = tostring, type = type, typeof = typeof,
+assert = assert, error = error, pcall = pcall, xpcall = xpcall,
+}
+setmetatable(SafeEnvironment, { __index = function() return nil end })
+local EnvironmentOk, EnvironmentError = pcall(setfenv, Chunk, SafeEnvironment)
+if not EnvironmentOk then return nil, 'Could not create the custom-effect environment: '..tostring(EnvironmentError) end
+end
+local FactoryOk, EffectFunction = pcall(Chunk)
+if not FactoryOk then return nil, tostring(EffectFunction) end
+if type(EffectFunction) ~= 'function' then return nil, 'The custom effect did not compile into a function.' end
+return EffectFunction
+end
+
+function State.LocalSpoofs.RunCustomGoalEffect(Scorer, Court, Goal, ...)
+local Source = tostring(CONFIG.CustomGoalEffectLua or '')
+if State.LocalSpoofs.CustomGoalSource ~= Source or type(State.LocalSpoofs.CustomGoalFunction) ~= 'function' then
+local EffectFunction, CompileError = State.LocalSpoofs.CompileCustomGoalEffect(Source)
+if not EffectFunction then
+State.LocalSpoofs.CustomGoalFunction = nil
+State.LocalSpoofs.CustomGoalSource = nil
+warn('[GOLDEN EAGLE HUB] Custom goal effect compile error: '..tostring(CompileError))
+Notify('CUSTOM GOAL EFFECT', 'Compile error: '..tostring(CompileError))
+return nil
+end
+State.LocalSpoofs.CustomGoalSource = Source
+State.LocalSpoofs.CustomGoalFunction = EffectFunction
+end
+local Context = {
+Scorer = Scorer, Court = Court, Goal = Goal,
+TweenService = TweenService, Debris = Debris,
+Lighting = Lighting, Workspace = Workspace,
+Arguments = table.pack(...),
+}
+local Ok, Result = pcall(State.LocalSpoofs.CustomGoalFunction, Context)
+if not Ok then
+warn('[GOLDEN EAGLE HUB] Custom goal effect runtime error: '..tostring(Result))
+Notify('CUSTOM GOAL EFFECT', 'Runtime error: '..tostring(Result))
+return nil
+end
+return Result
+end
+
 function State.LocalSpoofs.SetGoalEffect(Enabled, ShouldNotify)
 State.LocalGoalEffectSpoofEnabled = Enabled == true
 CONFIG.LocalGoalEffectSpoof = State.LocalGoalEffectSpoofEnabled
@@ -6390,11 +6496,14 @@ State.LocalSpoofs.RestoreGoalEffects()
 if State.LocalGoalEffectSpoofEnabled then pcall(function()
 State.LocalSpoofs.ScoreEffects = State.LocalSpoofs.ScoreEffects or require(ReplicatedStorage.ScoreEffects)
 for Name, Effect in pairs(State.LocalSpoofs.ScoreEffects) do
-if type(Effect) == 'function' and Name ~= 'Level Up' and Name ~= 'Level Down' then
+if type(Effect) == 'function' and Name ~= 'Level Up' and Name ~= 'Level Down' and not string.find(string.lower(tostring(Name)), 'perfect', 1, true) then
 State.LocalSpoofs.GoalOriginals[Name] = State.LocalSpoofs.GoalOriginals[Name] or Effect
 State.LocalSpoofs.GoalHooks[Name] = function(Scorer, Court, Goal, ...)
 if State.Active and State.LocalGoalEffectSpoofEnabled and Scorer == LP then
 if State.LocalGoalEffect == 'None' then return nil end
+if State.LocalGoalEffect == 'Custom Lua' then
+return State.LocalSpoofs.RunCustomGoalEffect(Scorer, Court, Goal, ...)
+end
 local Selected = State.LocalSpoofs.GoalOriginals[State.LocalSpoofs.ResolveEffect(State.LocalGoalEffect)]
 if type(Selected) == 'function' then
 return State.LocalSpoofs.CallOwnedGoalEffect(Selected, Scorer, Court, Goal, ...)
@@ -10908,92 +11017,13 @@ return Roots
 end)
 
 local SolveFormulaArc
-SolveFormulaArc = WYNF_JIT_MAX(function(Distance, HeightDifference, Power, RootMode, ArcBias)
+SolveFormulaArc = WYNF_JIT_MAX(function(Distance, HeightDifference, Power, RootMode)
 local Gravity = Workspace.Gravity
 if Distance <= 0.0001 or Power <= 0 or Gravity <= 0 then return nil end
-
-local Roots = SilentAim.SolveArcRoots(
-Distance, HeightDifference, Power, Gravity)
-
-local SelectedMode = RootMode
-or (CONFIG.SilentMode == 'Low' and 'Low'
-or CONFIG.SilentMode == 'Medium' and 'Medium'
-or CONFIG.SilentMode == 'Custom' and 'Custom' or 'Normal')
-
-if SelectedMode == 'Custom' or SelectedMode == 'Medium' then
--- Continuous arc. The feasible window starts just above the straight
--- line to the target (below it no arc can ever come down onto the rim)
--- and stops short of vertical.
--- Medium is a fixed mid arc; Custom follows the dial.
-local Bias = math.clamp(SelectedMode == 'Medium'
-and (tonumber(CONFIG.FormulaMediumArcBias) or 5)
-or (tonumber(ArcBias) or tonumber(CONFIG.FormulaArcBias) or 5),
-0, 10) / 10
--- Power is locked to a coarse legal grid, so the arcs that actually
--- hit the rim form a discrete, uneven set rather than a continuous
--- range. Mapping the dial onto an angle range therefore wastes steps
--- wherever reachable angles are sparse. Instead collect every
--- achievable (angle, power) pair and spread the dial across that list:
--- 0 = flattest arc that exists at this distance, 10 = the highest.
--- Every entry is an exact solution, so the shot always lands on target.
-local Key = string.format('%.2f|%.2f|%.3f|%.1f',
-Distance, HeightDifference, Bias, Gravity)
-local Cached = SilentAim.ArcSolveCache[Key]
-if Cached then
-return Cached[1], Cached[2], Cached[3]
-end
-local Step = math.max(1, tonumber(CONFIG.FormulaArcPowerStep) or 5)
-local Scan = tonumber(CONFIG.FormulaArcScanSegments) or 72
--- The upward boost means some solutions release BELOW the straight
--- line to the rim. They do land, but a downward-angled jumper at a
--- hoop above you looks absurd, so they are excluded.
-local Floor = math.atan2(HeightDifference, Distance)
-local IncludeFlat = CONFIG.FormulaArcIncludeFlat == true
-local Choices = {}
-for Candidate = (tonumber(CONFIG.FormulaArcMinPower) or 10),
-(tonumber(CONFIG.FormulaArcMaxPower) or 85), Step do
-local Found = SilentAim.SolveArcRoots(
-Distance, HeightDifference, Candidate, Gravity, Scan)
-for Index, Root in ipairs(Found) do
--- Each power yields a flat root and a lofted root. Keeping only
--- the lofted one (the last) removes the unreachable hole, so
--- the dial sweeps smoothly instead of flipping low to high.
-if Root >= Floor and (IncludeFlat or Index == #Found) then
-Choices[#Choices + 1] = { Root, Candidate }
-end
-end
-end
-table.sort(Choices, function(A, B) return A[1] < B[1] end)
--- Merge near-identical arcs so the dial does not waste steps on them.
-local Unique = {}
-for _, Choice in ipairs(Choices) do
-local Last = Unique[#Unique]
-if not Last or math.abs(Choice[1] - Last[1]) > 0.01 then
-Unique[#Unique + 1] = Choice
-end
-end
-if #Unique > 0 then
-local Chosen = Unique[math.clamp(
-math.floor(Bias * (#Unique - 1) + 0.5) + 1, 1, #Unique)]
-local _, CustomTime = EvaluateFormulaHeight(
-Chosen[1], Distance, Chosen[2], Gravity)
-if SilentAim.ArcSolveCacheCount > 240 then
-SilentAim.ArcSolveCache = {}
-SilentAim.ArcSolveCacheCount = 0
-end
-SilentAim.ArcSolveCache[Key] = { Chosen[1], CustomTime, Chosen[2] }
-SilentAim.ArcSolveCacheCount = SilentAim.ArcSolveCacheCount + 1
-return Chosen[1], CustomTime, Chosen[2]
-end
--- Unreachable at the requested arc; fall through to the guaranteed
--- fixed-power roots so the shot still goes in.
-SelectedMode = 'Normal'
-end
-
-local Angle = SelectedMode == 'Low' and Roots[1] or Roots[#Roots]
+local Roots = SilentAim.SolveArcRoots(Distance, HeightDifference, Power, Gravity)
+local Angle = RootMode == 'Low' and Roots[1] or Roots[#Roots]
 if not Angle then return nil end
-local _, FlightTime = EvaluateFormulaHeight(
-Angle, Distance, Power, Gravity)
+local _, FlightTime = EvaluateFormulaHeight(Angle, Distance, Power, Gravity)
 return Angle, FlightTime
 end)
 
@@ -11093,117 +11123,28 @@ local Head = Character and safe_find(Character, 'Head')
 if not Character or not Head or not Rim then return nil end
 local Basketball = safe_find(Character, 'Basketball')
 local Ball = Basketball and Basketball:FindFirstChild('Ball', true)
-
-local ReleaseY = Ball and safe_is_a(Ball, 'BasePart') and Ball.Position.Y
-or Head.Position.Y
+local ReleaseY = Ball and safe_is_a(Ball, 'BasePart') and Ball.Position.Y or Head.Position.Y
 local ReleaseOrigin
 if typeof(OriginOverride) == 'Vector3' then
 ReleaseOrigin = Vector3.new(OriginOverride.X, ReleaseY, OriginOverride.Z)
 else
--- Aim from the current head position. No velocity or release-time lead.
 ReleaseOrigin = Vector3.new(Head.Position.X, ReleaseY, Head.Position.Z)
 end
-local BallRadius = 1.25
-if Ball and safe_is_a(Ball, 'BasePart') then
-BallRadius = math.max(Ball.Size.X, Ball.Size.Y, Ball.Size.Z) * 0.5
-end
 
-local Mode = tostring(CONFIG.SilentMode or 'Normal')
-local RootMode = Mode == 'Low' and 'Low'
-or Mode == 'Medium' and 'Medium'
-or Mode == 'Custom' and 'Custom' or 'Normal'
-local AimPosition
-
-if CONFIG.BackboardEnabled == true or Mode == 'Side Bank' then
-local BankTarget, Board = State.Backboard.GetMirrorTarget(
-Rim, ReleaseOrigin, BallRadius)
-AimPosition = BankTarget
-if AimPosition and Mode == 'Side Bank' and Board then
-local _, Normal = State.Backboard.GetPlane(
-Board, ReleaseOrigin, BallRadius)
-if Normal then
-local Tangent = Vector3.new(-Normal.Z, 0, Normal.X)
-if Tangent.Magnitude > 0.001 then
-Tangent = Tangent.Unit
-local Side = (ReleaseOrigin - Rim.Position):Dot(Tangent) >= 0 and 1 or -1
-AimPosition += Tangent * Side
-* (tonumber(CONFIG.ShotModeSideBankOffset) or 0.65)
-end
-end
-end
-if not AimPosition and not CONFIG.BackboardFallbackToNormal then return nil end
-end
-
-if not AimPosition then
-AimPosition = Rim.Position
-local TowardShooter = Vector3.new(
-ReleaseOrigin.X - Rim.Position.X, 0,
-ReleaseOrigin.Z - Rim.Position.Z)
-if TowardShooter.Magnitude > 0.001 then TowardShooter = TowardShooter.Unit end
-local RimOffset = tonumber(CONFIG.ShotModeRimOffset) or 0.52
-
-if Mode == 'Swish' or Mode == 'Moving Swish' then
-AimPosition += Vector3.new(0, -0.12, 0)
-RootMode = 'Normal'
-elseif Mode == 'Front Rim' then
-AimPosition += TowardShooter * RimOffset + Vector3.new(0, -0.24, 0)
-RootMode = 'Medium'
-elseif Mode == 'Back Rim' then
-AimPosition -= TowardShooter * (RimOffset * 0.82)
-AimPosition += Vector3.new(0, -0.24, 0)
-RootMode = 'Medium'
-elseif Mode == 'Random Legit' then
-local Seed = tonumber(State.ShotModeRandomSeed) or 0
-if not State.ShotModeRandomOffset then
-local A = math.sin((Seed + 1) * 12.9898) * 43758.5453
-local B = math.sin((Seed + 1) * 78.233) * 12345.6789
-A, B = A - math.floor(A), B - math.floor(B)
-State.ShotModeRandomOffset = Vector2.new(A * 2 - 1, B * 2 - 1)
-end
-local RandomOffset = State.ShotModeRandomOffset
-local Right = TowardShooter.Magnitude > 0.001
-and Vector3.new(-TowardShooter.Z, 0, TowardShooter.X)
-or Vector3.xAxis
-local Spread = tonumber(CONFIG.ShotModeRandomSpread) or 0.28
-AimPosition += Right * RandomOffset.X * Spread
-+ TowardShooter * RandomOffset.Y * Spread * 0.65
-+ Vector3.new(0, -0.18 + RandomOffset.Y * 0.06, 0)
-RootMode = Seed % 3 == 0 and 'Low'
-or Seed % 3 == 1 and 'Medium' or 'Normal'
-elseif Mode == 'Normal' then
+-- Match silent_aim_standalone.lua exactly: current release position only,
+-- fixed current power, and only the flat Low or lobbed High ballistic root.
+local Mode = CONFIG.SilentMode == 'Low' and 'Low' or 'High'
+local AimPosition = Rim.Position
+if Mode == 'High' then
 AimPosition += Vector3.new(0, CONFIG.FormulaHighAimYOffset, 0)
 end
-end
-
 local Delta = AimPosition - ReleaseOrigin
 local Flat = Vector3.new(Delta.X, 0, Delta.Z)
 local Distance = Flat.Magnitude
 if Distance <= 0.0001 then return nil end
-
-if Mode == 'Adaptive' then
-RootMode = Distance <= 17 and 'Low'
-or Distance <= 31 and 'Medium' or 'Normal'
-elseif Mode == 'Defender Aware' then
-RootMode = SilentAim.GetDefenderArcMode(ReleaseOrigin, AimPosition)
-end
-
-local Angle, FlightTime, RequiredPower
-if Mode == 'Minimum Power' or Mode == 'Fastest Arrival' then
-Angle, FlightTime, RequiredPower = SilentAim.SolveSpecialArc(
-Distance, Delta.Y, Mode)
-else
-Angle, FlightTime, RequiredPower = SolveFormulaArc(
-Distance, Delta.Y, Power, RootMode)
-end
+local Angle, FlightTime = SolveFormulaArc(Distance, Delta.Y, Power, Mode)
 if not Angle then return nil end
-
-if RequiredPower and CONFIG.FormulaArcPowerAssist
-and State.PowerBypass and State.PowerBypass.SyncChannels then
-pcall(State.PowerBypass.SyncChannels,
-SilentAim.QuantizePower(RequiredPower))
-end
-local Direction = Flat.Unit * math.cos(Angle)
-+ Vector3.new(0, math.sin(Angle), 0)
+local Direction = Flat.Unit * math.cos(Angle) + Vector3.new(0, math.sin(Angle), 0)
 return Head.Position + Direction * 1000, FlightTime
 end)
 
@@ -23705,6 +23646,293 @@ CONFIG.LocalGoalEffect = Value
 if State.LocalGoalEffectSpoofEnabled then State.LocalSpoofs.SetGoalEffect(true, false) end
 end, 145
 )
+-- Named custom-goal presets persist separately so effects can be switched
+-- without repeatedly pasting Lua into the editor.
+HubUI.CustomGoalPresetFile = 'GoldenEagleHub_GoalEffectPresets.json'
+HubUI.CustomGoalPresets = type(GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS) == 'table'
+and GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS or {}
+GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS = HubUI.CustomGoalPresets
+HubUI.SanitizeCustomGoalPresetName = function(Value)
+Value = tostring(Value or ''):gsub('[^%w _%-]', '')
+Value = Value:match('^%s*(.-)%s*$') or ''
+Value = Value:gsub('%s+', ' ')
+if #Value > 32 then Value = Value:sub(1, 32) end
+return Value
+end
+HubUI.LoadCustomGoalPresets = function()
+if type(isfile) ~= 'function' or type(readfile) ~= 'function' then return end
+local ExistsOk, Exists = pcall(isfile, HubUI.CustomGoalPresetFile)
+if not (ExistsOk and Exists) then return end
+local ReadOk, Raw = pcall(readfile, HubUI.CustomGoalPresetFile)
+if not ReadOk then return end
+local DecodeOk, Data = pcall(State.Utility.HttpService.JSONDecode, State.Utility.HttpService, Raw)
+if not (DecodeOk and type(Data) == 'table') then return end
+for Name, Preset in pairs(Data) do
+Name = HubUI.SanitizeCustomGoalPresetName(Name)
+if Name ~= '' then
+if type(Preset) == 'string' then
+HubUI.CustomGoalPresets[Name] = { Source = Preset }
+elseif type(Preset) == 'table' and type(Preset.Source) == 'string' then
+HubUI.CustomGoalPresets[Name] = Preset
+end
+end
+end
+end
+HubUI.WriteCustomGoalPresets = function()
+GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS = HubUI.CustomGoalPresets
+if type(writefile) ~= 'function' then return false end
+local EncodeOk, Encoded = pcall(State.Utility.HttpService.JSONEncode,
+State.Utility.HttpService, HubUI.CustomGoalPresets)
+if not EncodeOk then return false end
+return pcall(writefile, HubUI.CustomGoalPresetFile, Encoded)
+end
+HubUI.GetCustomGoalPresetNames = function()
+local Names = {}
+for Name, Preset in pairs(HubUI.CustomGoalPresets) do
+if type(Preset) == 'table' and type(Preset.Source) == 'string' then Names[#Names + 1] = tostring(Name) end
+end
+table.sort(Names, function(A, B) return string.lower(A) < string.lower(B) end)
+return Names
+end
+HubUI.LoadCustomGoalPresets()
+-- Keep editor implementation in a short-lived scope so this very large chunk
+-- stays below Luau's 200-local-register compilation limit.
+do
+local CustomGoalEditorButton = New('TextButton', {
+Position = UDim2.fromOffset(8, 205), Size = UDim2.fromOffset(100, 23),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = 'LUA EFFECT EDITOR', TextColor3 = Theme.AccentBright,
+TextSize = 8, ZIndex = 22,
+}, CosmeticSpoofsGroup)
+AccentStroke(CustomGoalEditorButton, 1, 0.16)
+
+local CustomGoalOverlay = New('CanvasGroup', {
+Name = 'CustomGoalEffectEditor', Size = UDim2.fromScale(1, 1),
+BackgroundColor3 = Theme.Background, BackgroundTransparency = 1,
+BorderSizePixel = 0, Visible = false, GroupTransparency = 1,
+Active = true, ZIndex = 340,
+}, Main)
+local CustomGoalCard = New('Frame', {
+AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.515),
+Size = UDim2.fromOffset(520, 455), BackgroundColor3 = Theme.Panel,
+BorderSizePixel = 0, ZIndex = 341,
+}, CustomGoalOverlay)
+local CustomGoalCardScale = New('UIScale', { Scale = 0.97 }, CustomGoalCard)
+AccentStroke(CustomGoalCard, 1.5, 0.06)
+New('TextLabel', {
+Position = UDim2.fromOffset(14, 10), Size = UDim2.new(1, -28, 0, 22),
+BackgroundTransparency = 1, Font = Enum.Font.Code, Text = 'CUSTOM GOAL EFFECT  /  LOCAL LUA',
+TextColor3 = Theme.Text, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 342,
+}, CustomGoalCard)
+New('TextLabel', {
+Position = UDim2.fromOffset(14, 35), Size = UDim2.new(1, -28, 0, 30),
+BackgroundTransparency = 1, Font = Enum.Font.Code,
+Text = 'Save effects by name, cycle them later, then load and use without pasting again.',
+TextWrapped = true, TextColor3 = Theme.Muted, TextSize = 9,
+TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 342,
+}, CustomGoalCard)
+local CustomGoalCodeBox = New('TextBox', {
+Position = UDim2.fromOffset(14, 103), Size = UDim2.new(1, -28, 0, 268),
+BackgroundColor3 = Theme.Background, BorderSizePixel = 0, ClearTextOnFocus = false,
+MultiLine = true, TextWrapped = true, TextEditable = true, ClipsDescendants = true,
+Font = Enum.Font.Code, Text = tostring(CONFIG.CustomGoalEffectLua or ''),
+PlaceholderText = '-- Write the local goal effect here', PlaceholderColor3 = Theme.Muted,
+TextColor3 = Theme.Text, TextSize = 10,
+TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+ZIndex = 342,
+}, CustomGoalCard)
+New('UIPadding', {
+PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8),
+PaddingTop = UDim.new(0, 7), PaddingBottom = UDim.new(0, 7),
+}, CustomGoalCodeBox)
+DarkStroke(CustomGoalCodeBox)
+local CustomGoalStatus = New('TextLabel', {
+Position = UDim2.fromOffset(14, 377), Size = UDim2.new(1, -28, 0, 18),
+BackgroundTransparency = 1, Font = Enum.Font.Code, Text = 'READY',
+TextColor3 = Theme.Muted, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 342,
+}, CustomGoalCard)
+local function CreateCustomGoalButton(Position, Size, Text)
+local Button = New('TextButton', {
+Position = Position, Size = Size, BackgroundColor3 = Theme.Surface,
+BorderSizePixel = 0, AutoButtonColor = false, Font = Enum.Font.Code,
+Text = Text, TextColor3 = Theme.Text, TextSize = 9, ZIndex = 342,
+}, CustomGoalCard)
+AccentStroke(Button, 1, 0.12)
+return Button
+end
+local CustomGoalPresetName = New('TextBox', {
+Position = UDim2.fromOffset(14, 70), Size = UDim2.fromOffset(190, 25),
+BackgroundColor3 = Theme.Background, BorderSizePixel = 0, ClearTextOnFocus = false,
+Font = Enum.Font.Code, Text = tostring(CONFIG.CustomGoalEffectPresetName or ''),
+PlaceholderText = 'Effect name...', PlaceholderColor3 = Theme.Muted,
+TextColor3 = Theme.Text, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 342,
+}, CustomGoalCard)
+New('UIPadding', { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, CustomGoalPresetName)
+DarkStroke(CustomGoalPresetName)
+local CustomGoalPresetPrevious = CreateCustomGoalButton(UDim2.fromOffset(211, 70), UDim2.fromOffset(28, 25), '<')
+local CustomGoalPresetLoad = CreateCustomGoalButton(UDim2.fromOffset(246, 70), UDim2.fromOffset(70, 25), 'LOAD')
+local CustomGoalPresetNext = CreateCustomGoalButton(UDim2.fromOffset(323, 70), UDim2.fromOffset(28, 25), '>')
+local CustomGoalPresetSave = CreateCustomGoalButton(UDim2.fromOffset(358, 70), UDim2.fromOffset(70, 25), 'SAVE')
+local CustomGoalPresetDelete = CreateCustomGoalButton(UDim2.fromOffset(435, 70), UDim2.fromOffset(71, 25), 'DELETE')
+local CustomGoalSave = CreateCustomGoalButton(UDim2.fromOffset(14, 408), UDim2.fromOffset(200, 28), 'SAVE SOURCE & USE')
+local CustomGoalTest = CreateCustomGoalButton(UDim2.fromOffset(221, 408), UDim2.fromOffset(150, 28), 'TEST ON PLAYER')
+local CustomGoalClose = CreateCustomGoalButton(UDim2.fromOffset(378, 408), UDim2.fromOffset(128, 28), 'CLOSE')
+local CustomGoalAnimationSerial = 0
+local function SetCustomGoalEditorVisible(Value)
+CustomGoalAnimationSerial += 1
+local Serial = CustomGoalAnimationSerial
+if Value then
+if ActiveDropdown then ActiveDropdown:Close() end
+CustomGoalCodeBox.Text = tostring(CONFIG.CustomGoalEffectLua or '')
+CustomGoalPresetName.Text = tostring(CONFIG.CustomGoalEffectPresetName or '')
+CustomGoalStatus.Text = 'READY'
+CustomGoalStatus.TextColor3 = Theme.Muted
+CustomGoalOverlay.Visible = true
+CustomGoalOverlay.GroupTransparency = 1
+CustomGoalOverlay.BackgroundTransparency = 1
+CustomGoalCard.Position = UDim2.fromScale(0.5, 0.515)
+CustomGoalCardScale.Scale = 0.97
+Tween(CustomGoalOverlay, 0.24, { GroupTransparency = 0, BackgroundTransparency = 0.18 }, Enum.EasingStyle.Sine)
+Tween(CustomGoalCard, 0.27, { Position = UDim2.fromScale(0.5, 0.5) }, Enum.EasingStyle.Quint)
+Tween(CustomGoalCardScale, 0.27, { Scale = 1 }, Enum.EasingStyle.Back)
+else
+CustomGoalCodeBox:ReleaseFocus()
+Tween(CustomGoalOverlay, 0.18, { GroupTransparency = 1, BackgroundTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+Tween(CustomGoalCard, 0.18, { Position = UDim2.fromScale(0.5, 0.515) }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+Tween(CustomGoalCardScale, 0.18, { Scale = 0.98 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.19 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+if CustomGoalAnimationSerial == Serial and CustomGoalOverlay.Parent then CustomGoalOverlay.Visible = false end
+end)
+end
+end
+local function CompileEditorSource()
+local EffectFunction, CompileError = State.LocalSpoofs.CompileCustomGoalEffect(CustomGoalCodeBox.Text)
+if not EffectFunction then
+CustomGoalStatus.Text = 'ERROR: '..tostring(CompileError)
+CustomGoalStatus.TextColor3 = Theme.Bad
+return nil
+end
+CustomGoalStatus.Text = 'COMPILED SUCCESSFULLY'
+CustomGoalStatus.TextColor3 = Theme.Success
+return EffectFunction
+end
+local function UseCompiledEditorSource(EffectFunction, StatusText)
+CONFIG.CustomGoalEffectLua = CustomGoalCodeBox.Text
+State.LocalSpoofs.CustomGoalSource = CONFIG.CustomGoalEffectLua
+State.LocalSpoofs.CustomGoalFunction = EffectFunction
+State.LocalGoalEffect = 'Custom Lua'
+CONFIG.LocalGoalEffect = 'Custom Lua'
+HubUI.Controls.LocalGoalEffect:Set('Custom Lua', false)
+if State.LocalGoalEffectSpoofEnabled then State.LocalSpoofs.SetGoalEffect(true, false) end
+CustomGoalStatus.Text = StatusText or 'CUSTOM LUA SELECTED'
+CustomGoalStatus.TextColor3 = Theme.Success
+end
+local function LoadNamedGoalPreset(Name, ShouldUse)
+Name = HubUI.SanitizeCustomGoalPresetName(Name)
+local Preset = HubUI.CustomGoalPresets[Name]
+if Name == '' or type(Preset) ~= 'table' or type(Preset.Source) ~= 'string' then
+CustomGoalStatus.Text = 'PRESET NOT FOUND'
+CustomGoalStatus.TextColor3 = Theme.Bad
+return false
+end
+CustomGoalPresetName.Text = Name
+CONFIG.CustomGoalEffectPresetName = Name
+CustomGoalCodeBox.Text = Preset.Source
+if ShouldUse ~= false then
+local EffectFunction = CompileEditorSource()
+if not EffectFunction then return false end
+UseCompiledEditorSource(EffectFunction, 'LOADED  /  '..string.upper(Name)..' SELECTED')
+else
+CustomGoalStatus.Text = 'LOADED SOURCE  /  '..string.upper(Name)
+CustomGoalStatus.TextColor3 = Theme.Success
+end
+return true
+end
+local function StepNamedGoalPreset(Direction)
+local Names = HubUI.GetCustomGoalPresetNames()
+if #Names == 0 then
+CustomGoalStatus.Text = 'NO SAVED EFFECTS'
+CustomGoalStatus.TextColor3 = Theme.Muted
+return
+end
+local Current = HubUI.SanitizeCustomGoalPresetName(CustomGoalPresetName.Text)
+local Index = table.find(Names, Current) or (Direction > 0 and 0 or 1)
+Index = ((Index - 1 + Direction) % #Names) + 1
+LoadNamedGoalPreset(Names[Index], true)
+end
+GiveSignal(CustomGoalPresetPrevious.MouseButton1Click:Connect(function() StepNamedGoalPreset(-1) end))
+GiveSignal(CustomGoalPresetNext.MouseButton1Click:Connect(function() StepNamedGoalPreset(1) end))
+GiveSignal(CustomGoalPresetLoad.MouseButton1Click:Connect(function()
+LoadNamedGoalPreset(CustomGoalPresetName.Text, true)
+end))
+GiveSignal(CustomGoalPresetSave.MouseButton1Click:Connect(function()
+local Name = HubUI.SanitizeCustomGoalPresetName(CustomGoalPresetName.Text)
+if Name == '' then
+CustomGoalStatus.Text = 'ENTER AN EFFECT NAME FIRST'
+CustomGoalStatus.TextColor3 = Theme.Bad
+return
+end
+local EffectFunction = CompileEditorSource()
+if not EffectFunction then return end
+HubUI.CustomGoalPresets[Name] = {
+Source = CustomGoalCodeBox.Text,
+SavedAt = type(os) == 'table' and type(os.time) == 'function' and os.time() or 0,
+}
+HubUI.WriteCustomGoalPresets()
+CustomGoalPresetName.Text = Name
+CONFIG.CustomGoalEffectPresetName = Name
+UseCompiledEditorSource(EffectFunction, 'SAVED  /  '..string.upper(Name)..' SELECTED')
+end))
+GiveSignal(CustomGoalPresetDelete.MouseButton1Click:Connect(function()
+local Name = HubUI.SanitizeCustomGoalPresetName(CustomGoalPresetName.Text)
+if Name == '' or HubUI.CustomGoalPresets[Name] == nil then
+CustomGoalStatus.Text = 'PRESET NOT FOUND'
+CustomGoalStatus.TextColor3 = Theme.Bad
+return
+end
+HubUI.CustomGoalPresets[Name] = nil
+HubUI.WriteCustomGoalPresets()
+if CONFIG.CustomGoalEffectPresetName == Name then CONFIG.CustomGoalEffectPresetName = '' end
+CustomGoalPresetName.Text = ''
+CustomGoalStatus.Text = 'DELETED  /  '..string.upper(Name)
+CustomGoalStatus.TextColor3 = Theme.Muted
+end))
+GiveSignal(CustomGoalPresetName.FocusLost:Connect(function(EnterPressed)
+if EnterPressed then LoadNamedGoalPreset(CustomGoalPresetName.Text, true) end
+end))
+GiveSignal(CustomGoalEditorButton.MouseButton1Click:Connect(function() SetCustomGoalEditorVisible(true) end))
+GiveSignal(CustomGoalClose.MouseButton1Click:Connect(function() SetCustomGoalEditorVisible(false) end))
+GiveSignal(CustomGoalSave.MouseButton1Click:Connect(function()
+local EffectFunction = CompileEditorSource()
+if not EffectFunction then return end
+UseCompiledEditorSource(EffectFunction, 'SOURCE SAVED  /  CUSTOM LUA SELECTED')
+end))
+GiveSignal(CustomGoalTest.MouseButton1Click:Connect(function()
+local EffectFunction = CompileEditorSource()
+if not EffectFunction then return end
+local Character = LP.Character
+local PreviewGoal = Character and (Character:FindFirstChild('HumanoidRootPart') or Character.PrimaryPart)
+local Ok, ErrorText = pcall(EffectFunction, {
+Scorer = LP, Court = nil, Goal = PreviewGoal,
+TweenService = TweenService, Debris = Debris,
+Lighting = Lighting, Workspace = Workspace, Arguments = table.pack(),
+})
+if Ok then
+CustomGoalStatus.Text = 'PREVIEW PLAYED ON YOUR CHARACTER'
+CustomGoalStatus.TextColor3 = Theme.Success
+else
+CustomGoalStatus.Text = 'RUNTIME ERROR: '..tostring(ErrorText)
+CustomGoalStatus.TextColor3 = Theme.Bad
+end
+end))
+HubUI.Controls.CustomGoalEffectEditor = {
+SearchRoot = CustomGoalEditorButton, SearchParent = CosmeticSpoofsGroup,
+SearchLabel = 'Edit custom Lua goal effect', Kind = 'Action',
+Trigger = function() SetCustomGoalEditorVisible(true) end,
+}
+HubUI.CustomGoalOverlay = CustomGoalOverlay
+HubUI.SetCustomGoalEditorVisible = SetCustomGoalEditorVisible
+end
 CreateSectionHeader(CosmeticSpoofsGroup, 231, 'Profile stats & match history (local)')
 HubUI.Controls.LocalStatsSpoof = CreateCheckbox(
 CosmeticSpoofsGroup, 251, 'Spoof stats, banner & boards', State.LocalStatsSpoofEnabled,
@@ -23716,6 +23944,7 @@ local Fields = {
 { 'LocalGoals', 'LocalGoals', 'Goals', 168, 279 }, { 'LocalAttempts', 'LocalAttempts', 'Shots', 8, 302 },
 { 'LocalStreak', 'LocalStreak', 'Streak', 88, 302 }, { 'LocalHighestStreak', 'LocalHighestStreak', 'Best streak', 168, 302 },
 { 'LocalDonation', 'LocalDonation', 'Donated', 8, 325 },
+{ 'LocalShields', 'LocalShields', 'Shields', 88, 325 }, { 'LocalShieldEXP', 'LocalShieldEXP', 'Shield XP', 168, 325 },
 }
 State.LocalSpoofs.StatBoxes = {}
 for _, Data in ipairs(Fields) do
@@ -24691,39 +24920,26 @@ or 'Release timing locked to the manual value.')
 end
 )
 HubUI.Controls.SilentMode = CreateSelector(
-LeftGroup, 233, 'Shot mode', {
-'Normal', 'Low', 'Medium', 'Custom',
-'Swish', 'Front Rim', 'Back Rim', 'Adaptive',
-'Minimum Power', 'Fastest Arrival', 'Defender Aware',
-'Side Bank', 'Moving Swish', 'Random Legit'
-}, CONFIG.SilentMode,
+LeftGroup, 233, 'Arc mode', { 'High', 'Low' },
+(CONFIG.SilentMode == 'Low' and 'Low' or 'High'),
 function(Value)
 CONFIG.SilentMode = Value
 State.ShotModeRandomOffset = nil
 SilentAim.ArcSolveCache = {}
 SilentAim.ArcSolveCacheCount = 0
 SilentAim.ClearActorAim()
-Notify('GOLDEN EAGLE HUB', Value .. ' shot mode selected.')
+Notify('GOLDEN EAGLE HUB', 'Arc: ' .. Value .. (Value == 'Low' and ' (flat)' or ' (lobbed)'))
 end,
 118,
 true
 )
-HubUI.Controls.FormulaArcBias = CreateNumberInput(
-LeftGroup, 263, 'Arc height (0-10)', CONFIG.FormulaArcBias, 0, 10, 1,
-function(Value)
-CONFIG.FormulaArcBias = Value
-SilentAim.ClearActorAim()
-end
+CreateParagraph(
+LeftGroup, UDim2.fromOffset(8, 263), UDim2.new(1, -16, 0, 42),
+'High uses the lobbed ballistic root. Low uses the flat root. Both solve from your current release position with no movement or ping lead.'
 )
 
 CreateSectionHeader(LeftGroup, 303, 'Shot variants')
-HubUI.Controls.BackboardMode = CreateCheckbox(
-LeftGroup, 323, 'Backboard bank shot', CONFIG.BackboardEnabled,
-function(Value)
-CONFIG.BackboardEnabled = Value == true
-SilentAim.ClearActorAim()
-end
-)
+CONFIG.BackboardEnabled = false
 HubUI.Controls.NoJumpMode = CreateCheckbox(
 LeftGroup, 353, 'Enable No Jump Shot', CONFIG.NoJumpEnabled,
 function(Value)
@@ -24735,7 +24951,7 @@ CreateParagraph(
 LeftGroup,
 UDim2.fromOffset(8, 383),
 UDim2.new(1, -16, 0, 54),
-'Modes can change the rim target, arc, power, arrival time, movement lead, defender clearance, or bank side. Custom still uses the 0-10 arc dial.'
+'Silent aim now mirrors the standalone solver: two fixed choices only, no movement compensation and no automatic power or arc mode changes.'
 )
 
 CreateSectionHeader(MiddleGroup, 9, 'Targeting')
@@ -25715,6 +25931,8 @@ LocalELO = State.LocalELO,
 LocalRepImage = State.LocalRepImage,
 LocalWins = State.LocalWins,
 LocalLosses = State.LocalLosses,
+LocalShields = State.LocalShields,
+LocalShieldEXP = State.LocalShieldEXP,
 LocalGoals = State.LocalGoals,
 LocalAttempts = State.LocalAttempts,
 LocalStreak = State.LocalStreak,
@@ -25806,7 +26024,7 @@ CONFIG.LocalELO = State.LocalELO
 ELOBox.Text = tostring(State.LocalELO)
 if State.LocalELOSpoofEnabled then State.LocalSpoofs.SetELO(true, State.LocalELO, false) end
 end
-for _, Key in ipairs({ 'LocalWins', 'LocalLosses', 'LocalGoals', 'LocalAttempts', 'LocalStreak', 'LocalHighestStreak', 'LocalDonation' }) do
+for _, Key in ipairs({ 'LocalWins', 'LocalLosses', 'LocalShields', 'LocalShieldEXP', 'LocalGoals', 'LocalAttempts', 'LocalStreak', 'LocalHighestStreak', 'LocalDonation' }) do
 if Data[Key] ~= nil then
 local Value = math.max(0, math.floor(tonumber(Data[Key]) or 0))
 State[Key] = Value
@@ -27598,20 +27816,8 @@ GiveSignal(ClearGlobalSearchButton.MouseEnter:Connect(function() Tween(ClearGlob
 GiveSignal(ClearGlobalSearchButton.MouseLeave:Connect(function() Tween(ClearGlobalSearchButton, 0.1, { TextColor3 = Theme.Muted }) end))
 
 function HubUI.Sync()
-if CONFIG.SilentMode == 'Backboard' then
-CONFIG.BackboardEnabled = true
-CONFIG.SilentMode = 'Normal'
-elseif CONFIG.SilentMode == 'No Jump' then
-CONFIG.NoJumpEnabled = true
-CONFIG.SilentMode = 'Normal'
-elseif not table.find({
-'Normal', 'Low', 'Medium', 'Custom',
-'Swish', 'Front Rim', 'Back Rim', 'Adaptive',
-'Minimum Power', 'Fastest Arrival', 'Defender Aware',
-'Side Bank', 'Moving Swish', 'Random Legit'
-}, CONFIG.SilentMode) then
-CONFIG.SilentMode = 'Normal'
-end
+CONFIG.SilentMode = CONFIG.SilentMode == 'Low' and 'Low' or 'High'
+CONFIG.BackboardEnabled = false
 local SyncValues = {
 { HubUI.Controls.SilentAim, State.RequestedEnabled },
 { HubUI.Controls.AutoPass, State.AutoPassEnabled },
@@ -27686,7 +27892,7 @@ CONFIG.AutoBodyAdaptiveSmoothing },
 { HubUI.Controls.PerfectRelease, CONFIG.PerfectRelease },
 { HubUI.Controls.PerfectReleaseAutoCalibrate,
 CONFIG.PerfectReleaseAutoCalibrate },
-{ HubUI.Controls.BackboardMode, CONFIG.BackboardEnabled },
+{ nil, false },
 { HubUI.Controls.NoJumpMode, CONFIG.NoJumpEnabled },
 { HubUI.Controls.RangeIndicator, CONFIG.RangeIndicatorEnabled },
 { HubUI.Controls.Trajectory, CONFIG.TrajectoryPreviewEnabled },
@@ -27806,20 +28012,10 @@ local function CalculateFitScale()
 local Camera = Workspace.CurrentCamera
 if not Camera then return 1 end
 local Viewport = Camera.ViewportSize
+-- This is the largest scale that keeps every edge inside the viewport.
+-- It may exceed 1 on large displays, but never exceeds the UI scale control.
 local Fit = math.min((Viewport.X - 20) / 580, (Viewport.Y - 20) / 620)
-local Touch = UserInputService.TouchEnabled
-and InterfaceConfig.MobileSupportEnabled
--- Legibility floor. Control text is 9-12px, so scaling below these
--- values renders it unreadable. Breakpoints match phone / tablet /
--- laptop / desktop widths.
-local Floor = Touch and 0.62 or 0.66
-if Viewport.X >= 768 then Floor = 0.74 end
-if Viewport.X >= 1024 then Floor = 0.82 end
-if Viewport.X >= 1440 then Floor = 0.9 end
--- Never let the legibility floor push the window off screen.
-local Safe = math.min((Viewport.X - 8) / 580, (Viewport.Y - 8) / 620)
-Floor = math.min(Floor, math.max(Safe, 0.4))
-return math.clamp(Fit, Floor, 1)
+return math.clamp(Fit, 0.4, 1.35)
 end
 
 local function SaveWindowPosition()
@@ -27870,7 +28066,8 @@ end
 HubUI.ClampWindowToViewport = ClampWindowToViewport
 
 EffectiveScale = function()
-return (HubUI.FitScale or CalculateFitScale()) * math.clamp(tonumber(InterfaceConfig.Scale) or 1, 0.65, 1.35)
+local Requested = math.clamp(tonumber(InterfaceConfig.Scale) or 1, 0.65, 1.35)
+return math.min(HubUI.FitScale or CalculateFitScale(), Requested)
 end
 
 local OpenSerial = 0
@@ -27887,6 +28084,7 @@ HubUI.KeybindManager:ApplyOverlayWindowState(Value)
 end
 HubUI.FitScale = CalculateFitScale()
 if not Value and ColorPickerOverlay.Visible then ClosePicker(false) end
+if not Value and HubUI.CustomGoalOverlay and HubUI.CustomGoalOverlay.Visible then HubUI.SetCustomGoalEditorVisible(false) end
 if ActiveDropdown then ActiveDropdown:Close() end
 SearchBox:ReleaseFocus(); GlobalSearchBox:ReleaseFocus(); CloseGlobalSearch(false)
 local TargetScale = EffectiveScale()
@@ -27899,14 +28097,16 @@ Main.Position = UDim2.new(0, 8 + 290 * TargetScale, 0.5, 0)
 end
 ClampWindowToViewport()
 local WasVisible = Main.Visible
+local RestingPosition = Main.Position
 Main.Visible = true
 if not WasVisible then
 Main.GroupTransparency = 1
-MainScale.Scale = TargetScale * 0.965
+MainScale.Scale = TargetScale * 0.92
+Main.Position = UDim2.new(RestingPosition.X.Scale, RestingPosition.X.Offset, RestingPosition.Y.Scale, RestingPosition.Y.Offset + 14)
 end
 Main.Rotation = 0
-Tween(Main, 0.30, { GroupTransparency = 0, Rotation = 0 }, Enum.EasingStyle.Sine)
-Tween(MainScale, 0.32, { Scale = TargetScale }, Enum.EasingStyle.Quint)
+Tween(Main, 0.30, { GroupTransparency = 0, Rotation = 0, Position = RestingPosition }, Enum.EasingStyle.Quint)
+Tween(MainScale, 0.34, { Scale = TargetScale }, Enum.EasingStyle.Back)
 elseif Main.Visible then
 Tween(Main, 0.22, { GroupTransparency = 1, Rotation = 0 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(MainScale, 0.22, { Scale = TargetScale * 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
@@ -28064,7 +28264,9 @@ CycleTab(ShiftDown and -1 or 1)
 return
 end
 if Input.KeyCode == Enum.KeyCode.Escape then
-if ColorPickerOverlay.Visible then
+if HubUI.CustomGoalOverlay and HubUI.CustomGoalOverlay.Visible then
+HubUI.SetCustomGoalEditorVisible(false)
+elseif ColorPickerOverlay.Visible then
 ClosePicker(false)
 elseif ActiveDropdown then
 ActiveDropdown:Close()
