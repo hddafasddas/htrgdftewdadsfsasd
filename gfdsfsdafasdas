@@ -437,6 +437,7 @@ LocalGoals = 0,
 LocalAttempts = 0,
 LocalStreak = 0,
 LocalHighestStreak = 0,
+LocalDonation = 0,
 
 AutoDailySpin = false,
 AutoDailySpinRetryDelay = 60,
@@ -717,6 +718,7 @@ LocalGoals = CONFIG.LocalGoals,
 LocalAttempts = CONFIG.LocalAttempts,
 LocalStreak = CONFIG.LocalStreak,
 LocalHighestStreak = CONFIG.LocalHighestStreak,
+LocalDonation = CONFIG.LocalDonation,
 AutoDailySpinEnabled = CONFIG.AutoDailySpin,
 AutoServerHopEnabled = CONFIG.AutoServerHop,
 AutoStreamerModeEnabled = CONFIG.AutoStreamerMode,
@@ -4715,7 +4717,18 @@ RankImageOptions = {
 'Mamba 1','Mamba 2','Mamba 3','HoF 1','HoF 2','HoF 3',
 'G.O.A.T 1','G.O.A.T 2','G.O.A.T 3','Aura 1','Aura 2','Aura 3',
 },
-GoalOriginals = {}, GoalHooks = {}, StatsOriginals = setmetatable({}, { __mode = 'k' }), StatsIntroCards = setmetatable({}, { __mode = 'k' }),
+GoalOriginals = {}, GoalHooks = {},
+StatsOriginals = setmetatable({}, { __mode = 'k' }),
+StatsIntroCards = setmetatable({}, { __mode = 'k' }),
+StatsNativeNameTags = setmetatable({}, { __mode = 'k' }),
+LeaderboardClones = setmetatable({}, { __mode = 'k' }),
+LeaderboardCandidates = setmetatable({}, { __mode = 'k' }),
+LeaderboardLists = setmetatable({}, { __mode = 'k' }),
+BoardRowCache = setmetatable({}, { __mode = 'k' }),
+PedestalApplied = setmetatable({}, { __mode = 'k' }),
+LeaderboardRanks = {},
+OriginalTopAttributes = {},
+BannerGuiBound = false,
 }
 if not State.LocalSpoofs.RankImageELO[State.LocalRepImage] then State.LocalRepImage = 'Rookie 1' end
 
@@ -4777,6 +4790,17 @@ for Property, Value in pairs(Properties) do pcall(function() Object[Property] = 
 end
 end
 table.clear(State.LocalSpoofs.StatsOriginals)
+for Object in pairs(State.LocalSpoofs.LeaderboardClones) do
+if Object and Object.Parent then pcall(function() Object:Destroy() end) end
+end
+table.clear(State.LocalSpoofs.LeaderboardClones)
+table.clear(State.LocalSpoofs.BoardRowCache)
+table.clear(State.LocalSpoofs.PedestalApplied)
+for Attribute, Snapshot in pairs(State.LocalSpoofs.OriginalTopAttributes) do
+pcall(function() LP:SetAttribute(Attribute, Snapshot.HasValue and Snapshot.Value or nil) end)
+end
+table.clear(State.LocalSpoofs.OriginalTopAttributes)
+table.clear(State.LocalSpoofs.LeaderboardRanks)
 end
 
 function State.LocalSpoofs.SetStatsSpoof(Enabled)
@@ -4800,6 +4824,323 @@ State.LocalSpoofs.StatsProfileFrame = nil
 end
 end
 
+function State.LocalSpoofs.SnapshotTopAttribute(Attribute)
+if State.LocalSpoofs.OriginalTopAttributes[Attribute] then return end
+local Value = LP:GetAttribute(Attribute)
+State.LocalSpoofs.OriginalTopAttributes[Attribute] = { HasValue = Value ~= nil, Value = Value }
+end
+
+function State.LocalSpoofs.GetBoardValue(BoardName)
+if BoardName == 'Wins' then return math.max(0, math.floor(tonumber(State.LocalWins) or 0)) end
+if BoardName == 'HighestStreak' or BoardName == 'Streak' then
+-- The board titled "All-Time Streak Leaderboard" lives in the HighestStreak
+-- folder, so accept either streak box rather than silently reading 0.
+return math.max(0, math.floor(tonumber(State.LocalHighestStreak) or 0), math.floor(tonumber(State.LocalStreak) or 0))
+end
+if BoardName == 'Donation' then return math.max(0, math.floor(tonumber(State.LocalDonation) or 0)) end
+return math.max(0, math.floor(tonumber(State.LocalELOSpoofEnabled and State.LocalELO or LP:GetAttribute('ELO')) or 0))
+end
+
+function State.LocalSpoofs.BoardFolderMap()
+return { Wins = 'Wins', ELO = 'ELO', HighestStreak = 'HighestStreak', Streak = 'Streak', Donation = 'Donation' }
+end
+
+-- Each board folder holds an all-time board and, for Wins/ELO/Streak, a weekly board.
+function State.LocalSpoofs.BoardPeriodNames()
+return { 'AllTime', 'Temporary' }
+end
+
+function State.LocalSpoofs.IsBoardPeriodName(Name)
+return Name == 'AllTime' or Name == 'Temporary'
+end
+
+-- Boards live at Workspace.Leaderboards.<Board>.AllTime.ScreenGui.Bottom.ListFrame.
+-- Identity comes from the owning folder name, never from title text.
+function State.LocalSpoofs.DetectLeaderboardType(ListFrame)
+if not ListFrame then return nil end
+local Period, Node = nil, ListFrame
+for _ = 1, 8 do
+if not Node then break end
+if State.LocalSpoofs.IsBoardPeriodName(Node.Name) then Period = Node end
+Node = Node.Parent
+end
+if not Period then return nil end
+local Folder = Period.Parent
+if not Folder then return nil end
+return State.LocalSpoofs.BoardFolderMap()[Folder.Name]
+end
+
+function State.LocalSpoofs.RegisterLeaderboardList(Object)
+if not (Object and Object.Name == 'ListFrame') then return end
+State.LocalSpoofs.LeaderboardCandidates[Object] = true
+local BoardName = State.LocalSpoofs.DetectLeaderboardType(Object)
+if BoardName then State.LocalSpoofs.LeaderboardLists[Object] = BoardName end
+end
+
+function State.LocalSpoofs.DiscoverWorldLeaderboards()
+local Now = os.clock()
+if Now - (State.LocalSpoofs.WorldBoardScanAt or -math.huge) < 4 then return end
+State.LocalSpoofs.WorldBoardScanAt = Now
+local Root = Workspace:FindFirstChild('Leaderboards')
+if Root then
+for FolderName in pairs(State.LocalSpoofs.BoardFolderMap()) do
+local Folder = Root:FindFirstChild(FolderName)
+if Folder then
+for _, PeriodName in ipairs(State.LocalSpoofs.BoardPeriodNames()) do
+local Period = Folder:FindFirstChild(PeriodName)
+local Gui = Period and Period:FindFirstChild('ScreenGui')
+local Bottom = Gui and Gui:FindFirstChild('Bottom')
+local ListFrame = Bottom and Bottom:FindFirstChild('ListFrame')
+if not ListFrame and Period then ListFrame = Period:FindFirstChild('ListFrame', true) end
+if ListFrame then State.LocalSpoofs.RegisterLeaderboardList(ListFrame) end
+end
+end
+end
+end
+if not State.LocalSpoofs.WorldBoardConnectionBound then
+State.LocalSpoofs.WorldBoardConnectionBound = true
+GiveSignal(Workspace.DescendantAdded:Connect(function(Object)
+local ListFrame = Object.Name == 'ListFrame' and Object or Object:FindFirstAncestor('ListFrame')
+if ListFrame then
+task.delay(0.35, function()
+if ListFrame and ListFrame.Parent then State.LocalSpoofs.RegisterLeaderboardList(ListFrame) end
+end)
+end
+end))
+end
+end
+
+function State.LocalSpoofs.ReadBoardRow(Row)
+local PlayerName = Row:FindFirstChild('playername', true)
+if not (PlayerName and (PlayerName:IsA('TextLabel') or PlayerName:IsA('TextButton'))) then return nil end
+return {
+Row = Row,
+PlayerName = PlayerName,
+ValueLabel = Row:FindFirstChild('value', true),
+RankLabel = Row:FindFirstChild('rank', true),
+Icon = (Row:FindFirstChild('Frame') and Row.Frame:FindFirstChild('playerIcon')) or Row:FindFirstChild('playerIcon', true),
+Order = tonumber(Row.Name) or math.huge,
+}
+end
+
+-- The native renderer also drives workspace.Map.Extra.Leaderboards[Board].Pedestals,
+-- which holds the three podium dummies shown above each board.
+function State.LocalSpoofs.FindBoardPedestals(BoardName)
+local Map = Workspace:FindFirstChild('Map')
+local Extra = Map and Map:FindFirstChild('Extra')
+local Root = Extra and Extra:FindFirstChild('Leaderboards')
+local Folder = Root and Root:FindFirstChild(BoardName)
+return Folder and Folder:FindFirstChild('Pedestals') or nil
+end
+
+function State.LocalSpoofs.PedestalLabelText(BoardName, Value)
+if BoardName == 'Donation' then return ' ' .. Value .. ' Donated' end
+if BoardName == 'HighestStreak' or BoardName == 'Streak' then return Value .. ' Highest Streak' end
+return Value .. ' ' .. BoardName
+end
+
+function State.LocalSpoofs.PatchBoardPedestal(Pedestals, Slot, BoardName, Entry)
+if not (Pedestals and Entry) then return end
+local Dummy = Pedestals:FindFirstChild('PedestalDummy' .. tostring(Slot))
+local RootPart = Dummy and Dummy:FindFirstChild('HumanoidRootPart')
+local Billboard = RootPart and RootPart:FindFirstChild('BillboardGui')
+if not Billboard then return end
+local NameLabel = Billboard:FindFirstChild('NameLabel')
+local ValueLabel = Billboard:FindFirstChild('TextLabel')
+local Clean = tostring(Entry.Name or ''):gsub('^@', '')
+if NameLabel and (NameLabel:IsA('TextLabel') or NameLabel:IsA('TextButton')) then
+State.LocalSpoofs.SetStatsUI(NameLabel, 'Text', Clean)
+end
+if ValueLabel and (ValueLabel:IsA('TextLabel') or ValueLabel:IsA('TextButton')) then
+State.LocalSpoofs.SetStatsUI(ValueLabel, 'Text', State.LocalSpoofs.PedestalLabelText(BoardName, tostring(Entry.Value or '0')))
+end
+local UserId = tonumber(Entry.UserId)
+local Humanoid = Dummy and Dummy:FindFirstChildWhichIsA('Humanoid')
+if not (UserId and UserId > 0 and Humanoid) then return end
+if State.LocalSpoofs.PedestalApplied[Dummy] == UserId then return end
+State.LocalSpoofs.PedestalApplied[Dummy] = UserId
+task.spawn(function()
+local Ok, Description = pcall(function()
+return game:GetService('Players'):GetHumanoidDescriptionFromUserId(UserId)
+end)
+if Ok and Description and Dummy.Parent and Humanoid.Parent then
+pcall(function() Humanoid:ApplyDescription(Description) end)
+end
+end)
+end
+
+-- Each board has a fixed set of 30 already-rendered rows, so we rewrite them in
+-- place and shift everyone down instead of adding a 31st row that the grid layout
+-- would clip or drop.
+function State.LocalSpoofs.PatchLeaderboardList(ListFrame, BoardName)
+if not (ListFrame and ListFrame.Parent) then return end
+local Value = State.LocalSpoofs.GetBoardValue(BoardName)
+
+local Slots = {}
+for _, Row in ipairs(ListFrame:GetChildren()) do
+if Row:IsA('GuiObject') then
+local Data = State.LocalSpoofs.ReadBoardRow(Row)
+if Data then table.insert(Slots, Data) end
+end
+end
+if #Slots == 0 then return end
+table.sort(Slots, function(A, B) return A.Order < B.Order end)
+
+local Cache = State.LocalSpoofs.BoardRowCache[ListFrame]
+if not Cache then
+Cache = {}
+for Index, Data in ipairs(Slots) do
+local Image = (Data.Icon and Data.Icon:IsA('ImageLabel')) and Data.Icon.Image or nil
+Cache[Index] = {
+Name = Data.PlayerName and tostring(Data.PlayerName.Text or '') or '',
+Value = Data.ValueLabel and tostring(Data.ValueLabel.Text or '') or '',
+Image = Image,
+UserId = Image and tonumber(string.match(tostring(Image), 'userId=(%d+)')) or nil,
+}
+end
+State.LocalSpoofs.BoardRowCache[ListFrame] = Cache
+end
+
+local Entries = {}
+for _, Row in ipairs(Cache) do
+local Clean = tostring(Row.Name):gsub('^@', '')
+if Clean ~= LP.Name then
+local Numeric = tonumber((tostring(Row.Value):gsub('[^%d%-]', ''))) or -math.huge
+table.insert(Entries, { Name = Row.Name, Value = Row.Value, Numeric = Numeric, Image = Row.Image, UserId = Row.UserId })
+end
+end
+
+local Headshot = 'https://www.roblox.com/headshot-thumbnail/image?userId=' .. LP.UserId .. '&width=150&height=150&format=png'
+local Placement = 1
+for _, Entry in ipairs(Entries) do
+if Entry.Numeric > Value then Placement += 1 end
+end
+table.insert(Entries, math.min(Placement, #Entries + 1), {
+Name = '@' .. LP.Name, Value = tostring(Value), Numeric = Value, Image = Headshot, UserId = LP.UserId,
+})
+
+for Index, Data in ipairs(Slots) do
+local Entry = Entries[Index]
+if Entry then
+if Data.PlayerName then State.LocalSpoofs.SetStatsUI(Data.PlayerName, 'Text', Entry.Name) end
+if Data.ValueLabel then State.LocalSpoofs.SetStatsUI(Data.ValueLabel, 'Text', Entry.Value) end
+if Data.RankLabel then State.LocalSpoofs.SetStatsUI(Data.RankLabel, 'Text', tostring(Index)) end
+if Data.Icon and Data.Icon:IsA('ImageLabel') and Entry.Image then
+State.LocalSpoofs.SetStatsUI(Data.Icon, 'Image', Entry.Image)
+end
+end
+end
+
+State.LocalSpoofs.LeaderboardRanks[BoardName] = math.min(State.LocalSpoofs.LeaderboardRanks[BoardName] or Placement, Placement)
+
+-- ListFrame.Parent is Bottom, whose parent holds the Top podium section.
+local Gui = ListFrame.Parent and ListFrame.Parent.Parent
+if not (Gui and Gui:FindFirstChild('Top')) then
+Gui = ListFrame:FindFirstAncestorWhichIsA('SurfaceGui') or ListFrame:FindFirstAncestorWhichIsA('ScreenGui')
+end
+local Top = Gui and Gui:FindFirstChild('Top', true)
+local Pedestals = State.LocalSpoofs.FindBoardPedestals(BoardName)
+for Slot = 1, 3 do
+local Entry = Entries[Slot]
+if Entry then
+local Podium = Top and Top:FindFirstChild(tostring(Slot))
+local TopIcon = Podium and Podium:FindFirstChild('playerIcon', true)
+if TopIcon and TopIcon:IsA('ImageLabel') and Entry.Image then
+State.LocalSpoofs.SetStatsUI(TopIcon, 'Image', Entry.Image)
+end
+State.LocalSpoofs.PatchBoardPedestal(Pedestals, Slot, BoardName, Entry)
+end
+end
+end
+
+function State.LocalSpoofs.FindLocalNameTagMain(Banner)
+if not (Banner and Banner.Parent) then return nil end
+local Main = Banner.Parent
+if Main.Name ~= 'MainFrame' then Main = Banner:FindFirstAncestor('MainFrame') end
+if not Main then return nil end
+local NameTag = Main.Parent
+local Adornee = NameTag and NameTag:IsA('BillboardGui') and (NameTag.Adornee or NameTag.Parent)
+if Adornee and LP.Character and Adornee:IsDescendantOf(LP.Character) then return Main end
+for _, Descendant in ipairs(Main:GetDescendants()) do
+if Descendant:IsA('TextLabel') or Descendant:IsA('TextButton') then
+local Text = tostring(Descendant.Text or '')
+if Text == LP.Name or Text == LP.DisplayName or Text == ('@' .. LP.Name)
+or (State.LocalAliasEnabled and Text == tostring(State.LocalAlias)) then return Main end
+end
+end
+return nil
+end
+
+function State.LocalSpoofs.RegisterNativeNameTag(Banner)
+local Main = State.LocalSpoofs.FindLocalNameTagMain(Banner)
+if not Main then return end
+local Record = Main:FindFirstChild('RecordLabel', true) or Main:FindFirstChild('Record', true)
+if not (Record and (Record:IsA('TextLabel') or Record:IsA('TextButton'))) then
+for _, Descendant in ipairs(Main:GetDescendants()) do
+if (Descendant:IsA('TextLabel') or Descendant:IsA('TextButton'))
+and string.match(tostring(Descendant.Text or ''), '^%s*%d+%s*[-–]%s*%d+%s*$') then Record = Descendant; break end
+end
+end
+local Streak = Main:FindFirstChild('Streak', true) or Main:FindFirstChild('StreakIcon', true)
+local Amount = Streak and (Streak:FindFirstChild('AmountLabel', true) or Streak:FindFirstChildWhichIsA('TextLabel', true))
+local RankImage = Main:FindFirstChild('RankImage', true) or Main:FindFirstChild('RankIcon', true)
+local RankLabel = Main:FindFirstChild('RankLabel', true)
+State.LocalSpoofs.StatsNativeNameTags[Main] = {
+Record=Record, Streak=Streak, Amount=Amount, RankImage=RankImage, RankLabel=RankLabel,
+}
+if Record then State.LocalSpoofs.SetStatsUI(Record, 'Text', Record.Text) end
+if Amount then State.LocalSpoofs.SetStatsUI(Amount, 'Text', Amount.Text) end
+if Streak and Streak:IsA('ImageLabel') then State.LocalSpoofs.SetStatsUI(Streak, 'Image', Streak.Image) end
+if RankImage and RankImage:IsA('ImageLabel') then State.LocalSpoofs.SetStatsUI(RankImage, 'Image', RankImage.Image) end
+if RankLabel and RankLabel:IsA('TextLabel') then State.LocalSpoofs.SetStatsUI(RankLabel, 'Text', RankLabel.Text) end
+end
+
+function State.LocalSpoofs.ApplyNativeNameTags()
+local CollectionService = game:GetService('CollectionService')
+for _, Banner in ipairs(CollectionService:GetTagged('Banners')) do State.LocalSpoofs.RegisterNativeNameTag(Banner) end
+local W = math.max(0, math.floor(tonumber(State.LocalWins) or 0))
+local L = math.max(0, math.floor(tonumber(State.LocalLosses) or 0))
+local S = math.max(0, math.floor(tonumber(State.LocalStreak) or 0))
+local E = State.LocalELOSpoofEnabled and State.LocalELO or (LP:GetAttribute('ELO') or 0)
+State.LocalSpoofs.Rankings = State.LocalSpoofs.Rankings or require(ReplicatedStorage.Util.Rankings)
+for Main, Fields in pairs(State.LocalSpoofs.StatsNativeNameTags) do
+if Main and Main.Parent then
+if Fields.Record and Fields.Record.Parent then State.LocalSpoofs.SetStatsUI(Fields.Record, 'Text', W .. ' - ' .. L) end
+if Fields.Amount and Fields.Amount.Parent then State.LocalSpoofs.SetStatsUI(Fields.Amount, 'Text', S > 0 and tostring(S) or '') end
+if Fields.Streak and Fields.Streak.Parent and Fields.Streak:IsA('ImageLabel') then
+State.LocalSpoofs.SetStatsUI(Fields.Streak, 'Image', S > 1 and (State.LocalSpoofs.Rankings.getStreakImage(S) or '') or '')
+end
+if Fields.RankImage and Fields.RankImage.Parent and Fields.RankImage:IsA('ImageLabel') then
+State.LocalSpoofs.SetStatsUI(Fields.RankImage, 'Image', State.LocalSpoofs.Rankings.getRankImageFromELO(E) or '')
+end
+if Fields.RankLabel and Fields.RankLabel.Parent and Fields.RankLabel:IsA('TextLabel') then
+local RankName, RankTier = State.LocalSpoofs.Rankings.getRankFromELO(E)
+State.LocalSpoofs.SetStatsUI(Fields.RankLabel, 'Text', tostring(RankName) .. ' ' .. string.rep('I', tonumber(RankTier) or 0))
+end
+end
+end
+end
+
+function State.LocalSpoofs.ApplyGlobalLeaderboards()
+State.LocalSpoofs.DiscoverWorldLeaderboards()
+State.LocalSpoofs.LeaderboardRanks = {}
+for ListFrame in pairs(State.LocalSpoofs.LeaderboardCandidates) do
+if ListFrame and ListFrame.Parent and not State.LocalSpoofs.LeaderboardLists[ListFrame] then
+local BoardName = State.LocalSpoofs.DetectLeaderboardType(ListFrame)
+if BoardName then State.LocalSpoofs.LeaderboardLists[ListFrame] = BoardName end
+end
+end
+for ListFrame, BoardName in pairs(State.LocalSpoofs.LeaderboardLists) do
+if ListFrame and ListFrame.Parent then State.LocalSpoofs.PatchLeaderboardList(ListFrame, BoardName) end
+end
+for _, BoardName in ipairs({ 'Wins','HighestStreak','ELO' }) do
+local Rank = State.LocalSpoofs.LeaderboardRanks[BoardName]
+local Attribute = BoardName == 'HighestStreak' and 'TopHighestStreak' or ('Top' .. BoardName)
+State.LocalSpoofs.SnapshotTopAttribute(Attribute)
+if Rank then LP:SetAttribute(Attribute, Rank) end
+end
+end
+
 function State.LocalSpoofs.ApplyStatsLock()
 local W = math.max(0, math.floor(tonumber(State.LocalWins) or 0))
 local L = math.max(0, math.floor(tonumber(State.LocalLosses) or 0))
@@ -4811,6 +5152,14 @@ local WP = W + L > 0 and math.round(W / (W + L) * 100) or 0
 local SP = A > 0 and math.round(G / A * 100) or 0
 local STP = H > 0 and math.round(S / H * 100) or 0
 local Object = State.LocalSpoofs.StatsProfileFrame
+local Now = os.clock()
+if Now - (State.LocalSpoofs.LeaderboardPatchAt or 0) >= 0.8 then
+State.LocalSpoofs.LeaderboardPatchAt = Now
+pcall(State.LocalSpoofs.ApplyGlobalLeaderboards)
+pcall(State.LocalSpoofs.ApplyNativeNameTags)
+State.LocalSpoofs.ScanBannerRoot(LP.PlayerGui)
+if LP.Character then State.LocalSpoofs.ScanBannerRoot(LP.Character) end
+end
 if Object and Object.Parent then
 local Main = Object.Parent
 local Percent = Main:FindFirstChild('PercentageFrame')
@@ -4851,27 +5200,79 @@ local Streak = Main:FindFirstChild('Streak')
 local Amount = Streak and Streak:FindFirstChild('AmountLabel')
 if Record then State.LocalSpoofs.SetStatsUI(Record, 'Text', W .. ' - ' .. L) end
 if Amount then State.LocalSpoofs.SetStatsUI(Amount, 'Text', S > 0 and tostring(S) or '') end
+State.LocalSpoofs.Rankings = State.LocalSpoofs.Rankings or require(ReplicatedStorage.Util.Rankings)
+if Streak and Streak:IsA('ImageLabel') then
+local StreakImage = S > 1 and State.LocalSpoofs.Rankings.getStreakImage(S) or ''
+State.LocalSpoofs.SetStatsUI(Streak, 'Image', StreakImage or '')
+end
+local E = State.LocalELOSpoofEnabled and State.LocalELO or (LP:GetAttribute('ELO') or 0)
+local RankImage = Main:FindFirstChild('RankImage')
+if RankImage and RankImage:IsA('ImageLabel') then
+local Image = State.LocalSpoofs.OriginalRankImage and State.LocalSpoofs.OriginalRankImage(E)
+or State.LocalSpoofs.Rankings.getRankImageFromELO(E)
+State.LocalSpoofs.SetStatsUI(RankImage, 'Image', Image or '')
+end
+local RankLabel = Main:FindFirstChild('RankLabel')
+if RankLabel and RankLabel:IsA('TextLabel') then
+local RankName, RankTier = State.LocalSpoofs.Rankings.getRankFromELO(E)
+State.LocalSpoofs.SetStatsUI(RankLabel, 'Text', tostring(RankName) .. ' ' .. string.rep('I', tonumber(RankTier) or 0))
 end
 end
+end
+end
+
+function State.LocalSpoofs.IsLocalBanner(Main, Object)
+if LP.Character and Object:IsDescendantOf(LP.Character) then return true end
+if not Object:IsDescendantOf(LP.PlayerGui) then return false end
+local Root = Main
+for _ = 1, 5 do if Root.Parent then Root = Root.Parent end end
+for _, Descendant in ipairs(Root:GetDescendants()) do
+if Descendant:IsA('TextLabel') or Descendant:IsA('TextButton') then
+local Text = tostring(Descendant.Text or '')
+if Text == LP.Name or Text == LP.DisplayName or Text == ('@' .. LP.Name)
+or (State.LocalAliasEnabled and Text == tostring(State.LocalAlias)) then return true end
+end
+end
+return false
 end
 
 function State.LocalSpoofs.RegisterIntroBanner(Object)
-if not (Object and Object.Name == 'RecordLabel' and Object:IsA('TextLabel')) then return end
+if not (Object and Object.Name == 'RecordLabel' and (Object:IsA('TextLabel') or Object:IsA('TextButton'))) then return end
 local Main = Object.Parent
-if not (Main and Main:FindFirstChild('RankImage')) then return end
+if not (Main and Main:FindFirstChild('RankImage') and Main:FindFirstChild('Streak')) then return end
+if not State.LocalSpoofs.IsLocalBanner(Main, Object) then return end
 State.LocalSpoofs.StatsIntroCards[Main] = true
 State.LocalSpoofs.SetStatsUI(Object, 'Text', Object.Text)
-local Streak = Main:FindFirstChild('Streak'); local Amount = Streak and Streak:FindFirstChild('AmountLabel')
+local Streak = Main:FindFirstChild('Streak')
+local Amount = Streak and Streak:FindFirstChild('AmountLabel')
 if Amount then State.LocalSpoofs.SetStatsUI(Amount, 'Text', Amount.Text) end
+if Streak and Streak:IsA('ImageLabel') then State.LocalSpoofs.SetStatsUI(Streak, 'Image', Streak.Image) end
+local RankImage = Main:FindFirstChild('RankImage')
+if RankImage and RankImage:IsA('ImageLabel') then State.LocalSpoofs.SetStatsUI(RankImage, 'Image', RankImage.Image) end
+local RankLabel = Main:FindFirstChild('RankLabel')
+if RankLabel and RankLabel:IsA('TextLabel') then State.LocalSpoofs.SetStatsUI(RankLabel, 'Text', RankLabel.Text) end
 if State.LocalStatsSpoofEnabled then pcall(State.LocalSpoofs.ApplyStatsLock) end
 end
 
+function State.LocalSpoofs.ScanBannerRoot(Root)
+if not Root then return end
+for _, Object in ipairs(Root:GetDescendants()) do State.LocalSpoofs.RegisterIntroBanner(Object) end
+end
+
 function State.LocalSpoofs.BindIntroBanners(Character)
-if not Character then return end
-for _, Object in ipairs(Character:GetDescendants()) do State.LocalSpoofs.RegisterIntroBanner(Object) end
+if Character then
+State.LocalSpoofs.ScanBannerRoot(Character)
 GiveSignal(Character.DescendantAdded:Connect(function(Object)
 task.defer(function() State.LocalSpoofs.RegisterIntroBanner(Object) end)
 end))
+end
+if not State.LocalSpoofs.BannerGuiBound then
+State.LocalSpoofs.BannerGuiBound = true
+State.LocalSpoofs.ScanBannerRoot(LP.PlayerGui)
+GiveSignal(LP.PlayerGui.DescendantAdded:Connect(function(Object)
+task.defer(function() State.LocalSpoofs.RegisterIntroBanner(Object) end)
+end))
+end
 end
 
 function State.LocalSpoofs.RefreshFakeMatchHistory()
@@ -11731,6 +12132,11 @@ MoveScores = {},
 CurrentBallClearance = 0,
 PressureSince = 0,
 LastNecessaryReason = 'NONE',
+DefenseType = 'NONE',
+DefenseSide = '--',
+DefenseLateralSpeed = 0,
+DefenseReachDistance = math.huge,
+NearbyDefenders = 0,
 AntiReachWasEnabled = nil,
 Rotating = false,
 SpinRoot = nil,
@@ -11812,16 +12218,22 @@ if not Key then return -math.huge, 0, Hand end
 local Duration = Move.Timeout or 0.42
 local Margin = math.max(1.5, tonumber(CONFIG.AutoMixBallSafetyMargin) or 3)
 local MinimumClearance, EndClearance = math.huge, 0
-local RelativeVelocity = Threat.Root.AssemblyLinearVelocity - Root.AssemblyLinearVelocity
+local DefenderRoots = Threat.DefenderRoots and #Threat.DefenderRoots > 0 and Threat.DefenderRoots or { Threat.Root }
 local Path = State.AutoMix.GetMovePath(Name, Hand)
 for Index, Point in ipairs(Path) do
 local T, X, Z = Point[1], Point[2], Point[3]
-local PredictedDefender = Threat.Root.Position + RelativeVelocity * (T * Duration)
 local BallWorld = Root.CFrame:PointToWorldSpace(Vector3.new(X, 0, Z))
+local PointClearance = math.huge
+for _, DefenderRoot in ipairs(DefenderRoots) do
+if DefenderRoot and DefenderRoot.Parent then
+local RelativeVelocity = DefenderRoot.AssemblyLinearVelocity - Root.AssemblyLinearVelocity
+local PredictedDefender = DefenderRoot.Position + RelativeVelocity * (T * Duration)
 local Offset = Vector3.new(BallWorld.X - PredictedDefender.X, 0, BallWorld.Z - PredictedDefender.Z)
-local Clearance = Offset.Magnitude - Margin
-MinimumClearance = math.min(MinimumClearance, Clearance)
-if Index == #Path then EndClearance = Clearance end
+PointClearance = math.min(PointClearance, Offset.Magnitude - Margin)
+end
+end
+MinimumClearance = math.min(MinimumClearance, PointClearance)
+if Index == #Path then EndClearance = PointClearance end
 end
 local ExpectedHand = State.AutoMix.GetExpectedHand(Name, Hand)
 local Score = MinimumClearance * 2.5 + EndClearance * 1.15 - Duration * 0.75
@@ -11831,6 +12243,25 @@ if Threat.Level == 'EMERGENCY' then
 if Name == 'BehindLeft' or Name == 'BehindRight' then Score += 1.8 end
 if Name == 'CrossUp' then Score -= 1.2 end
 if Name == 'SwitchHandles' then Score += 0.65 end
+end
+local Defense = Threat.DefenseType
+if Defense == 'REACH' then
+if Name == 'BehindLeft' or Name == 'BehindRight' then Score += 2.0 end
+if Name == 'FakeOut' or Name == 'SwitchHandles' then Score += 1.2 end
+if Name == 'CrossUp' then Score -= 1.4 end
+elseif Defense == 'HARD CLOSE' then
+if Name == 'BehindLeft' or Name == 'BehindRight' then Score += 1.6 end
+if Name == 'FakeBehindLeft' or Name == 'FakeBehindRight' then Score += 0.8 end
+elseif Defense == 'CONTAIN MIDDLE' then
+if Name == 'FakeOut' then Score += 1.1 end
+if Name == 'CrossUp' then Score += 0.5 end
+elseif Defense == 'DOUBLE TEAM' then
+if Name == 'BehindLeft' or Name == 'BehindRight' then Score += 2.2 end
+if Name == 'CrossUp' then Score -= 1.5 end
+elseif Defense == 'CUT LEFT' then
+if ExpectedHand == 'R' then Score += 1.1 end
+elseif Defense == 'CUT RIGHT' then
+if ExpectedHand == 'L' then Score += 1.1 end
 end
 local LastUsed = State.AutoMix.MoveLastUsed[Name] or 0
 if CONFIG.AutoMixMoveVariety then Score += math.clamp((os.clock() - LastUsed) / 9, 0, 1.4) end
@@ -12133,6 +12564,73 @@ State.AutoMix.MovementUntil = os.clock() + math.max(0.08, Duration or 0.25)
 State.AutoMix.MovementStatus = Status or 'ESCAPING'
 end
 
+function State.AutoMix.GetReachDistance(Threat)
+local Character = LP.Character
+local Ball = Character and safe_find(Character, 'Basketball')
+local BallPart = Ball and (safe_find(Ball, 'Ball') or Ball.PrimaryPart or Ball:FindFirstChildWhichIsA('BasePart'))
+local DefenderCharacter = Threat and Threat.Player and Threat.Player.Character
+if not BallPart or not DefenderCharacter then return math.huge end
+local Minimum = math.huge
+for _, Name in ipairs({ 'LeftHand','RightHand','Left Arm','Right Arm','LeftLowerArm','RightLowerArm' }) do
+local Limb = safe_find(DefenderCharacter, Name)
+if Limb and Limb:IsA('BasePart') then Minimum = math.min(Minimum, (Limb.Position - BallPart.Position).Magnitude) end
+end
+return Minimum
+end
+
+function State.AutoMix.AnalyzeDefense(Root, Hand, Threat)
+if not Threat or not Threat.Root then return Threat end
+local LocalVelocity = Root.CFrame:VectorToObjectSpace(Threat.Root.AssemblyLinearVelocity - Root.AssemblyLinearVelocity)
+local Nearby = 0
+local DefenderRoots = {}
+for _, Player in ipairs(State.AutoMix.GetOpponents()) do
+if Player ~= LP and IsGuardOpponent(Player) then
+local TheirRoot = GetAutoBodyTargetRig(Player)
+if TheirRoot and (TheirRoot.Position - Root.Position).Magnitude <= 9 then
+Nearby += 1
+table.insert(DefenderRoots, TheirRoot)
+end
+end
+end
+Threat.DefenderRoots = DefenderRoots
+local ReachDistance = State.AutoMix.GetReachDistance(Threat)
+local Defense
+if Nearby >= 2 and Threat.Distance <= 8.5 then
+Defense = 'DOUBLE TEAM'
+elseif ReachDistance <= 3.8 and Threat.Distance <= 7.5 then
+Defense = 'REACH'
+elseif Threat.Closing >= 6 then
+Defense = 'HARD CLOSE'
+elseif Threat.Closing <= -2.2 then
+Defense = 'RETREAT'
+elseif math.abs(LocalVelocity.X) >= 3.5 then
+Defense = LocalVelocity.X > 0 and 'CUT RIGHT' or 'CUT LEFT'
+elseif Threat.SameSide and math.abs(Threat.Relative.X) >= 1.0 then
+Defense = 'SHADE BALL'
+elseif math.abs(Threat.Relative.X) < 1.5 then
+Defense = 'CONTAIN MIDDLE'
+else
+Defense = 'GAP'
+end
+Threat.DefenseType = Defense
+Threat.LateralSpeed = LocalVelocity.X
+Threat.ReachDistance = ReachDistance
+Threat.NearbyDefenders = Nearby
+if Defense == 'REACH' or Defense == 'DOUBLE TEAM' then
+Threat.Level = 'EMERGENCY'
+Threat.Risk += Defense == 'DOUBLE TEAM' and 0.42 or 0.32
+elseif Defense == 'HARD CLOSE' and Threat.Level == 'WATCH' then
+Threat.Level = 'PRESSURE'
+Threat.Risk += 0.18
+end
+State.AutoMix.DefenseType = Defense
+State.AutoMix.DefenseSide = Threat.Side
+State.AutoMix.DefenseLateralSpeed = LocalVelocity.X
+State.AutoMix.DefenseReachDistance = ReachDistance
+State.AutoMix.NearbyDefenders = Nearby
+return Threat
+end
+
 function State.AutoMix.ReadThreat(Root, Hand)
 local Player, TargetRoot, Distance = State.AutoMix.GetDefender(Root)
 State.AutoMix.LastDefender = Player
@@ -12142,6 +12640,11 @@ State.AutoMix.PredictedBallClearance = 0
 State.AutoMix.PredictedBallEndClearance = 0
 State.AutoMix.PredictedBallSide = Hand or '--'
 State.AutoMix.SafestMove = '--'
+State.AutoMix.DefenseType = 'NONE'
+State.AutoMix.DefenseSide = '--'
+State.AutoMix.DefenseLateralSpeed = 0
+State.AutoMix.DefenseReachDistance = math.huge
+State.AutoMix.NearbyDefenders = 0
 return nil
 end
 local Relative = Root.CFrame:PointToObjectSpace(TargetRoot.Position)
@@ -12154,8 +12657,10 @@ local Protect = math.max(5, tonumber(CONFIG.AutoMixRange) or tonumber(CONFIG.Aut
 local Risk = math.clamp((Protect - Distance) / Protect, 0, 1) + math.clamp(Closing / 14, 0, 0.7) + (SameSide and 0.20 or 0) + (math.abs(Relative.X) < 1.35 and 0.08 or 0)
 local Emergency = math.max(3.5, tonumber(CONFIG.AutoMixEmergencyDistance) or 5.2)
 local Level = (Distance <= Emergency or Closing >= 8) and 'EMERGENCY' or (Risk >= 0.48 and 'PRESSURE' or (Risk >= 0.20 and 'WATCH' or 'CLEAR'))
-State.AutoMix.RiskScore, State.AutoMix.ClosingSpeed, State.AutoMix.ThreatLevel = Risk, Closing, Level
-return { Player=Player, Root=TargetRoot, Distance=Distance, Relative=Relative, Side=Side, SameSide=SameSide, Closing=Closing, Risk=Risk, Level=Level }
+local Threat = { Player=Player, Root=TargetRoot, Distance=Distance, Relative=Relative, Side=Side, SameSide=SameSide, Closing=Closing, Risk=Risk, Level=Level }
+State.AutoMix.AnalyzeDefense(Root, Hand, Threat)
+State.AutoMix.RiskScore, State.AutoMix.ClosingSpeed, State.AutoMix.ThreatLevel = Threat.Risk, Closing, Threat.Level
+return Threat
 end
 
 function State.AutoMix.Perform(Name)
@@ -12233,9 +12738,16 @@ function State.AutoMix.GetCurrentBallClearance(Root, Hand, Threat)
 if not Threat or not Threat.Root then return math.huge end
 local Side = Hand == 'L' and -1 or 1
 local BallWorld = Root.CFrame:PointToWorldSpace(Vector3.new(Side * 1.45, 0, -1.85))
-local Offset = Vector3.new(BallWorld.X - Threat.Root.Position.X, 0, BallWorld.Z - Threat.Root.Position.Z)
 local Margin = math.max(1.5, tonumber(CONFIG.AutoMixBallSafetyMargin) or 3)
-return Offset.Magnitude - Margin
+local Clearance = math.huge
+local DefenderRoots = Threat.DefenderRoots and #Threat.DefenderRoots > 0 and Threat.DefenderRoots or { Threat.Root }
+for _, DefenderRoot in ipairs(DefenderRoots) do
+if DefenderRoot and DefenderRoot.Parent then
+local Offset = Vector3.new(BallWorld.X - DefenderRoot.Position.X, 0, BallWorld.Z - DefenderRoot.Position.Z)
+Clearance = math.min(Clearance, Offset.Magnitude - Margin)
+end
+end
+return Clearance
 end
 
 function State.AutoMix.SelectSmartMove(Root, Hand)
@@ -12251,6 +12763,15 @@ return nil
 end
 local OpenDirection = State.AutoMix.ChooseOpenDirection(Root, Threat.Root)
 State.AutoMix.CurrentBallClearance = State.AutoMix.GetCurrentBallClearance(Root, Hand, Threat)
+if Threat.DefenseType == 'RETREAT' or Threat.DefenseType == 'GAP' then
+State.AutoMix.Plan = 'READ ' .. Threat.DefenseType .. ' - HOLD'
+State.AutoMix.Status = 'DEFENSE GAVE SPACE'
+State.AutoMix.LastNecessaryReason = Threat.DefenseType
+State.AutoMix.StopMovement()
+State.AutoMix.NextAt = os.clock() + 0.16
+State.AutoMix.PressureSince = 0
+return nil
+end
 if Threat.Level == 'CLEAR' then
 State.AutoMix.Plan = 'HOLD - BALL SAFE'
 State.AutoMix.Status = 'NO ACTION NEEDED'
@@ -12264,8 +12785,8 @@ end
 -- WATCH never spends a dribble. A small blended step is enough until the
 -- defender commits and creates genuine pressure.
 if Threat.Level == 'WATCH' then
-State.AutoMix.Plan = 'POSITION ONLY'
-State.AutoMix.Status = 'WATCHING - NO MOVE'
+State.AutoMix.Plan = 'READ ' .. tostring(Threat.DefenseType) .. ' - POSITION'
+State.AutoMix.Status = 'COUNTERING DEFENSE'
 State.AutoMix.LastNecessaryReason = 'WATCH'
 State.AutoMix.SetMovement(OpenDirection, 0.16, 'SMALL CORRECTION')
 State.AutoMix.NextAt = os.clock() + 0.10
@@ -12273,7 +12794,7 @@ State.AutoMix.PressureSince = 0
 return nil
 end
 
-local ThreatKey = Threat.Level .. ':' .. Threat.Side
+local ThreatKey = Threat.Level .. ':' .. Threat.Side .. ':' .. tostring(Threat.DefenseType)
 if State.AutoMix.ThreatKey ~= ThreatKey then
 State.AutoMix.ThreatKey, State.AutoMix.ThreatSince = ThreatKey, os.clock()
 end
@@ -12330,8 +12851,8 @@ return nil
 end
 
 State.AutoMix.PressureSince = 0
-State.AutoMix.LastNecessaryReason = Threat.Level == 'EMERGENCY' and 'EMERGENCY' or 'PERSISTENT PRESSURE'
-State.AutoMix.Plan = string.format('NECESSARY: %s | GAIN %.1f', Safest, Gain)
+State.AutoMix.LastNecessaryReason = tostring(Threat.DefenseType)
+State.AutoMix.Plan = string.format('COUNTER %s: %s | GAIN %.1f', tostring(Threat.DefenseType), Safest, Gain)
 return { Safest }
 end
 
@@ -18841,6 +19362,9 @@ InterfaceConfig.ThemePreset = tostring(InterfaceConfig.ThemePreset or 'Custom')
 if InterfaceConfig.ThemePreset ~= 'Custom' and not ThemePresets[InterfaceConfig.ThemePreset] then
 InterfaceConfig.ThemePreset = 'Golden Eagle'
 end
+if InterfaceConfig.ThemePreset ~= 'Custom' and ThemePresets[InterfaceConfig.ThemePreset] then
+InterfaceConfig.Theme = DeepCopy(ThemePresets[InterfaceConfig.ThemePreset])
+end
 InterfaceConfig.Font = tostring(InterfaceConfig.Font or 'Code')
 InterfaceConfig.KeybindMenuVisible = InterfaceConfig.KeybindMenuVisible ~= false
 InterfaceConfig.KeybindMenuPosition = type(InterfaceConfig.KeybindMenuPosition) == 'table'
@@ -18871,12 +19395,6 @@ if Loaded then MergeConfig(InterfaceConfig, Loaded) end
 NormalizeInterfaceConfig()
 end
 LoadInterfaceConfig()
-InterfaceConfig.ThemePreset = 'Golden Eagle'
-InterfaceConfig.Theme = DeepCopy(InterfaceDefaults.Theme)
-InterfaceConfig.Font = 'Code'
-InterfaceConfig.Scale = 1
-InterfaceConfig.WindowTransparency = 0
-InterfaceConfig.ReducedMotion = false
 
 local function SaveInterfaceConfig()
 GlobalEnv.__GOLDEN_EAGLE_INTERFACE_CONFIG = DeepCopy(InterfaceConfig)
@@ -18983,6 +19501,15 @@ InterfaceConfig.Theme[Role] = Hex
 Theme[Role] = HexToColor(Hex, Theme[Role] or HexToColor(DefaultHex))
 end
 if State.Outline then State.Outline.Color = Theme.Accent end
+for Index = #HubUI.Accents, 1, -1 do
+local Binding = HubUI.Accents[Index]
+if Binding.Object and Binding.Object.Parent then
+pcall(function() Binding.Object[Binding.Property] = Theme.Accent end)
+else
+table.remove(HubUI.Accents, Index)
+end
+end
+if HubUI.RefreshSpecialThemeSurfaces then pcall(HubUI.RefreshSpecialThemeSurfaces) end
 local Updated = 0
 for Index = #HubUI.ThemeBindings, 1, -1 do
 local Binding = HubUI.ThemeBindings[Index]
@@ -19160,7 +19687,7 @@ local Intro = New('CanvasGroup', {
 Name = 'GoldenEagleIntro',
 AnchorPoint = Vector2.new(0.5, 0.5),
 Position = UDim2.fromScale(0.5, 0.54),
-Size = UDim2.fromOffset(430, 168),
+Size = UDim2.fromOffset(460, 188),
 BackgroundColor3 = Theme.Background,
 BorderSizePixel = 0,
 GroupTransparency = 1,
@@ -19185,29 +19712,39 @@ ColorSequenceKeypoint.new(1, Color3.fromRGB(66, 44, 0)),
 Rotation = 12,
 }, IntroStroke)
 HubUI.IntroTitle = New('TextLabel', {
-Position = UDim2.fromOffset(0, 18),
-Size = UDim2.new(1, 0, 0, 32),
+Position = UDim2.fromOffset(0, 14),
+Size = UDim2.new(1, 0, 0, 30),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = '◆  GOLDEN EAGLE HUB  ◆',
+Text = 'GOLDEN EAGLE',
 TextColor3 = Theme.Accent,
-TextSize = 22,
+TextSize = 24,
+ZIndex = 51,
+}, Intro)
+local IntroBrand = New('TextLabel', {
+Position = UDim2.fromOffset(0, 42),
+Size = UDim2.new(1, 0, 0, 15),
+BackgroundTransparency = 1,
+Font = Enum.Font.Code,
+Text = 'EST. 2026  //  PRIVATE EDITION',
+TextColor3 = Theme.Muted,
+TextSize = 9,
 ZIndex = 51,
 }, Intro)
 local IntroStatus = New('TextLabel', {
-Position = UDim2.fromOffset(0, 58),
+Position = UDim2.fromOffset(0, 65),
 Size = UDim2.new(1, 0, 0, 20),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = 'INITIALIZING COURT SYSTEMS',
+Text = 'PREPARING YOUR SESSION',
 TextColor3 = Theme.Muted,
 TextSize = 11,
 ZIndex = 51,
 }, Intro)
 local IntroTrack = New('Frame', {
 AnchorPoint = Vector2.new(0.5, 0),
-Position = UDim2.new(0.5, 0, 0, 103),
-Size = UDim2.fromOffset(350, 8),
+Position = UDim2.new(0.5, 0, 0, 104),
+Size = UDim2.fromOffset(382, 7),
 BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
 ClipsDescendants = true,
@@ -19228,8 +19765,8 @@ ColorSequenceKeypoint.new(1, Color3.fromRGB(184, 134, 11)),
 }, IntroFill)
 -- Live percentage, right-aligned to the progress track.
 HubUI.IntroPercent = New('TextLabel', {
-Position = UDim2.fromOffset(0, 113),
-Size = UDim2.new(1, -40, 0, 14),
+Position = UDim2.fromOffset(0, 115),
+Size = UDim2.new(1, -38, 0, 14),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = '0%',
@@ -19240,11 +19777,11 @@ TextTransparency = 1,
 ZIndex = 51,
 }, Intro)
 New('TextLabel', {
-Position = UDim2.fromOffset(0, 126),
+Position = UDim2.fromOffset(0, 145),
 Size = UDim2.new(1, 0, 0, 18),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = 'BLACK & GOLD PERFORMANCE SUITE',
+Text = 'RISE ABOVE',
 TextColor3 = Theme.Muted,
 TextSize = 9,
 ZIndex = 51,
@@ -19275,7 +19812,7 @@ ZIndex = 2,
 }, ScreenGui)
 local MainBorder = New('UIStroke', {
 __SkipThemeBinding = true,
-Color = Theme.Accent,
+Color = Color3.new(1, 1, 1),
 Thickness = 1,
 Transparency = 0,
 ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
@@ -19297,6 +19834,37 @@ ColorSequenceKeypoint.new(1.00, Color3.fromRGB(0, 0, 0)),
 Rotation = 0,
 Offset = Vector2.zero,
 }, MainBorder)
+function HubUI.RefreshSpecialThemeSurfaces()
+if MainBorder and MainBorder.Parent then MainBorder.Color = Color3.new(1, 1, 1) end
+if IntroStroke and IntroStroke.Parent then IntroStroke.Color = Color3.new(1, 1, 1) end
+local DarkAccent = Theme.Accent:Lerp(Theme.Background, 0.70)
+if MainFlameGradient and MainFlameGradient.Parent then
+MainFlameGradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Theme.Background),
+ColorSequenceKeypoint.new(0.25, DarkAccent),
+ColorSequenceKeypoint.new(0.42, Theme.AccentBright),
+ColorSequenceKeypoint.new(0.58, Theme.Background),
+ColorSequenceKeypoint.new(0.78, Theme.Accent),
+ColorSequenceKeypoint.new(1.00, Theme.Background),
+})
+end
+if IntroStrokeGradient and IntroStrokeGradient.Parent then
+IntroStrokeGradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, DarkAccent),
+ColorSequenceKeypoint.new(0.45, Theme.Accent),
+ColorSequenceKeypoint.new(0.70, Theme.AccentBright),
+ColorSequenceKeypoint.new(1.00, DarkAccent),
+})
+end
+if IntroFillGradient and IntroFillGradient.Parent then
+IntroFillGradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, DarkAccent),
+ColorSequenceKeypoint.new(0.55, Theme.AccentBright),
+ColorSequenceKeypoint.new(1.00, Theme.Accent),
+})
+end
+end
+HubUI.RefreshSpecialThemeSurfaces()
 HubUI.Window = Main
 local MainScale = New('UIScale', { Scale = 1 }, Main)
 
@@ -19623,7 +20191,7 @@ local TabDefinitions = {
 { Name = 'GetOpen', DisplayName = 'Get Open', Category = 'AUTOMATION', Search = 'get open auto cut destination corner wing slot top backdoor practice spacing pass lane off ball' },
 { Name = 'Guard', Category = 'AUTOMATION', Search = 'guard auto guard defense on ball off ball predictive head ride mount jump close range' },
 { Name = 'Body', Category = 'AUTOMATION', Search = 'body auto body defender back face rotate smooth tween hand switch crossover dribble opposite side space separation shoulder angle stickiness cooldown left right anti reach offense' },
-{ Name = 'AutoMix', DisplayName = 'Auto Mix', Category = 'AUTOMATION', Search = 'auto mix dribble spin threat strategic movement manual blend steal protection f g cross fake escape' },
+{ Name = 'AutoMix', DisplayName = 'Mix', Category = 'AUTOMATION', Search = 'auto mix dribble spin threat strategic movement manual blend steal protection f g cross fake escape' },
 { Name = 'Queue', Category = 'AUTOMATION', Search = 'queue auto queue court match requeue' },
 { Name = 'Movement', Category = 'PLAYER', Search = 'movement walkspeed speed infinite jump jump power noclip flight air walk' },
 { Name = 'Ball', Category = 'PLAYER', Search = 'ball reach mag magnet loose held steal pickup catch rebound basketball opponent collider collision touch force safe grace' },
@@ -19645,7 +20213,7 @@ Aim = 'AIM  /  SHOOTING', Pass = 'PASS  /  PLAYMAKING', Dunk = 'DUNK  /  FINISHI
 Offense = 'OFFENSE  /  AUTO BALL HANDLING',
 GetOpen = 'GET OPEN  /  OFF-BALL',
 Guard = 'GUARD  /  DEFENSE', Body = 'BODY  /  BALL PROTECTION',
-AutoMix = 'AUTO MIX  /  STRATEGIC HANDLES + MOVEMENT',
+AutoMix = 'MIX  /  DEFENSE-REACTIVE HANDLES',
 Queue = 'QUEUE  /  MATCHMAKING',
 Movement = 'MOVEMENT  /  LOCAL', Ball = 'BALL  /  REACH + MAG', Privacy = 'PRIVACY  /  LOCAL', Cosmetics = 'COSMETICS  /  LOCAL',
 BallStudio = 'CUSTOMIZATION  /  BALL + TRAIL + SHOT FX',
@@ -20224,7 +20792,7 @@ local GetOpenGroup = CreateGroup('Auto Get Open', Pages.GetOpen, UDim2.fromOffse
 local GuardGroup = CreateGroup('Auto Guard', Pages.Guard, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
 local BodyGroup = CreateGroup('Auto Body', Pages.Body, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local BodySettingsGroup = CreateGroup('Body Settings', Pages.Body, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
-local AutoMixControlGroup = CreateGroup('Auto Mix Controls', Pages.AutoMix, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+local AutoMixControlGroup = CreateGroup('Mix Controls', Pages.AutoMix, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local AutoMixStrategyGroup = CreateGroup('Threat Strategy', Pages.AutoMix, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local QueueGroup = CreateGroup('Auto Queue', Pages.Queue, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
 local StatusGroup = CreateGroup('Shot Status', Pages.Status, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
@@ -21520,8 +22088,8 @@ end
 HubUI.Controls.InterfaceHideTab = HiddenTabControl
 CreateActionButton(InterfaceLayoutGroup, UDim2.fromOffset(8, 310), UDim2.fromOffset(116, 23), 'RESET THEME', function()
 InterfaceConfig.ThemePreset = 'Golden Eagle'
-ThemePresetControl:Set('Linoria', false)
-HubUI.ApplyTheme(DeepCopy(InterfaceDefaults.Theme), true)
+ThemePresetControl:Set('Golden Eagle', false)
+HubUI.ApplyTheme(DeepCopy(ThemePresets['Golden Eagle']), true)
 end)
 CreateActionButton(InterfaceLayoutGroup, UDim2.fromOffset(132, 310), UDim2.fromOffset(116, 23), 'RESET LAYOUT', function()
 HubUI.ResetTabLayout()
@@ -22220,7 +22788,7 @@ end, 145
 )
 CreateSectionHeader(CosmeticSpoofsGroup, 231, 'Profile stats / history')
 HubUI.Controls.LocalStatsSpoof = CreateCheckbox(
-CosmeticSpoofsGroup, 251, 'Spoof profile stats locally', State.LocalStatsSpoofEnabled,
+CosmeticSpoofsGroup, 251, 'Spoof stats, banner & boards', State.LocalStatsSpoofEnabled,
 function(Value) State.LocalSpoofs.SetStatsSpoof(Value) end
 )
 do
@@ -22228,6 +22796,7 @@ local Fields = {
 { 'LocalWins', 'LocalWins', 'W', 8, 279 }, { 'LocalLosses', 'LocalLosses', 'L', 88, 279 },
 { 'LocalGoals', 'LocalGoals', 'G', 168, 279 }, { 'LocalAttempts', 'LocalAttempts', 'A', 8, 302 },
 { 'LocalStreak', 'LocalStreak', 'S', 88, 302 }, { 'LocalHighestStreak', 'LocalHighestStreak', 'H', 168, 302 },
+{ 'LocalDonation', 'LocalDonation', 'D', 8, 325 },
 }
 State.LocalSpoofs.StatBoxes = {}
 for _, Data in ipairs(Fields) do
@@ -22254,13 +22823,13 @@ if State.LocalStatsSpoofEnabled then pcall(State.LocalSpoofs.ApplyProfile) end
 end))
 end
 local AddFake = New('TextButton', {
-Position=UDim2.fromOffset(8,324), Size=UDim2.fromOffset(119,16), BackgroundColor3=Theme.Surface,
+Position=UDim2.fromOffset(8,348), Size=UDim2.fromOffset(119,16), BackgroundColor3=Theme.Surface,
 BorderSizePixel=0, AutoButtonColor=false, Font=Enum.Font.Code, Text='Custom fake match',
 TextColor3=Theme.Text, TextSize=9, ZIndex=6,
 }, CosmeticSpoofsGroup)
 AccentStroke(AddFake,1,0.2)
 local ClearFake = New('TextButton', {
-Position=UDim2.fromOffset(130,324), Size=UDim2.fromOffset(119,16), BackgroundColor3=Theme.Surface,
+Position=UDim2.fromOffset(130,348), Size=UDim2.fromOffset(119,16), BackgroundColor3=Theme.Surface,
 BorderSizePixel=0, AutoButtonColor=false, Font=Enum.Font.Code, Text='Clear fake matches',
 TextColor3=Theme.Text, TextSize=9, ZIndex=6,
 }, CosmeticSpoofsGroup)
@@ -23526,12 +24095,12 @@ CreateParagraph(
 BodySettingsGroup,
 UDim2.fromOffset(8, 315),
 UDim2.new(1, -16, 0, 139),
-'Defenders are scored on distance, closing speed, position and the hoop lane. Shield protects the ball, Drive Lane favors the rim, and Square Up keeps your shoulders forward. Auto Mix now has its own tab.'
+'Defenders are scored on distance, closing speed, position and the hoop lane. Shield protects the ball, Drive Lane favors the rim, and Square Up keeps your shoulders forward. Mix now has its own tab.'
 )
 
 CreateSectionHeader(AutoMixControlGroup, 11, 'Core controls')
 HubUI.Controls.AutoMix = CreateCheckbox(
-AutoMixControlGroup, 31, 'Auto Mix', State.AutoMix.Enabled,
+AutoMixControlGroup, 31, 'Enable Mix', State.AutoMix.Enabled,
 function(Value) State.AutoMix.SetEnabled(Value) end
 )
 HubUI.Controls.AutoMixMode = CreateSelector(
@@ -23633,7 +24202,7 @@ CreateParagraph(
 AutoMixStrategyGroup,
 UDim2.fromOffset(8, 367),
 UDim2.new(1, -16, 0, 104),
-'Every style is threat-gated and shift-lock aware. W/A/S/D and threat steering stay camera-relative while locked. Spin yaw is reapplied after the camera update so shift lock cannot cancel F/G rotation.'
+'Reads retreat, gap, ball-side shade, middle contain, lateral cutoff, hard close, reach attempts, and double teams. It holds against retreating defense, repositions against containment, and spends one safe counter only when pressure requires it.'
 )
 
 CreateSectionHeader(QueueGroup, 11, 'Queue controls')
@@ -24019,6 +24588,7 @@ LocalGoals = State.LocalGoals,
 LocalAttempts = State.LocalAttempts,
 LocalStreak = State.LocalStreak,
 LocalHighestStreak = State.LocalHighestStreak,
+LocalDonation = State.LocalDonation,
 },
 }
 end
@@ -24097,7 +24667,7 @@ CONFIG.LocalELO = State.LocalELO
 ELOBox.Text = tostring(State.LocalELO)
 if State.LocalELOSpoofEnabled then State.LocalSpoofs.SetELO(true, State.LocalELO, false) end
 end
-for _, Key in ipairs({ 'LocalWins', 'LocalLosses', 'LocalGoals', 'LocalAttempts', 'LocalStreak', 'LocalHighestStreak' }) do
+for _, Key in ipairs({ 'LocalWins', 'LocalLosses', 'LocalGoals', 'LocalAttempts', 'LocalStreak', 'LocalHighestStreak', 'LocalDonation' }) do
 if Data[Key] ~= nil then
 local Value = math.max(0, math.floor(tonumber(Data[Key]) or 0))
 State[Key] = Value
@@ -26670,10 +27240,13 @@ State.AutoBody.HandStatus
 )
 if AutoMixStatusText then
 AutoMixStatusText.Text = string.format(
-'STATUS %s | %s | %s\nPLAN   %s\nNEED   %s\nBALL   %s | CLEAR %.1f\nRISK   %.2f | CLOSE %.1f\nMOVE   %s | STEER %d%%',
+'STATUS %s | %s | %s\nDEFENSE %s | LAT %.1f | NEAR %d\nPLAN   %s\nNEED   %s\nBALL   %s | CLEAR %.1f\nRISK   %.2f | CLOSE %.1f\nMOVE   %s | STEER %d%%',
 State.AutoMix.Status,
 State.AutoMix.ThreatLevel or 'CLEAR',
 State.AutoMix.ShiftLockActive and 'SHIFTLOCK' or 'FREE CAM',
+State.AutoMix.DefenseType or 'NONE',
+State.AutoMix.DefenseLateralSpeed or 0,
+State.AutoMix.NearbyDefenders or 0,
 State.AutoMix.Plan or 'HOLD',
 State.AutoMix.LastNecessaryReason or 'NONE',
 State.AutoMix.PredictedBallSide or '--',
@@ -26875,7 +27448,7 @@ Intro.Visible = true
 Intro.GroupTransparency = 1
 IntroScale.Scale = 0.90
 IntroFill.Size = UDim2.fromScale(0, 1)
-IntroStatus.Text = 'INITIALIZING COURT SYSTEMS'
+IntroStatus.Text = 'PREPARING YOUR SESSION'
 IntroStatus.TextColor3 = Theme.Muted
 IntroStatus.TextTransparency = 1
 
@@ -26886,20 +27459,22 @@ HubUI.IntroScrim.BackgroundTransparency = 1
 Tween(HubUI.IntroScrim, 0.42, { BackgroundTransparency = 0.45 }, Enum.EasingStyle.Sine)
 end
 if HubUI.IntroTitle then
-HubUI.IntroTitle.Position = UDim2.fromOffset(0, 26)
+HubUI.IntroTitle.Position = UDim2.fromOffset(0, 23)
 HubUI.IntroTitle.TextTransparency = 1
-Tween(HubUI.IntroTitle, 0.46, { Position = UDim2.fromOffset(0, 18), TextTransparency = 0 }, Enum.EasingStyle.Quint)
+Tween(HubUI.IntroTitle, 0.46, { Position = UDim2.fromOffset(0, 14), TextTransparency = 0 }, Enum.EasingStyle.Quint)
 end
 Tween(Intro, 0.38, { GroupTransparency = 0 }, Enum.EasingStyle.Sine)
 Tween(IntroScale, 0.52, { Scale = 1 }, Enum.EasingStyle.Quint)
 task.wait(0.20)
+IntroBrand.TextTransparency = 1
+Tween(IntroBrand, 0.30, { TextTransparency = 0.15 }, Enum.EasingStyle.Sine)
 Tween(IntroStatus, 0.28, { TextTransparency = 0 }, Enum.EasingStyle.Sine)
 task.wait(0.20)
 
 -- Crossfade the status line so text never pops between stages.
 Tween(IntroStatus, 0.10, { TextTransparency = 1 }, Enum.EasingStyle.Sine)
 task.wait(0.10)
-IntroStatus.Text = 'LOADING INTERFACE MODULES'
+IntroStatus.Text = 'SETTING THE STAGE'
 Tween(IntroStatus, 0.16, { TextTransparency = 0 }, Enum.EasingStyle.Sine)
 if HubUI.IntroPercent then
 Tween(HubUI.IntroPercent, 0.22, { TextTransparency = 0.15 }, Enum.EasingStyle.Sine)
@@ -26910,9 +27485,13 @@ local FillTween = Tween(IntroFill, 1.10, { Size = UDim2.fromScale(1, 1) })
 -- of sync with the bar or with a reduced-motion duration.
 task.spawn(function()
 while HubUI.IntroPlaying and IntroFill.Parent and IntroFill.Size.X.Scale < 1 do
+local Progress = math.clamp(IntroFill.Size.X.Scale, 0, 1)
 if HubUI.IntroPercent then
-HubUI.IntroPercent.Text = string.format('%d%%', math.floor(IntroFill.Size.X.Scale * 100 + 0.5))
+HubUI.IntroPercent.Text = string.format('%d%%', math.floor(Progress * 100 + 0.5))
 end
+local Stage = Progress < 0.34 and 'SETTING THE STAGE'
+or (Progress < 0.68 and 'FINALIZING' or 'ALMOST READY')
+if IntroStatus.Text ~= Stage then IntroStatus.Text = Stage end
 task.wait(0.03)
 end
 if HubUI.IntroPercent then HubUI.IntroPercent.Text = '100%' end
@@ -26922,8 +27501,8 @@ if not (State.Active and ScreenGui.Parent and Intro.Parent) then return end
 
 Tween(IntroStatus, 0.10, { TextTransparency = 1 }, Enum.EasingStyle.Sine)
 task.wait(0.10)
-IntroStatus.Text = 'READY'
-IntroStatus.TextColor3 = Theme.Text
+IntroStatus.Text = 'WELCOME BACK'
+IntroStatus.TextColor3 = Theme.AccentBright
 Tween(IntroStatus, 0.18, { TextTransparency = 0 }, Enum.EasingStyle.Sine)
 task.wait(0.22)
 
