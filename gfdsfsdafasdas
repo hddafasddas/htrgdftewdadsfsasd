@@ -438,6 +438,16 @@ LocalAttempts = 0,
 LocalStreak = 0,
 LocalHighestStreak = 0,
 LocalDonation = 0,
+LocalClanSpoof = false,
+LocalClanName = '',
+LocalClanTagText = '',
+LocalClanELO = 0,
+LocalClanFunds = 0,
+LocalClanLevel = 1,
+LocalClanWins = 0,
+LocalClanLosses = 0,
+LocalAchievementSpoof = false,
+LocalAchMultiplier = 0,
 
 AutoDailySpin = false,
 AutoDailySpinRetryDelay = 60,
@@ -694,7 +704,7 @@ LastSelfPassAt = 0,
 LocalAnonymizerEnabled = CONFIG.LocalAnonymizer,
 LocalAlias = CONFIG.LocalAlias,
 LocalCosmeticSpoofEnabled = CONFIG.LocalCosmeticSpoof,
-LocalLogos = { VIP = false, Youtuber = false, Twitch = false, Booster = false, Tester = false, Staff = false },
+LocalLogos = { VIP = false, Youtuber = false, SilverYoutuber = false, GoldYoutuber = false, Twitch = false, Booster = false, Tester = false, Staff = false },
 LocalAura = CONFIG.LocalAura,
 LocalTrail = CONFIG.LocalTrail,
 LocalBall = CONFIG.LocalBall,
@@ -719,6 +729,16 @@ LocalAttempts = CONFIG.LocalAttempts,
 LocalStreak = CONFIG.LocalStreak,
 LocalHighestStreak = CONFIG.LocalHighestStreak,
 LocalDonation = CONFIG.LocalDonation,
+LocalClanSpoofEnabled = CONFIG.LocalClanSpoof,
+LocalClanName = CONFIG.LocalClanName,
+LocalClanTagText = CONFIG.LocalClanTagText,
+LocalClanELO = CONFIG.LocalClanELO,
+LocalClanFunds = CONFIG.LocalClanFunds,
+LocalClanLevel = CONFIG.LocalClanLevel,
+LocalClanWins = CONFIG.LocalClanWins,
+LocalClanLosses = CONFIG.LocalClanLosses,
+LocalAchievementSpoofEnabled = CONFIG.LocalAchievementSpoof,
+LocalAchMultiplier = CONFIG.LocalAchMultiplier,
 AutoDailySpinEnabled = CONFIG.AutoDailySpin,
 AutoServerHopEnabled = CONFIG.AutoServerHop,
 AutoStreamerModeEnabled = CONFIG.AutoStreamerMode,
@@ -3101,14 +3121,14 @@ task.wait(1)
 end
 end)
 
-local LocalCosmeticOriginals = {}
-for _, LogoName in ipairs({ 'VIP', 'Youtuber', 'Twitch', 'Booster', 'Tester', 'Staff' }) do
-LocalCosmeticOriginals[LogoName] = safe_get_attribute(LP, LogoName)
+State.Cosmetics = {}
+State.Cosmetics.Originals = {}
+for _, LogoName in ipairs({ 'VIP', 'Youtuber', 'SilverYoutuber', 'GoldYoutuber', 'Twitch', 'Booster', 'Tester', 'Staff' }) do
+State.Cosmetics.Originals[LogoName] = safe_get_attribute(LP, LogoName)
 end
 
-local CosmeticReplicator
-pcall(function() CosmeticReplicator = require(ReplicatedStorage.Util.Replicator) end)
-local LocalCosmeticRuntime = {
+pcall(function() State.Cosmetics.Replicator = require(ReplicatedStorage.Util.Replicator) end)
+State.Cosmetics.Runtime = {
 Character = nil,
 BodyAura = nil,
 LastBall = nil,
@@ -3173,7 +3193,7 @@ end
 end
 end
 
-local function ForceBodyAuraVisible(Character)
+function State.Cosmetics.ForceBodyAuraVisible(Character)
 if not Character then return end
 for _, Object in ipairs(Character:GetDescendants()) do
 if Object:GetAttribute('Takeover') or Object:GetAttribute('GoldenEagleLocalAura') then
@@ -3190,16 +3210,16 @@ end
 
 local function GetLocalBallHandle()
 local Now = os.clock()
-local Cached = LocalCosmeticRuntime.LastBall
-if Cached and Cached.Parent and Now - LocalCosmeticRuntime.LastBallResolveAt < 0.1 then
+local Cached = State.Cosmetics.Runtime.LastBall
+if Cached and Cached.Parent and Now - State.Cosmetics.Runtime.LastBallResolveAt < 0.1 then
 return Cached
 end
-LocalCosmeticRuntime.LastBallResolveAt = Now
+State.Cosmetics.Runtime.LastBallResolveAt = Now
 local Character = LP.Character
 if Character then
 for _, Ball in ipairs(CollectionService:GetTagged('BallHandle')) do
 if Ball:IsA('BasePart') and Ball:IsDescendantOf(Character) then
-LocalCosmeticRuntime.LastBall = Ball
+State.Cosmetics.Runtime.LastBall = Ball
 return Ball
 end
 end
@@ -3214,10 +3234,10 @@ Closest, ClosestDistance = Ball, Distance
 end
 end
 end
-if Closest then LocalCosmeticRuntime.LastBall = Closest; return Closest end
+if Closest then State.Cosmetics.Runtime.LastBall = Closest; return Closest end
 end
 end
-local Last = LocalCosmeticRuntime.LastBall
+local Last = State.Cosmetics.Runtime.LastBall
 return Last and Last.Parent and Last or nil
 end
 
@@ -3245,7 +3265,7 @@ end
 function State.ApplyBallCosmeticCategory(Ball, Category, Value)
 if not Ball then return false end
 Ball:SetAttribute(Category, Value)
-local Method = CosmeticReplicator and CosmeticReplicator['Replicate' .. Category]
+local Method = State.Cosmetics.Replicator and State.Cosmetics.Replicator['Replicate' .. Category]
 local Success = type(Method) == 'function' and pcall(Method, Ball, Value) or false
 if Value == nil then
 State.ClearBallCosmeticObjects(Ball, Category)
@@ -3256,21 +3276,21 @@ end
 
 local function RestoreLocalBallCosmetics()
 local Pending = false
-for Ball, Original in pairs(LocalCosmeticRuntime.BallOriginals) do
+for Ball, Original in pairs(State.Cosmetics.Runtime.BallOriginals) do
 if not (Ball and Ball.Parent) then
-LocalCosmeticRuntime.BallOriginals[Ball] = nil
+State.Cosmetics.Runtime.BallOriginals[Ball] = nil
 else
 local AuraOk = State.ApplyBallCosmeticCategory(Ball, 'Aura', Original.Aura)
 local TrailOk = State.ApplyBallCosmeticCategory(Ball, 'Trail', Original.Trail)
 local BallOk = State.ApplyBallCosmeticCategory(Ball, 'Ball', Original.Ball)
 if AuraOk and TrailOk and BallOk then
-LocalCosmeticRuntime.BallOriginals[Ball] = nil
+State.Cosmetics.Runtime.BallOriginals[Ball] = nil
 else
 Pending = true
 end
 end
 end
-LocalCosmeticRuntime.LastBall = Pending and LocalCosmeticRuntime.LastBall or nil
+State.Cosmetics.Runtime.LastBall = Pending and State.Cosmetics.Runtime.LastBall or nil
 return not Pending
 end
 
@@ -3284,13 +3304,13 @@ end
 return false
 end
 
-local function ApplyLocalCosmetics(ForceBall)
+function State.Cosmetics.ApplyLocalCosmetics(ForceBall)
 if not State.LocalCosmeticSpoofEnabled then return end
 local Now = os.clock()
 local Ball = GetLocalBallHandle()
-if Ball and CosmeticReplicator then
-if not LocalCosmeticRuntime.BallOriginals[Ball] then
-LocalCosmeticRuntime.BallOriginals[Ball] = {
+if Ball and State.Cosmetics.Replicator then
+if not State.Cosmetics.Runtime.BallOriginals[Ball] then
+State.Cosmetics.Runtime.BallOriginals[Ball] = {
 Aura = Ball:GetAttribute('Aura'),
 Trail = Ball:GetAttribute('Trail'),
 Ball = Ball:GetAttribute('Ball'),
@@ -3305,10 +3325,10 @@ tostring(State.LocalTrail),
 tostring(State.LocalBall),
 }, '\0')
 local NeedsBallApply = ForceBall == true
-or LocalCosmeticRuntime.AppliedBall ~= Ball
-or LocalCosmeticRuntime.AppliedSignature ~= Signature
-or LocalCosmeticRuntime.LastError ~= nil
-or Now - LocalCosmeticRuntime.LastBallApplyAt >= 5
+or State.Cosmetics.Runtime.AppliedBall ~= Ball
+or State.Cosmetics.Runtime.AppliedSignature ~= Signature
+or State.Cosmetics.Runtime.LastError ~= nil
+or Now - State.Cosmetics.Runtime.LastBallApplyAt >= 5
 if NeedsBallApply then
 local AuraOk, TrailOk, BallOk = true, true, true
 if Aura then
@@ -3326,10 +3346,10 @@ BallOk = State.ApplyBallCosmeticCategory(Ball, 'Ball', BallSkin)
 else
 State.BallStudio.HardUnequip(Ball, 'Ball')
 end
-LocalCosmeticRuntime.LastError = (AuraOk and TrailOk and BallOk) and nil or 'BALL COSMETIC APPLY PARTIAL'
-LocalCosmeticRuntime.AppliedBall = Ball
-LocalCosmeticRuntime.AppliedSignature = Signature
-LocalCosmeticRuntime.LastBallApplyAt = Now
+State.Cosmetics.Runtime.LastError = (AuraOk and TrailOk and BallOk) and nil or 'BALL COSMETIC APPLY PARTIAL'
+State.Cosmetics.Runtime.AppliedBall = Ball
+State.Cosmetics.Runtime.AppliedSignature = Signature
+State.Cosmetics.Runtime.LastBallApplyAt = Now
 ForceBallCosmeticsVisible(Ball)
 if CONFIG.BallStudioEnabled then pcall(State.BallStudio.Refresh) end
 end
@@ -3341,50 +3361,215 @@ local AuraFolder = ShopItems and ShopItems:FindFirstChild('Aura')
 local BodyAura = State.LocalBodyAura ~= 'None' and AuraFolder
 and AuraFolder:FindFirstChild(State.LocalBodyAura) or nil
 local BodyAuraRig = BodyAura and (BodyAura:FindFirstChild('Rig') or BodyAura)
-local BodyChanged = LocalCosmeticRuntime.Character ~= Character
-or LocalCosmeticRuntime.BodyAura ~= State.LocalBodyAura
-local BodyCheckDue = Now - LocalCosmeticRuntime.LastBodyCheckAt >= 2
+local BodyChanged = State.Cosmetics.Runtime.Character ~= Character
+or State.Cosmetics.Runtime.BodyAura ~= State.LocalBodyAura
+local BodyCheckDue = Now - State.Cosmetics.Runtime.LastBodyCheckAt >= 2
 local NeedsAura = BodyChanged
 if not NeedsAura and BodyCheckDue and Character and State.LocalBodyAura ~= 'None' then
-LocalCosmeticRuntime.LastBodyCheckAt = Now
+State.Cosmetics.Runtime.LastBodyCheckAt = Now
 NeedsAura = not HasLocalTakeover(Character)
 end
 if Character and State.LocalBodyAura == 'None' and BodyChanged then
 ClearManualBodyAura(Character)
 State.BallStudio.StripBodyAura(Character)
-LocalCosmeticRuntime.Character = Character
-LocalCosmeticRuntime.BodyAura = 'None'
+State.Cosmetics.Runtime.Character = Character
+State.Cosmetics.Runtime.BodyAura = 'None'
 elseif Character and BodyAuraRig and BodyAuraRig:IsA('Model') and NeedsAura then
 ApplyManualBodyAura(Character, BodyAuraRig)
-ForceBodyAuraVisible(Character)
-LocalCosmeticRuntime.LastBodyCheckAt = Now
-LocalCosmeticRuntime.Character = Character
-LocalCosmeticRuntime.BodyAura = State.LocalBodyAura
+State.Cosmetics.ForceBodyAuraVisible(Character)
+State.Cosmetics.Runtime.LastBodyCheckAt = Now
+State.Cosmetics.Runtime.Character = Character
+State.Cosmetics.Runtime.BodyAura = State.LocalBodyAura
 elseif Character and BodyCheckDue and State.LocalBodyAura ~= 'None' then
-ForceBodyAuraVisible(Character)
-LocalCosmeticRuntime.LastBodyCheckAt = Now
+State.Cosmetics.ForceBodyAuraVisible(Character)
+State.Cosmetics.Runtime.LastBodyCheckAt = Now
 end
 end
 
-local function SetLocalLogoSpoof(LogoName, Enabled)
+State.LogoBadges = {
+Originals = setmetatable({}, { __mode = 'k' }),
+Bound = false,
+LastApplyAt = 0,
+EquippedAsset = 'http://www.roblox.com/asset/?id=10572060873',
+-- Settings panel uses shortened frame names for some logos.
+UINames = {
+VIP = 'VIP',
+Youtuber = 'Youtube',
+SilverYoutuber = 'Silver',
+GoldYoutuber = 'Gold',
+Twitch = 'Twitch',
+Booster = 'Booster',
+Tester = 'Tester',
+Staff = 'Staff',
+},
+-- Overhead character logos live in HumanoidRootPart.CreatorTag, which is a
+-- DIFFERENT BillboardGui from NameTag. Element names confirmed from a live
+-- dump. Silver/Gold YouTube have no element of their own on the character
+-- tag, so they light the standard YouTube icon.
+CreatorTagNames = {
+VIP = 'VIP',
+Youtuber = 'Youtuber',
+SilverYoutuber = 'Youtuber',
+GoldYoutuber = 'Youtuber',
+Twitch = 'Twitch',
+Booster = 'Booster',
+Tester = 'Tester',
+Staff = 'Staff',
+},
+}
+
+function State.LogoBadges.SetUI(Object, Property, Value)
+if typeof(Object) ~= 'Instance' then return end
+local Store = State.LogoBadges.Originals[Object]
+if not Store then
+Store = {}
+State.LogoBadges.Originals[Object] = Store
+end
+if Store[Property] == nil then
+local Ok, Current = pcall(function() return Object[Property] end)
+if not Ok then return end
+Store[Property] = Current
+end
+pcall(function() Object[Property] = Value end)
+end
+
+function State.LogoBadges.RestoreUI()
+for Object, Store in pairs(State.LogoBadges.Originals) do
+for Property, Value in pairs(Store) do
+pcall(function() Object[Property] = Value end)
+end
+end
+State.LogoBadges.Originals = setmetatable({}, { __mode = 'k' })
+end
+
+function State.LogoBadges.AnyActive()
+for _, Enabled in pairs(State.LocalLogos) do
+if Enabled then return true end
+end
+return false
+end
+
+-- Playerlist badges: UI_Playerlist clones a row named after the player and
+-- drives Main.Badges[<Logo>].Visible straight off the player attribute.
+function State.LogoBadges.ApplyPlayerlist()
+local PlayerGui = LP:FindFirstChildOfClass('PlayerGui')
+if not PlayerGui then return end
+for _, Gui in ipairs(PlayerGui:GetChildren()) do
+if Gui:IsA('ScreenGui') then
+local Row = Gui:FindFirstChild(LP.Name, true)
+local Main = Row and Row:FindFirstChild('Main')
+local Badges = Main and Main:FindFirstChild('Badges')
+if Badges then
+for LogoName, Enabled in pairs(State.LocalLogos) do
+local Badge = Badges:FindFirstChild(LogoName)
+if Badge and Enabled then
+State.LogoBadges.SetUI(Badge, 'Visible', true)
+end
+end
+end
+end
+end
+end
+
+-- Settings > logo picker reads Stats value objects, so the tiles must be
+-- unhidden directly. Also flips the equipped-list labels.
+function State.LogoBadges.ApplySettingsPanel()
+local PlayerGui = LP:FindFirstChildOfClass('PlayerGui')
+local MenuUI = PlayerGui and PlayerGui:FindFirstChild('MenuUI')
+local MenuFrames = MenuUI and MenuUI:FindFirstChild('MenuFrames')
+local Settings = MenuFrames and MenuFrames:FindFirstChild('Settings')
+if not Settings then return end
+for LogoName, Enabled in pairs(State.LocalLogos) do
+if Enabled then
+local UIName = State.LogoBadges.UINames[LogoName] or LogoName
+local Tile = Settings:FindFirstChild(UIName, true)
+if Tile and (Tile:IsA('Frame') or Tile:IsA('ImageLabel') or Tile:IsA('ImageButton')) then
+State.LogoBadges.SetUI(Tile, 'Visible', true)
+local Image = Tile:FindFirstChild('ImageLabel')
+if Image then
+State.LogoBadges.SetUI(Image, 'Image', State.LogoBadges.EquippedAsset)
+end
+end
+local Label = Settings:FindFirstChild(UIName .. 'Label', true)
+if Label then
+State.LogoBadges.SetUI(Label, 'Visible', true)
+end
+end
+end
+end
+
+-- Overhead logos on the character. Forced directly because the server-side
+-- renderer only shows logos the account actually owns.
+function State.LogoBadges.ApplyCreatorTag()
+local Character = LP.Character
+local Root = Character and Character:FindFirstChild('HumanoidRootPart')
+local CreatorTag = Root and Root:FindFirstChild('CreatorTag')
+if not CreatorTag then return end
+State.LogoBadges.SetUI(CreatorTag, 'Enabled', true)
+for LogoName, Enabled in pairs(State.LocalLogos) do
+if Enabled then
+local ElementName = State.LogoBadges.CreatorTagNames[LogoName]
+local Element = ElementName and CreatorTag:FindFirstChild(ElementName)
+if Element then
+State.LogoBadges.SetUI(Element, 'Visible', true)
+end
+end
+end
+end
+
+function State.LogoBadges.Apply()
+if not State.LogoBadges.AnyActive() then return end
+for LogoName, Enabled in pairs(State.LocalLogos) do
+if Enabled and safe_get_attribute(LP, LogoName) ~= true then
+pcall(function() LP:SetAttribute(LogoName, true) end)
+end
+end
+pcall(State.LogoBadges.ApplyPlayerlist)
+pcall(State.LogoBadges.ApplySettingsPanel)
+pcall(State.LogoBadges.ApplyCreatorTag)
+end
+
+function State.LogoBadges.StartLoop()
+if State.LogoBadges.Bound then return end
+State.LogoBadges.Bound = true
+pcall(function() RunService:UnbindFromRenderStep('GoldenEagleLogoBadges') end)
+RunService:BindToRenderStep('GoldenEagleLogoBadges', Enum.RenderPriority.Last.Value + 12, WYNF_JIT(function()
+if not State.LogoBadges.AnyActive() then return end
+local Now = os.clock()
+if Now - (State.LogoBadges.LastApplyAt or 0) < 0.35 then return end
+State.LogoBadges.LastApplyAt = Now
+pcall(State.LogoBadges.Apply)
+end))
+end
+
+function State.Cosmetics.SetLocalLogoSpoof(LogoName, Enabled)
 if State.LocalLogos[LogoName] == nil then return end
 Enabled = Enabled == true
 State.LocalLogos[LogoName] = Enabled
-LP:SetAttribute(LogoName, Enabled or LocalCosmeticOriginals[LogoName])
+LP:SetAttribute(LogoName, Enabled or State.Cosmetics.Originals[LogoName])
+if Enabled then
+State.LogoBadges.StartLoop()
+pcall(State.LogoBadges.Apply)
+else
+State.LogoBadges.RestoreUI()
+if State.LogoBadges.AnyActive() then
+pcall(State.LogoBadges.Apply)
+end
+end
 end
 
-local function SetLocalCosmeticSpoof(Enabled, ShouldNotify)
+function State.Cosmetics.SetLocalCosmeticSpoof(Enabled, ShouldNotify)
 State.LocalCosmeticSpoofEnabled = Enabled == true
 CONFIG.LocalCosmeticSpoof = State.LocalCosmeticSpoofEnabled
 if State.LocalCosmeticSpoofEnabled then
-ApplyLocalCosmetics()
+State.Cosmetics.ApplyLocalCosmetics()
 else
 RestoreLocalBallCosmetics()
 if LP.Character then ClearManualBodyAura(LP.Character) end
-LocalCosmeticRuntime.Character = nil
-LocalCosmeticRuntime.BodyAura = nil
-LocalCosmeticRuntime.AppliedBall = nil
-LocalCosmeticRuntime.AppliedSignature = nil
+State.Cosmetics.Runtime.Character = nil
+State.Cosmetics.Runtime.BodyAura = nil
+State.Cosmetics.Runtime.AppliedBall = nil
+State.Cosmetics.Runtime.AppliedSignature = nil
 end
 end
 
@@ -3752,9 +3937,9 @@ end
 function State.BallStudio.RestoreGameSkin(Ball)
 if not (Ball and State.BallStudio.TakenOver[Ball]) then return end
 State.BallStudio.TakenOver[Ball] = nil
-if CosmeticReplicator and CosmeticReplicator.ReplicateBall then
+if State.Cosmetics.Replicator and State.Cosmetics.Replicator.ReplicateBall then
 pcall(function()
-CosmeticReplicator.ReplicateBall(Ball, Ball:GetAttribute('Ball') or 'Ball_Default')
+State.Cosmetics.Replicator.ReplicateBall(Ball, Ball:GetAttribute('Ball') or 'Ball_Default')
 end)
 end
 end
@@ -4299,18 +4484,18 @@ pcall(State.BallStudio.Update)
 end))
 
 GiveSignal(CollectionService:GetInstanceAddedSignal('BallHandle'):Connect(function(Ball)
-LocalCosmeticRuntime.LastBallResolveAt = 0
+State.Cosmetics.Runtime.LastBallResolveAt = 0
 if State.LocalCosmeticSpoofEnabled and Ball:IsA('BasePart') then
-task.defer(function() pcall(ApplyLocalCosmetics, true) end)
+task.defer(function() pcall(State.Cosmetics.ApplyLocalCosmetics, true) end)
 end
 end))
 pcall(function()
 local ReplicateEvent = ReplicatedStorage.Remotes.replicateEvent
 GiveSignal(ReplicateEvent.OnClientEvent:Connect(function(Ball, Category)
 if State.LocalCosmeticSpoofEnabled and Ball and Ball.Parent
-and (Ball == LocalCosmeticRuntime.LastBall or Ball:IsDescendantOf(LP.Character))
+and (Ball == State.Cosmetics.Runtime.LastBall or Ball:IsDescendantOf(LP.Character))
 and (Category == 'Aura' or Category == 'Trail' or Category == 'Ball') then
-task.defer(function() pcall(ApplyLocalCosmetics, true) end)
+task.defer(function() pcall(State.Cosmetics.ApplyLocalCosmetics, true) end)
 end
 end))
 end)
@@ -4726,6 +4911,7 @@ LeaderboardCandidates = setmetatable({}, { __mode = 'k' }),
 LeaderboardLists = setmetatable({}, { __mode = 'k' }),
 BoardRowCache = setmetatable({}, { __mode = 'k' }),
 PedestalApplied = setmetatable({}, { __mode = 'k' }),
+StatBoxPrefixes = {},
 LeaderboardRanks = {},
 OriginalTopAttributes = {},
 BannerGuiBound = false,
@@ -5221,6 +5407,174 @@ end
 end
 end
 
+function State.LocalSpoofs.FindMenuFrames()
+local Gui = LP.PlayerGui:FindFirstChild('MenuUI')
+return Gui and Gui:FindFirstChild('MenuFrames') or nil
+end
+
+function State.LocalSpoofs.GetRankings()
+State.LocalSpoofs.Rankings = State.LocalSpoofs.Rankings or require(ReplicatedStorage.Util.Rankings)
+return State.LocalSpoofs.Rankings
+end
+
+-- Native UI_Clans.client.lua writes every clan value under
+-- MenuUI.MenuFrames.Clans.PageFrames.Clan.Main, so we rewrite the same labels.
+function State.LocalSpoofs.ApplyClanSpoof()
+if not State.LocalClanSpoofEnabled then return end
+local Frames = State.LocalSpoofs.FindMenuFrames()
+local Clans = Frames and Frames:FindFirstChild('Clans')
+local Pages = Clans and Clans:FindFirstChild('PageFrames')
+local Clan = Pages and Pages:FindFirstChild('Clan')
+local Main = Clan and Clan:FindFirstChild('Main')
+if not Main then return end
+local Set = State.LocalSpoofs.SetStatsUI
+local Rankings = State.LocalSpoofs.GetRankings()
+local Name = tostring(State.LocalClanName or '')
+local Tag = tostring(State.LocalClanTagText or '')
+local Points = math.max(0, math.floor(tonumber(State.LocalClanELO) or 0))
+local Funds = math.max(0, math.floor(tonumber(State.LocalClanFunds) or 0))
+local Level = math.max(1, math.floor(tonumber(State.LocalClanLevel) or 1))
+local W = math.max(0, math.floor(tonumber(State.LocalClanWins) or 0))
+local L = math.max(0, math.floor(tonumber(State.LocalClanLosses) or 0))
+if #Name > 0 and Main:FindFirstChild('ClanName') then Set(Main.ClanName, 'Text', Name) end
+if #Tag > 0 and Main:FindFirstChild('ClanTag') then Set(Main.ClanTag, 'Text', '[' .. Tag .. ']') end
+local Frame = Main:FindFirstChild('Frame')
+local Stats = Frame and Frame:FindFirstChild('StatsFrame')
+if Stats then
+local Record = Stats:FindFirstChild('RecordFrame')
+if Record and Record:FindFirstChild('ValueLabel') then
+Set(Record.ValueLabel, 'Text', W .. ' - ' .. L)
+end
+local ELOFrame = Stats:FindFirstChild('ELOFrame')
+if ELOFrame then
+if ELOFrame:FindFirstChild('ValueLabel') then Set(ELOFrame.ValueLabel, 'Text', tostring(Points)) end
+if ELOFrame:FindFirstChild('TitleLabel') then
+local RankName, RankTier = Rankings.getRankFromELO(Points)
+Set(ELOFrame.TitleLabel, 'Text', tostring(RankName) .. ' ' .. tostring(RankTier))
+end
+end
+local FundsFrame = Stats:FindFirstChild('FundsFrame')
+if FundsFrame and FundsFrame:FindFirstChild('ValueLabel') then
+Set(FundsFrame.ValueLabel, 'Text', tostring(Funds))
+end
+local LevelFrame = Stats:FindFirstChild('LevelFrame')
+if LevelFrame and LevelFrame:FindFirstChild('ValueLabel') then
+Set(LevelFrame.ValueLabel, 'Text', 'Lvl. ' .. tostring(Level))
+end
+local Competitive = Stats:FindFirstChild('CompetitiveLabel')
+if Competitive and Competitive:FindFirstChild('ValueLabel') then
+Set(Competitive.ValueLabel, 'Text', Level >= 2 and 'Enabled' or 'Not Unlocked')
+Set(Competitive.ValueLabel, 'TextColor3', Level >= 2 and Color3.fromRGB(0, 255, 255) or Color3.fromRGB(255, 0, 0))
+end
+end
+if Main:FindFirstChild('LeagueIcon') and Main.LeagueIcon:IsA('ImageLabel') then
+Set(Main.LeagueIcon, 'Image', Rankings.getRankImageFromELO(Points) or '')
+end
+-- Our own member row shows donated coins and clan ELO; keep it consistent.
+local MembersFrame = Main:FindFirstChild('MembersFrame')
+local Scroll = MembersFrame and MembersFrame:FindFirstChild('ScrollingFrame')
+if Scroll then
+for _, Row in ipairs(Scroll:GetChildren()) do
+local BG = Row:FindFirstChild('BG')
+local Username = BG and BG:FindFirstChild('Username')
+if Username and tostring(Username.Text) == '@' .. LP.Name then
+local Info = BG:FindFirstChild('InfoFrame')
+if Info and Info:FindFirstChild('DonatedAmount') then Set(Info.DonatedAmount, 'Text', tostring(Funds)) end
+if Info and Info:FindFirstChild('ELOAmount') then Set(Info.ELOAmount, 'Text', tostring(Points)) end
+end
+end
+end
+end
+
+function State.LocalSpoofs.SetClanSpoof(Enabled)
+State.LocalClanSpoofEnabled = Enabled == true
+CONFIG.LocalClanSpoof = State.LocalClanSpoofEnabled
+pcall(function() RunService:UnbindFromRenderStep('GoldenEagleClanSpoof') end)
+if State.LocalClanSpoofEnabled then
+pcall(State.LocalSpoofs.ApplyClanSpoof)
+RunService:BindToRenderStep('GoldenEagleClanSpoof', Enum.RenderPriority.Last.Value + 11, WYNF_JIT(function()
+if State.Active and State.LocalClanSpoofEnabled then
+local Now = os.clock()
+if Now - (State.LocalSpoofs.ClanSpoofAt or 0) >= 0.3 then
+State.LocalSpoofs.ClanSpoofAt = Now
+pcall(State.LocalSpoofs.ApplyClanSpoof)
+end
+end
+end))
+else
+State.LocalSpoofs.RestoreStatsUI()
+end
+end
+
+-- Native UI_Achievements.client.lua greys locked icons to RGB(35,35,35) and
+-- writes the header count, so unlocking visually means recolouring and recounting.
+function State.LocalSpoofs.ApplyAchievementSpoof()
+if not State.LocalAchievementSpoofEnabled then return end
+local Frames = State.LocalSpoofs.FindMenuFrames()
+local Achievements = Frames and Frames:FindFirstChild('Achievements')
+if not Achievements then return end
+local Set = State.LocalSpoofs.SetStatsUI
+local White = Color3.fromRGB(255, 255, 255)
+local Frame = Achievements:FindFirstChild('Frame')
+local Scroll = Frame and Frame:FindFirstChild('ScrollingFrame')
+local Total = 0
+if Scroll then
+for _, Row in ipairs(Scroll:GetChildren()) do
+for _, Item in ipairs(Row:GetChildren()) do
+local Button = Item:FindFirstChild('button')
+local Icon = Button and Button:FindFirstChild('Icon')
+if Icon and Icon:IsA('ImageLabel') then
+Total = Total + 1
+Set(Icon, 'ImageColor3', White)
+end
+end
+end
+end
+local Top = Achievements:FindFirstChild('Top')
+if Total > 0 and Top and Top:FindFirstChild('TextLabel') then
+Set(Top.TextLabel, 'Text', 'Achievements [' .. Total .. '/' .. Total .. ']')
+end
+local Info = Achievements:FindFirstChild('InfoFrame')
+local Equip = Info and Info:FindFirstChild('EquipButton')
+local Holder = Equip and Equip:FindFirstChild('Frame')
+local Label = Holder and Holder:FindFirstChild('TextLabel')
+if Label and tostring(Label.Text) == 'LOCKED' then
+Set(Label, 'Text', 'EQUIP')
+Set(Equip, 'BackgroundColor3', Color3.fromRGB(0, 255, 0))
+end
+local Multiplier = math.max(0, tonumber(State.LocalAchMultiplier) or 0)
+local Multipliers = Achievements:FindFirstChild('MyMultipliers')
+if Multiplier > 0 and Multipliers then
+for _, Key in ipairs({ 'Luck', 'Rank', 'Cash', 'Shield' }) do
+local Node = Multipliers:FindFirstChild(Key)
+local ValueLabel = Node and Node:FindFirstChild('Multiplier')
+if ValueLabel and ValueLabel:IsA('TextLabel') then
+Set(ValueLabel, 'Text', Multiplier .. 'x')
+end
+end
+end
+end
+
+function State.LocalSpoofs.SetAchievementSpoof(Enabled)
+State.LocalAchievementSpoofEnabled = Enabled == true
+CONFIG.LocalAchievementSpoof = State.LocalAchievementSpoofEnabled
+pcall(function() RunService:UnbindFromRenderStep('GoldenEagleAchievementSpoof') end)
+if State.LocalAchievementSpoofEnabled then
+pcall(State.LocalSpoofs.ApplyAchievementSpoof)
+RunService:BindToRenderStep('GoldenEagleAchievementSpoof', Enum.RenderPriority.Last.Value + 12, WYNF_JIT(function()
+if State.Active and State.LocalAchievementSpoofEnabled then
+local Now = os.clock()
+if Now - (State.LocalSpoofs.AchievementSpoofAt or 0) >= 0.3 then
+State.LocalSpoofs.AchievementSpoofAt = Now
+pcall(State.LocalSpoofs.ApplyAchievementSpoof)
+end
+end
+end))
+else
+State.LocalSpoofs.RestoreStatsUI()
+end
+end
+
 function State.LocalSpoofs.IsLocalBanner(Main, Object)
 if LP.Character and Object:IsDescendantOf(LP.Character) then return true end
 if not Object:IsDescendantOf(LP.PlayerGui) then return false end
@@ -5573,7 +5927,7 @@ if LP.Character then State.LocalSpoofs.BindIntroBanners(LP.Character) end
 
 task.spawn(function()
 while State.Active do
-if State.LocalCosmeticSpoofEnabled then pcall(ApplyLocalCosmetics) end
+if State.LocalCosmeticSpoofEnabled then pcall(State.Cosmetics.ApplyLocalCosmetics) end
 if State.LocalRepImageSpoofEnabled or State.LocalELOSpoofEnabled or State.LocalStatsSpoofEnabled then pcall(State.LocalSpoofs.ApplyProfile) end
 if State.LocalSpoofs.HasFakeDraws then pcall(State.LocalSpoofs.PatchFakeDrawRows) end
 task.wait(1)
@@ -22814,6 +23168,7 @@ ZIndex = 6,
 }, CosmeticSpoofsGroup)
 AccentStroke(Box, 1, 0.18)
 State.LocalSpoofs.StatBoxes[Data[1]] = Box
+State.LocalSpoofs.StatBoxPrefixes[Data[1]] = Data[3]
 GiveSignal(Box.FocusLost:Connect(function()
 local Value = math.max(0, math.floor(tonumber(string.match(Box.Text, '%-?%d+')) or 0))
 State[Data[1]] = Value
@@ -22834,6 +23189,75 @@ BorderSizePixel=0, AutoButtonColor=false, Font=Enum.Font.Code, Text='Clear fake 
 TextColor3=Theme.Text, TextSize=9, ZIndex=6,
 }, CosmeticSpoofsGroup)
 AccentStroke(ClearFake,1,0.2)
+CreateSectionHeader(CosmeticSpoofsGroup, 372, 'Clan & achievements')
+HubUI.Controls.LocalClanSpoof = CreateCheckbox(
+CosmeticSpoofsGroup, 392, 'Spoof clan page locally', State.LocalClanSpoofEnabled,
+function(Value) State.LocalSpoofs.SetClanSpoof(Value) end
+)
+for _, Data in ipairs({
+{ 'LocalClanName', 'CN', 8, 415, 119 },
+{ 'LocalClanTagText', 'TAG', 130, 415, 119 },
+}) do
+local Box = New('TextBox', {
+Position = UDim2.fromOffset(Data[3], Data[4]),
+Size = UDim2.fromOffset(Data[5], 20),
+BackgroundColor3 = Theme.Surface,
+BorderSizePixel = 0,
+ClearTextOnFocus = false,
+Font = Enum.Font.Code,
+Text = Data[2] .. ': ' .. tostring(State[Data[1]] or ''),
+TextColor3 = Theme.Text,
+TextSize = 10,
+ZIndex = 6,
+}, CosmeticSpoofsGroup)
+AccentStroke(Box, 1, 0.18)
+State.LocalSpoofs.StatBoxes[Data[1]] = Box
+State.LocalSpoofs.StatBoxPrefixes[Data[1]] = Data[2]
+GiveSignal(Box.FocusLost:Connect(function()
+local Text = tostring(Box.Text or '')
+local Value = string.gsub(Text, '^' .. Data[2] .. ':%s*', '')
+Value = string.gsub(Value, '^%s+', '')
+Value = string.gsub(Value, '%s+$', '')
+State[Data[1]] = Value
+CONFIG[Data[1]] = Value
+Box.Text = Data[2] .. ': ' .. Value
+if State.LocalClanSpoofEnabled then pcall(State.LocalSpoofs.ApplyClanSpoof) end
+end))
+end
+for _, Data in ipairs({
+{ 'LocalClanELO', 'E', 8, 438 }, { 'LocalClanFunds', 'F', 88, 438 }, { 'LocalClanLevel', 'LV', 168, 438 },
+{ 'LocalClanWins', 'CW', 8, 461 }, { 'LocalClanLosses', 'CL', 88, 461 }, { 'LocalAchMultiplier', 'MX', 168, 461 },
+}) do
+local Box = New('TextBox', {
+Position = UDim2.fromOffset(Data[3], Data[4]),
+Size = UDim2.fromOffset(77, 20),
+BackgroundColor3 = Theme.Surface,
+BorderSizePixel = 0,
+ClearTextOnFocus = false,
+Font = Enum.Font.Code,
+Text = Data[2] .. ': ' .. tostring(State[Data[1]] or 0),
+TextColor3 = Theme.Text,
+TextSize = 10,
+ZIndex = 6,
+}, CosmeticSpoofsGroup)
+AccentStroke(Box, 1, 0.18)
+State.LocalSpoofs.StatBoxes[Data[1]] = Box
+State.LocalSpoofs.StatBoxPrefixes[Data[1]] = Data[2]
+GiveSignal(Box.FocusLost:Connect(function()
+local Value = math.max(0, tonumber(string.match(Box.Text, '%d+%.?%d*')) or 0)
+if Data[1] ~= 'LocalAchMultiplier' then Value = math.floor(Value) end
+if Data[1] == 'LocalClanLevel' then Value = math.max(1, Value) end
+State[Data[1]] = Value
+CONFIG[Data[1]] = Value
+Box.Text = Data[2] .. ': ' .. tostring(Value)
+if State.LocalClanSpoofEnabled then pcall(State.LocalSpoofs.ApplyClanSpoof) end
+if State.LocalAchievementSpoofEnabled then pcall(State.LocalSpoofs.ApplyAchievementSpoof) end
+end))
+end
+HubUI.Controls.LocalAchievementSpoof = CreateCheckbox(
+CosmeticSpoofsGroup, 484, 'Unlock achievements locally', State.LocalAchievementSpoofEnabled,
+function(Value) State.LocalSpoofs.SetAchievementSpoof(Value) end
+)
 local FakeModal=New('Frame',{
 AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.52),Size=UDim2.fromOffset(440,292),
 BackgroundColor3=Theme.Background,BorderSizePixel=0,Visible=false,Active=true,ZIndex=100,
@@ -23424,32 +23848,34 @@ end)
 CreateSectionHeader(CosmeticsGroup, 9, 'Master')
 HubUI.Controls.LocalCosmeticSpoof = CreateCheckbox(
 CosmeticsGroup, 29, 'Enable local cosmetics', State.LocalCosmeticSpoofEnabled,
-function(Value) SetLocalCosmeticSpoof(Value, true) end
+function(Value) State.Cosmetics.SetLocalCosmeticSpoof(Value, true) end
 )
 
 CreateSectionHeader(CosmeticsGroup, 61, 'Logos')
-HubUI.Controls.LogoVIP = CreateCheckbox(CosmeticsGroup, 81, 'VIP logo', State.LocalLogos.VIP, function(Value) SetLocalLogoSpoof('VIP', Value) end)
-HubUI.Controls.LogoYoutube = CreateCheckbox(CosmeticsGroup, 111, 'YouTube logo', State.LocalLogos.Youtuber, function(Value) SetLocalLogoSpoof('Youtuber', Value) end)
-HubUI.Controls.LogoTwitch = CreateCheckbox(CosmeticsGroup, 141, 'Twitch logo', State.LocalLogos.Twitch, function(Value) SetLocalLogoSpoof('Twitch', Value) end)
-HubUI.Controls.LogoBooster = CreateCheckbox(CosmeticsGroup, 171, 'Booster logo', State.LocalLogos.Booster, function(Value) SetLocalLogoSpoof('Booster', Value) end)
-HubUI.Controls.LogoTester = CreateCheckbox(CosmeticsGroup, 201, 'Tester logo', State.LocalLogos.Tester, function(Value) SetLocalLogoSpoof('Tester', Value) end)
-HubUI.Controls.LogoStaff = CreateCheckbox(CosmeticsGroup, 231, 'Staff logo', State.LocalLogos.Staff, function(Value) SetLocalLogoSpoof('Staff', Value) end)
+HubUI.Controls.LogoVIP = CreateCheckbox(CosmeticsGroup, 81, 'VIP logo', State.LocalLogos.VIP, function(Value) State.Cosmetics.SetLocalLogoSpoof('VIP', Value) end)
+HubUI.Controls.LogoYoutube = CreateCheckbox(CosmeticsGroup, 103, 'YouTube logo', State.LocalLogos.Youtuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('Youtuber', Value) end)
+HubUI.Controls.LogoSilverYoutube = CreateCheckbox(CosmeticsGroup, 125, 'Silver YouTube logo', State.LocalLogos.SilverYoutuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('SilverYoutuber', Value) end)
+HubUI.Controls.LogoGoldYoutube = CreateCheckbox(CosmeticsGroup, 147, 'Gold YouTube logo', State.LocalLogos.GoldYoutuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('GoldYoutuber', Value) end)
+HubUI.Controls.LogoTwitch = CreateCheckbox(CosmeticsGroup, 169, 'Twitch logo', State.LocalLogos.Twitch, function(Value) State.Cosmetics.SetLocalLogoSpoof('Twitch', Value) end)
+HubUI.Controls.LogoBooster = CreateCheckbox(CosmeticsGroup, 191, 'Booster logo', State.LocalLogos.Booster, function(Value) State.Cosmetics.SetLocalLogoSpoof('Booster', Value) end)
+HubUI.Controls.LogoTester = CreateCheckbox(CosmeticsGroup, 213, 'Tester logo', State.LocalLogos.Tester, function(Value) State.Cosmetics.SetLocalLogoSpoof('Tester', Value) end)
+HubUI.Controls.LogoStaff = CreateCheckbox(CosmeticsGroup, 235, 'Staff logo', State.LocalLogos.Staff, function(Value) State.Cosmetics.SetLocalLogoSpoof('Staff', Value) end)
 
 CreateSectionHeader(CosmeticsGroup, 263, 'Equipped appearance')
 HubUI.Controls.LocalAura = CreateDropdown(CosmeticsGroup, 283, 'Ball aura', AuraOptions, State.LocalAura, function(Value)
 State.LocalAura = Value; CONFIG.LocalAura = Value
 if Value == 'None' then State.BallStudio.HardUnequip(GetLocalBallHandle(), 'Aura') end
-ApplyLocalCosmetics()
+State.Cosmetics.ApplyLocalCosmetics()
 end, 125)
 HubUI.Controls.LocalTrail = CreateDropdown(CosmeticsGroup, 311, 'Ball trail', TrailOptions, State.LocalTrail, function(Value)
 State.LocalTrail = Value; CONFIG.LocalTrail = Value
 if Value == 'None' then State.BallStudio.HardUnequip(GetLocalBallHandle(), 'Trail') end
-ApplyLocalCosmetics()
+State.Cosmetics.ApplyLocalCosmetics()
 end, 125)
 HubUI.Controls.LocalBall = CreateDropdown(CosmeticsGroup, 339, 'Ball skin', BallOptions, State.LocalBall, function(Value)
 State.LocalBall = Value; CONFIG.LocalBall = Value
 if Value == 'None' then State.BallStudio.HardUnequip(GetLocalBallHandle(), 'Ball') end
-ApplyLocalCosmetics()
+State.Cosmetics.ApplyLocalCosmetics()
 end, 125)
 HubUI.Controls.LocalCourtSkin = CreateDropdown(
 CosmeticsGroup, 395, 'Court skin',
@@ -23513,8 +23939,8 @@ end, 130
 HubUI.Controls.LocalBodyAura = CreateDropdown(CosmeticsGroup, 367, 'Body aura', BodyAuraOptions, State.LocalBodyAura, function(Value)
 State.LocalBodyAura = Value; CONFIG.LocalBodyAura = Value
 if Value == 'None' then State.BallStudio.StripBodyAura(LP.Character) end
-LocalCosmeticRuntime.Character = nil
-ApplyLocalCosmetics()
+State.Cosmetics.Runtime.Character = nil
+State.Cosmetics.ApplyLocalCosmetics()
 end, 125)
 
 CreateSectionHeader(LeftGroup, 9, 'Core')
@@ -24589,6 +25015,14 @@ LocalAttempts = State.LocalAttempts,
 LocalStreak = State.LocalStreak,
 LocalHighestStreak = State.LocalHighestStreak,
 LocalDonation = State.LocalDonation,
+LocalClanName = State.LocalClanName,
+LocalClanTagText = State.LocalClanTagText,
+LocalClanELO = State.LocalClanELO,
+LocalClanFunds = State.LocalClanFunds,
+LocalClanLevel = State.LocalClanLevel,
+LocalClanWins = State.LocalClanWins,
+LocalClanLosses = State.LocalClanLosses,
+LocalAchMultiplier = State.LocalAchMultiplier,
 },
 }
 end
@@ -24676,7 +25110,31 @@ local Box = State.LocalSpoofs.StatBoxes and State.LocalSpoofs.StatBoxes[Key]
 if Box then Box.Text = string.sub(Key, 6, 6) .. ': ' .. tostring(Value) end
 end
 end
+for _, Key in ipairs({ 'LocalClanELO', 'LocalClanFunds', 'LocalClanLevel', 'LocalClanWins', 'LocalClanLosses', 'LocalAchMultiplier' }) do
+if Data[Key] ~= nil then
+local Value = math.max(0, tonumber(Data[Key]) or 0)
+if Key ~= 'LocalAchMultiplier' then Value = math.floor(Value) end
+if Key == 'LocalClanLevel' then Value = math.max(1, Value) end
+State[Key] = Value
+CONFIG[Key] = Value
+local Box = State.LocalSpoofs.StatBoxes and State.LocalSpoofs.StatBoxes[Key]
+local Prefix = State.LocalSpoofs.StatBoxPrefixes and State.LocalSpoofs.StatBoxPrefixes[Key]
+if Box and Prefix then Box.Text = Prefix .. ': ' .. tostring(Value) end
+end
+end
+for _, Key in ipairs({ 'LocalClanName', 'LocalClanTagText' }) do
+if Data[Key] ~= nil then
+local Value = tostring(Data[Key])
+State[Key] = Value
+CONFIG[Key] = Value
+local Box = State.LocalSpoofs.StatBoxes and State.LocalSpoofs.StatBoxes[Key]
+local Prefix = State.LocalSpoofs.StatBoxPrefixes and State.LocalSpoofs.StatBoxPrefixes[Key]
+if Box and Prefix then Box.Text = Prefix .. ': ' .. Value end
+end
+end
 if State.LocalStatsSpoofEnabled then pcall(State.LocalSpoofs.ApplyProfile) end
+if State.LocalClanSpoofEnabled then pcall(State.LocalSpoofs.ApplyClanSpoof) end
+if State.LocalAchievementSpoofEnabled then pcall(State.LocalSpoofs.ApplyAchievementSpoof) end
 end
 
 local function ApplyProfile(Profile)
@@ -26540,10 +26998,14 @@ CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.LocalRepImageSpoof, State.LocalRepImageSpoofEnabled },
 { HubUI.Controls.LocalGoalEffectSpoof, State.LocalGoalEffectSpoofEnabled },
 { HubUI.Controls.LocalStatsSpoof, State.LocalStatsSpoofEnabled },
+{ HubUI.Controls.LocalClanSpoof, State.LocalClanSpoofEnabled },
+{ HubUI.Controls.LocalAchievementSpoof, State.LocalAchievementSpoofEnabled },
 { HubUI.Controls.LocalCosmeticSpoof, State.LocalCosmeticSpoofEnabled },
 { HubUI.Controls.LocalCourtSkinSpoof, State.LocalCourtSkinSpoofEnabled },
 { HubUI.Controls.LogoVIP, State.LocalLogos.VIP },
 { HubUI.Controls.LogoYoutube, State.LocalLogos.Youtuber },
+{ HubUI.Controls.LogoSilverYoutube, State.LocalLogos.SilverYoutuber },
+{ HubUI.Controls.LogoGoldYoutube, State.LocalLogos.GoldYoutuber },
 { HubUI.Controls.LogoTwitch, State.LocalLogos.Twitch },
 { HubUI.Controls.LogoBooster, State.LocalLogos.Booster },
 { HubUI.Controls.LogoTester, State.LocalLogos.Tester },
@@ -28416,7 +28878,8 @@ pcall(function() State.BallAssist.SetTipOff(false) end)
 pcall(function() State.Movement.SetBodyColliders(false) end)
 table.clear(State.BallAssist.Candidates)
 table.clear(State.BallAssist.LastTouchAt)
-for LogoName, OriginalValue in pairs(LocalCosmeticOriginals) do
+pcall(function() RunService:UnbindFromRenderStep('GoldenEagleLogoBadges') end)
+for LogoName, OriginalValue in pairs(State.Cosmetics.Originals) do
 pcall(function() safe_set_attribute(LP, LogoName, OriginalValue) end)
 end
 State.Enabled = false
