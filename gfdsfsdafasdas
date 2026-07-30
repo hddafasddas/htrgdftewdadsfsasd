@@ -419,6 +419,10 @@ LocalClanTagSpoof = false,
 LocalClanTag = 'GEH',
 LocalChatTagStyle = 'Off',
 LocalChatTagStyles = '',
+LocalChatTagColorMode = 'Gradient',
+LocalChatTagPrimaryColor = '#FF3BD5',
+LocalChatTagSecondaryColor = '#35D9FF',
+LocalChatTagGradientSpeed = 0.65,
 LocalGoalEffectSpoof = false,
 LocalGoalEffect = 'Effect_Default',
 LocalELOSpoof = false,
@@ -426,6 +430,12 @@ LocalELO = 0,
 LocalRepImageSpoof = false,
 LocalRepImage = 'Rookie 1',
 LocalStatsSpoof = false,
+-- Leaderboard appearance: use any #RRGGBB values. Modes: Solid, Gradient,
+-- or Animated Gradient. Animated Gradient scrolls from primary to secondary.
+LeaderboardColorMode = 'Animated Gradient',
+LeaderboardPrimaryColor = '#FF3BD5',
+LeaderboardSecondaryColor = '#35D9FF',
+LeaderboardGradientSpeed = 0.65,
 LocalWins = 0,
 LocalLosses = 0,
 LocalGoals = 0,
@@ -607,21 +617,25 @@ end
 
 local safe_get_attribute
 safe_get_attribute = WYNF_INLINE(function(instance, attribute)
+if instance == nil then return nil end
 return cloneref(instance):GetAttribute(attribute)
 end)
 
 local safe_set_attribute
 safe_set_attribute = WYNF_INLINE(function(instance, attribute, value)
+if instance == nil then return nil end
 return cloneref(instance):SetAttribute(attribute, value)
 end)
 
 local safe_find
 safe_find = WYNF_INLINE(function(parent, name)
+if parent == nil then return nil end
 return cloneref(parent):FindFirstChild(name)
 end)
 
 local safe_is_a
 safe_is_a = WYNF_INLINE(function(instance, className)
+if instance == nil then return false end
 return cloneref(instance):IsA(className)
 end)
 
@@ -3843,6 +3857,10 @@ local Root = LP.Character and LP.Character:FindFirstChild('HumanoidRootPart')
 return Root and (Part.Position - Root.Position).Magnitude <= 24 or false
 end
 
+-- Prevent the color watcher from scheduling itself when this script writes
+-- the same property back to the chosen perfect-shot style.
+State.PerfectShotStyle.Applying = State.PerfectShotStyle.Applying or setmetatable({}, { __mode = 'k' })
+
 function State.PerfectShotStyle.ApplyObject(Object)
 if os.clock() > State.PerfectShotStyle.ActiveUntil then return end
 if not (Object and Object.Parent and State.PerfectShotStyle.IsNear(Object)) then return end
@@ -3856,14 +3874,20 @@ State.PerfectShotStyle.Objects[Object] = true
 if not IsHighlight and not State.PerfectShotStyle.ColorWatches[Object] then
 pcall(function()
 State.PerfectShotStyle.ColorWatches[Object] = Object:GetPropertyChangedSignal('Color'):Connect(function()
-if os.clock() <= State.PerfectShotStyle.ActiveUntil then
-task.defer(function() pcall(State.PerfectShotStyle.ApplyObject, Object) end)
+if os.clock() <= State.PerfectShotStyle.ActiveUntil and not State.PerfectShotStyle.Applying[Object] then
+State.PerfectShotStyle.Applying[Object] = true
+task.defer(function()
+pcall(State.PerfectShotStyle.ApplyObject, Object)
+-- Keep the guard through the property's signal dispatch, then release it.
+task.defer(function() State.PerfectShotStyle.Applying[Object] = nil end)
+end)
 end
 end)
 end)
 end
 local Sequence = State.PerfectShotStyle.Sequence()
 local Color = State.PerfectShotStyle.Color()
+State.PerfectShotStyle.Applying[Object] = true
 pcall(function()
 if IsSequence then
 if Object.Color ~= Sequence then Object.Color = Sequence end
@@ -3874,6 +3898,7 @@ if Object.FillColor ~= Color then Object.FillColor = Color end
 if Object.OutlineColor ~= Color then Object.OutlineColor = Color end
 end
 end)
+task.defer(function() State.PerfectShotStyle.Applying[Object] = nil end)
 end
 
 function State.PerfectShotStyle.ApplyEffects()
@@ -4872,60 +4897,216 @@ function State.LocalCosmeticExtras.BuildChatTagMarkup(Style)
 if Style == 'Custom tag' or Style == 'Clan' then
 local Tag = State.LocalCosmeticExtras.SanitizeClanTag(State.LocalClanTag)
 if Tag == '' then return '' end
-local Color = safe_get_attribute(LP, 'ClanColor') or Color3.fromRGB(255, 190, 60)
-return string.format("<font color='rgb(%d,%d,%d)'><b>%s</b></font> ",
-math.round(Color.R * 255), math.round(Color.G * 255),
-math.round(Color.B * 255), Tag)
+local Primary = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LocalChatTagPrimaryColor, Color3.fromRGB(255, 59, 213))
+local Secondary = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LocalChatTagSecondaryColor, Color3.fromRGB(53, 217, 255))
+local Mode = tostring(CONFIG.LocalChatTagColorMode or 'Solid')
+local Speed = math.clamp(tonumber(CONFIG.LocalChatTagGradientSpeed) or 0.65, 0.05, 5)
+local Characters = '[' .. Tag .. ']'
+local Parts = {}
+for Index = 1, #Characters do
+local T = #Characters <= 1 and 0 or (Index - 1) / (#Characters - 1)
+if Mode == 'Animated Gradient' then T = (T + os.clock() * Speed * 0.18) % 1 end
+local Color = Mode == 'Solid' and Primary or Primary:Lerp(Secondary, T)
+table.insert(Parts, string.format("<font color='rgb(%d,%d,%d)'><b>%s</b></font>",
+math.round(Color.R * 255), math.round(Color.G * 255), math.round(Color.B * 255), Characters:sub(Index, Index)))
+end
+return table.concat(Parts) .. ' '
 end
 return State.LocalCosmeticExtras.ChatTagMarkup[Style] or ''
+end
+
+-- Decorates the exact TextChatMessageProperties object returned by Client_Chat.
+-- Kept separate so it can be used both by the callback wrapper and a function hook.
+function State.LocalCosmeticExtras.DecorateChatMessage(Message, Properties)
+local Extras = State.LocalCosmeticExtras
+if not Extras.IsChatTagStyleActive('Custom tag') then return Properties end
+local Source = Message and Message.TextSource
+if not Source or Source.UserId ~= LP.UserId then return Properties end
+local Extra = ''
+for _, Style in ipairs(State.LocalChatTagStyles or {}) do
+Extra = Extra .. Extras.BuildChatTagMarkup(Style)
+end
+if Extra == '' then return Properties end
+Properties = Properties or Instance.new('TextChatMessageProperties')
+if Properties.Text == nil or Properties.Text == '' then Properties.Text = Message.Text or '' end
+local Name = LP:GetAttribute('DisguiseName') or LP.Name
+local NameColor = LP:GetAttribute('NameColor') or Color3.fromRGB(200, 200, 200)
+Properties.PrefixText = string.format("%s<b><font color='rgb(%d,%d,%d)'>%s:</font></b>",
+Extra, math.round(NameColor.R * 255), math.round(NameColor.G * 255),
+math.round(NameColor.B * 255), Name)
+return Properties
+end
+
+-- Post-processes the rendered chat window itself. Hoopz's Client_Chat keeps
+-- reclaiming OnIncomingMessage, so the reliable layer is the ExperienceChat
+-- GUI it ultimately renders into: rewrite our message labels in place.
+function State.LocalCosmeticExtras.GetChatRoot()
+local Root
+if type(gethui) == 'function' then
+local Ok, Hui = pcall(gethui)
+if Ok and Hui then Root = Hui:FindFirstChild('ExperienceChat') end
+end
+if not Root then
+local Ok, CoreGui = pcall(function() return game:GetService('CoreGui') end)
+if Ok and CoreGui then Root = CoreGui:FindFirstChild('ExperienceChat') end
+end
+return Root
+end
+
+function State.LocalCosmeticExtras.PatchChatWindow()
+local Extras = State.LocalCosmeticExtras
+if not Extras.IsChatTagStyleActive('Custom tag') then return end
+local Root = Extras.GetChatRoot()
+if not Root then return end
+local Tag = Extras.SanitizeClanTag(State.LocalClanTag)
+local TagMarkup = Extras.BuildChatTagMarkup('Custom tag')
+if Tag == '' or TagMarkup == '' then return end
+local Name = LP.Name
+local NameColon = Name .. ':'
+local Animated = tostring(CONFIG.LocalChatTagColorMode or 'Solid') == 'Animated Gradient'
+local NameColor = LP:GetAttribute('NameColor') or Color3.fromRGB(200, 200, 200)
+local NameMarkup = string.format("<b><font color='rgb(%d,%d,%d)'>%s:</font></b>",
+math.round(NameColor.R * 255), math.round(NameColor.G * 255),
+math.round(NameColor.B * 255), Name)
+for _, Obj in ipairs(Root:GetDescendants()) do
+if (Obj:IsA('TextLabel') or Obj:IsA('TextButton')) and Obj.RichText then
+local Text = Obj.Text
+local Styled = Obj:GetAttribute('GoldenEagleChatStyled') == true
+if type(Text) == 'string' and Text:find(NameColon, 1, true)
+and (Styled or Text:find('>' .. Tag .. '<', 1, true)) then
+if not Styled or Animated then
+local NamePos = Text:find(NameColon, 1, true)
+local PrefixEnd = Text:find('</font></b>', NamePos, true)
+if PrefixEnd then
+local Suffix = Text:sub(PrefixEnd + 11)
+Obj.Text = TagMarkup .. NameMarkup .. Suffix
+Obj:SetAttribute('GoldenEagleChatStyled', true)
+end
+end
+end
+end
+end
+end
+
+-- OnIncomingMessage is write-only in this executor. Set a self-contained
+-- callback instead of reading/chaining the game's callback. RichText is parsed
+-- correctly through TextChatMessageProperties (unlike direct GUI label edits).
+-- Creates real TextLabels over the local tag. Unlike RichText, these labels
+-- can be recolored after a message has already been sent.
+function State.LocalCosmeticExtras.InstallChatTagAnimation()
+local Extras = State.LocalCosmeticExtras
+if Extras.ChatTagAnimationInstalled then return end
+Extras.ChatTagAnimationInstalled = true
+local RunService = game:GetService('RunService')
+local TextService = game:GetService('TextService')
+local function Attach(Label, Tag)
+local Overlay = Label:FindFirstChild('GoldenEagleAnimatedChatTag')
+if Overlay then return Overlay end
+Overlay = Instance.new('Frame')
+Overlay.Name = 'GoldenEagleAnimatedChatTag'
+Overlay.BackgroundTransparency = 1
+Overlay.BorderSizePixel = 0
+Overlay.Size = UDim2.new(1, 0, 1, 0)
+Overlay.Position = UDim2.new(0, 0, 0, 0)
+Overlay.ZIndex = Label.ZIndex + 2
+Overlay.Parent = Label
+local X = 0
+for Index = 1, #Tag do
+local Letter = Instance.new('TextLabel')
+Letter.Name = 'Letter' .. Index
+Letter.BackgroundTransparency = 1
+Letter.BorderSizePixel = 0
+Letter.RichText = false
+Letter.Font = Label.Font
+Letter.TextSize = Label.TextSize
+Letter.TextStrokeTransparency = Label.TextStrokeTransparency
+Letter.TextStrokeColor3 = Label.TextStrokeColor3
+Letter.TextTransparency = Label.TextTransparency
+Letter.TextYAlignment = Label.TextYAlignment
+Letter.TextXAlignment = Enum.TextXAlignment.Left
+Letter.Text = Tag:sub(Index, Index)
+local Width = TextService:GetTextSize(Letter.Text, Label.TextSize, Label.Font, Vector2.new(1000, Label.AbsoluteSize.Y)).X
+Letter.Size = UDim2.new(0, Width + 1, 1, 0)
+Letter.Position = UDim2.new(0, X, 0, 0)
+Letter.ZIndex = Overlay.ZIndex + 1
+Letter.Parent = Overlay
+X = X + Width
+end
+return Overlay
+end
+RunService.RenderStepped:Connect(function()
+if not Extras.IsChatTagStyleActive('Custom tag') then return end
+local Root = Extras.GetChatRoot()
+if not Root then return end
+local Tag = Extras.SanitizeClanTag(State.LocalClanTag)
+if Tag == '' then return end
+local Name = (LP:GetAttribute('DisguiseName') or LP.Name) .. ':'
+local Primary = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LocalChatTagPrimaryColor, Color3.fromRGB(255, 80, 220))
+local Secondary = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LocalChatTagSecondaryColor, Color3.fromRGB(55, 220, 255))
+local Mode = tostring(CONFIG.LocalChatTagColorMode or 'Solid')
+local Speed = math.max(0.05, tonumber(CONFIG.LocalChatTagGradientSpeed) or 0.65)
+for _, Label in ipairs(Root:GetDescendants()) do
+if (Label:IsA('TextLabel') or Label:IsA('TextButton')) then
+local Text = Label.Text
+if type(Text) == 'string' and Text:find(Tag .. Name, 1, true) then
+local Overlay = Attach(Label, Tag)
+for Index = 1, #Tag do
+local Letter = Overlay:FindFirstChild('Letter' .. Index)
+if Letter then
+local Phase = #Tag <= 1 and 0 or (Index - 1) / (#Tag - 1)
+if Mode == 'Animated Gradient' then
+local Cycle = (Phase + os.clock() * Speed) % 2
+Phase = Cycle <= 1 and Cycle or 2 - Cycle
+end
+Letter.TextColor3 = Mode == 'Solid' and Primary or Primary:Lerp(Secondary, Phase)
+end
+end
+end
+end
+end
+end)
 end
 
 function State.LocalCosmeticExtras.InstallChatTagHook()
 local Extras = State.LocalCosmeticExtras
 if Extras.ChatTagHookInstalled then return end
-local TextChatService = game:GetService('TextChatService')
-local Original = TextChatService.OnIncomingMessage
-Extras.ChatTagHookOriginal = Original
 Extras.ChatTagHookInstalled = true
-TextChatService.OnIncomingMessage = function(Message)
-local Properties
-if Original then
-local Ok, Result = pcall(Original, Message)
-if Ok then Properties = Result end
-end
-pcall(function()
-local Styles = State.LocalChatTagStyles or {}
-if #Styles < 2 then return end
+Extras.ChatTagHook = function(Message)
+if not Extras.IsChatTagStyleActive('Custom tag') then return nil end
 local Source = Message and Message.TextSource
-if not Source or Source.UserId ~= LP.UserId then return end
+if not Source or Source.UserId ~= LP.UserId then return nil end
 local Extra = ''
-for Index, Style in ipairs(Styles) do
-if Index < #Styles then
+for _, Style in ipairs(State.LocalChatTagStyles or {}) do
 Extra = Extra .. Extras.BuildChatTagMarkup(Style)
 end
-end
-if Extra == '' then return end
-if not Properties then
-Properties = Instance.new('TextChatMessageProperties')
-Properties.PrefixText = Message.PrefixText or ''
+if Extra == '' then return nil end
+local Properties = Instance.new('TextChatMessageProperties')
+local Name = LP:GetAttribute('DisguiseName') or LP.Name
+local NameColor = LP:GetAttribute('NameColor') or Color3.fromRGB(200, 200, 200)
+Properties.PrefixText = string.format("%s<b><font color='rgb(%d,%d,%d)'>%s:</font></b>",
+Extra, math.round(NameColor.R * 255), math.round(NameColor.G * 255),
+math.round(NameColor.B * 255), Name)
 Properties.Text = Message.Text or ''
-end
-local Prefix = Properties.PrefixText
-if type(Prefix) == 'string' and Prefix ~= '' and Prefix ~= ' ' then
-Properties.PrefixText = Extra .. Prefix
-end
-end)
 return Properties
 end
+task.spawn(function()
+local TextChatService = game:GetService('TextChatService')
+while Extras.ChatTagHookInstalled and Extras.IsChatTagStyleActive('Custom tag') do
+-- Setter only: never read this write-only callback property.
+pcall(function() TextChatService.OnIncomingMessage = Extras.ChatTagHook end)
+task.wait(0.2)
+end
+end)
 end
 
 function State.LocalCosmeticExtras.RestoreChatTagHook()
 local Extras = State.LocalCosmeticExtras
-if not Extras.ChatTagHookInstalled then return end
-pcall(function()
-game:GetService('TextChatService').OnIncomingMessage = Extras.ChatTagHookOriginal
-end)
 Extras.ChatTagHookInstalled = false
+Extras.ChatTagHookWatch = false
+Extras.ChatTagHook = nil
+Extras.ChatTagHookOriginal = nil
+Extras.ChatTagFunctionTarget = nil
+Extras.ChatTagFunctionOriginal = nil
 end
 
 function State.LocalCosmeticExtras.ApplyClanTag()
@@ -4937,18 +5118,30 @@ CONFIG.LocalChatTagStyle = State.LocalChatTagStyle
 CONFIG.LocalChatTagStyles = Extras.EncodeChatTagStyles()
 local Attribute = Extras.ResolveChatTagStyle(Primary)
 if Attribute then
-if Extras.IsChatTagStyleActive('Custom tag') then
+local HasCustomTag = Extras.IsChatTagStyleActive('Custom tag')
+if HasCustomTag then
 safe_set_attribute(LP, 'ClanTag', State.LocalClanTag)
-if not safe_get_attribute(LP, 'ClanColor') then
-safe_set_attribute(LP, 'ClanColor', Color3.fromRGB(255, 190, 60))
-end
-end
+local FallbackColor = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LocalChatTagPrimaryColor, Color3.fromRGB(255, 190, 60))
+safe_set_attribute(LP, 'ClanColor', FallbackColor)
+-- Keep the native Clan tag enabled as a solid-color fallback. Our hook then
+-- replaces that prefix locally with the configured gradient.
+safe_set_attribute(LP, 'ChatTag', 'Clan')
+Extras.InstallChatTagHook()
+Extras.InstallChatTagAnimation()
+-- Never rewrite ExperienceChat labels directly: this game's rendered labels
+-- have RichText disabled, so direct markup would be shown literally.
+Extras.ChatTagGuiWatch = false
+else
 safe_set_attribute(LP, 'ChatTag', Attribute)
-if #Styles > 1 then Extras.InstallChatTagHook() end
+if #Styles > 1 then Extras.InstallChatTagHook() else Extras.RestoreChatTagHook() end
+end
 else
 safe_set_attribute(LP, 'ClanTag', Extras.OriginalClanTag)
 safe_set_attribute(LP, 'ClanColor', Extras.OriginalClanColor)
 safe_set_attribute(LP, 'ChatTag', Extras.OriginalChatTag)
+Extras.ChatTagGuiWatch = false
+Extras.ChatTagAnimationInstalled = false
+Extras.RestoreChatTagHook()
 end
 end
 
@@ -5053,22 +5246,13 @@ CONFIG.LocalClanTag = State.LocalClanTag
 if not table.find(State.LocalCosmeticExtras.ChatTagStyles, State.LocalChatTagStyle) then
 State.LocalChatTagStyle = 'Off'
 end
-if State.LocalChatTagStyle == 'Off' and CONFIG.LocalClanTagSpoof == true then
-State.LocalChatTagStyle = 'Custom tag'
-end
-State.LocalChatTagStyles = State.LocalCosmeticExtras.DecodeChatTagStyles(
-CONFIG.LocalChatTagStyles)
-if #State.LocalChatTagStyles == 0 and State.LocalChatTagStyle ~= 'Off' then
-State.LocalChatTagStyles = { State.LocalChatTagStyle }
-end
-State.LocalChatTagStyle = State.LocalChatTagStyles[#State.LocalChatTagStyles] or 'Off'
-CONFIG.LocalChatTagStyle = State.LocalChatTagStyle
-CONFIG.LocalChatTagStyles = State.LocalCosmeticExtras.EncodeChatTagStyles()
-State.LocalClanTagSpoofEnabled = #State.LocalChatTagStyles > 0
-CONFIG.LocalClanTagSpoof = State.LocalClanTagSpoofEnabled
-if State.LocalClanTagSpoofEnabled then
-task.spawn(function() pcall(State.LocalCosmeticExtras.ApplyClanTag) end)
-end
+-- Custom chat-tag spoofing has been removed. Clear any saved custom state.
+State.LocalChatTagStyle = 'Off'
+State.LocalChatTagStyles = {}
+CONFIG.LocalChatTagStyle = 'Off'
+CONFIG.LocalChatTagStyles = ''
+State.LocalClanTagSpoofEnabled = false
+CONFIG.LocalClanTagSpoof = false
 if not table.find(BodyAuraOptions, State.LocalBodyAura) then
 State.LocalBodyAura = BodyAuraOptions[1]
 CONFIG.LocalBodyAura = State.LocalBodyAura
@@ -5110,6 +5294,8 @@ BoardRowCache = setmetatable({}, { __mode = 'k' }),
 PedestalApplied = setmetatable({}, { __mode = 'k' }),
 StatBoxPrefixes = {},
 LeaderboardRanks = {},
+LeaderboardGradients = setmetatable({}, { __mode = 'k' }),
+LeaderboardStyledLabels = setmetatable({}, { __mode = 'k' }),
 OriginalTopAttributes = {},
 BannerGuiBound = false,
 }
@@ -5177,6 +5363,11 @@ for Object in pairs(State.LocalSpoofs.LeaderboardClones) do
 if Object and Object.Parent then pcall(function() Object:Destroy() end) end
 end
 table.clear(State.LocalSpoofs.LeaderboardClones)
+for Gradient in pairs(State.LocalSpoofs.LeaderboardGradients) do
+if Gradient and Gradient.Parent then pcall(function() Gradient:Destroy() end) end
+end
+table.clear(State.LocalSpoofs.LeaderboardGradients)
+table.clear(State.LocalSpoofs.LeaderboardStyledLabels)
 table.clear(State.LocalSpoofs.BoardRowCache)
 table.clear(State.LocalSpoofs.PedestalApplied)
 for Attribute, Snapshot in pairs(State.LocalSpoofs.OriginalTopAttributes) do
@@ -5186,10 +5377,91 @@ table.clear(State.LocalSpoofs.OriginalTopAttributes)
 table.clear(State.LocalSpoofs.LeaderboardRanks)
 end
 
+-- Converts the editable #RRGGBB configuration fields into Roblox colors.
+function State.LocalSpoofs.ParseLeaderboardColor(Value, Fallback)
+local Hex = tostring(Value or ''):gsub('#', '')
+if #Hex == 3 then Hex = Hex:sub(1, 1):rep(2) .. Hex:sub(2, 2):rep(2) .. Hex:sub(3, 3):rep(2) end
+if not string.match(Hex, '^[%x][%x][%x][%x][%x][%x]$') then return Fallback end
+return Color3.fromRGB(tonumber(Hex:sub(1, 2), 16), tonumber(Hex:sub(3, 4), 16), tonumber(Hex:sub(5, 6), 16))
+end
+
+function State.LocalSpoofs.ApplyLeaderboardColor(Label)
+if not (Label and Label.Parent and (Label:IsA('TextLabel') or Label:IsA('TextButton'))) then return end
+local Primary = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LeaderboardPrimaryColor, Color3.fromRGB(255, 59, 213))
+local Secondary = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LeaderboardSecondaryColor, Color3.fromRGB(53, 217, 255))
+local Mode = tostring(CONFIG.LeaderboardColorMode or 'Solid')
+-- UIGradient multiplies its parent color, so keep gradient text white to
+-- preserve the exact configured colors instead of tinting them twice.
+State.LocalSpoofs.SetStatsUI(Label, 'TextColor3', Mode == 'Solid' and Primary or Color3.new(1, 1, 1))
+local Gradient = Label:FindFirstChild('GoldenEagleLeaderboardGradient')
+if not Gradient then
+Gradient = Instance.new('UIGradient')
+Gradient.Name = 'GoldenEagleLeaderboardGradient'
+Gradient.Parent = Label
+end
+State.LocalSpoofs.LeaderboardGradients[Gradient] = true
+State.LocalSpoofs.LeaderboardStyledLabels[Label] = true
+Gradient.Enabled = Mode ~= 'Solid'
+Gradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0, Primary),
+ColorSequenceKeypoint.new(1, Secondary),
+})
+-- Animated mode uses full rotation rather than a wrapping Offset. A 360°
+-- rotation ends at the exact same visual state it began with, so it loops
+-- continuously instead of snapping back to the start.
+Gradient.Rotation = 0
+Gradient.Offset = Vector2.zero
+end
+
+-- The on-screen player list is a separate HUD, not a Workspace leaderboard.
+-- Its renderer clones a row named after each player, then writes to
+-- row.Main.NameFrame.TextLabel. Scan that exact structure so the style follows
+-- the name visible in the HUD shown in-game.
+function State.LocalSpoofs.ApplyPlayerListHUD()
+local PlayerGui = LP:FindFirstChildOfClass('PlayerGui')
+if not PlayerGui then return end
+for _, Row in ipairs(PlayerGui:GetDescendants()) do
+if Row:IsA('Frame') and Row.Name == LP.Name then
+local Main = Row:FindFirstChild('Main')
+local NameFrame = Main and Main:FindFirstChild('NameFrame')
+local NameLabel = NameFrame and NameFrame:FindFirstChild('TextLabel')
+if NameLabel and (NameLabel:IsA('TextLabel') or NameLabel:IsA('TextButton')) then
+State.LocalSpoofs.ApplyLeaderboardColor(NameLabel)
+end
+end
+end
+end
+
+function State.LocalSpoofs.UpdateLeaderboardGradients()
+local Mode = tostring(CONFIG.LeaderboardColorMode or 'Solid')
+local Primary = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LeaderboardPrimaryColor, Color3.fromRGB(255, 59, 213))
+local Speed = math.clamp(tonumber(CONFIG.LeaderboardGradientSpeed) or 0.65, 0.05, 5)
+local Rotation = (os.clock() * Speed * 90) % 360
+for Label in pairs(State.LocalSpoofs.LeaderboardStyledLabels) do
+if not (Label and Label.Parent) then
+State.LocalSpoofs.LeaderboardStyledLabels[Label] = nil
+else
+-- The native Playerlist script resets this color on player attribute changes.
+-- Reassert it after that renderer each frame; UIGradient labels stay white.
+Label.TextColor3 = Mode == 'Solid' and Primary or Color3.new(1, 1, 1)
+end
+end
+for Gradient in pairs(State.LocalSpoofs.LeaderboardGradients) do
+if not (Gradient and Gradient.Parent) then
+State.LocalSpoofs.LeaderboardGradients[Gradient] = nil
+else
+Gradient.Enabled = Mode ~= 'Solid'
+Gradient.Offset = Vector2.zero
+Gradient.Rotation = Mode == 'Animated Gradient' and Rotation or 0
+end
+end
+end
+
 function State.LocalSpoofs.SetStatsSpoof(Enabled)
 State.LocalStatsSpoofEnabled = Enabled == true
 CONFIG.LocalStatsSpoof = State.LocalStatsSpoofEnabled
 pcall(function() RunService:UnbindFromRenderStep('GoldenEagleProfileStatsLock') end)
+pcall(function() RunService:UnbindFromRenderStep('GoldenEagleLeaderboardGradient') end)
 if State.LocalStatsSpoofEnabled then
 pcall(State.LocalSpoofs.ApplyProfile)
 RunService:BindToRenderStep('GoldenEagleProfileStatsLock', Enum.RenderPriority.Last.Value + 10, WYNF_JIT(function()
@@ -5200,6 +5472,9 @@ State.LocalSpoofs.StatsLockAt = Now
 pcall(State.LocalSpoofs.ApplyStatsLock)
 end
 end
+end))
+RunService:BindToRenderStep('GoldenEagleLeaderboardGradient', Enum.RenderPriority.Last.Value + 11, WYNF_JIT(function()
+if State.Active and State.LocalStatsSpoofEnabled then pcall(State.LocalSpoofs.UpdateLeaderboardGradients) end
 end))
 else
 State.LocalSpoofs.RestoreStatsUI()
@@ -5408,6 +5683,11 @@ if Entry then
 if Data.PlayerName then State.LocalSpoofs.SetStatsUI(Data.PlayerName, 'Text', Entry.Name) end
 if Data.ValueLabel then State.LocalSpoofs.SetStatsUI(Data.ValueLabel, 'Text', Entry.Value) end
 if Data.RankLabel then State.LocalSpoofs.SetStatsUI(Data.RankLabel, 'Text', tostring(Index)) end
+if Entry.UserId == LP.UserId then
+State.LocalSpoofs.ApplyLeaderboardColor(Data.PlayerName)
+State.LocalSpoofs.ApplyLeaderboardColor(Data.ValueLabel)
+State.LocalSpoofs.ApplyLeaderboardColor(Data.RankLabel)
+end
 if Data.Icon and Data.Icon:IsA('ImageLabel') and Entry.Image then
 State.LocalSpoofs.SetStatsUI(Data.Icon, 'Image', Entry.Image)
 end
@@ -5430,6 +5710,13 @@ local Podium = Top and Top:FindFirstChild(tostring(Slot))
 local TopIcon = Podium and Podium:FindFirstChild('playerIcon', true)
 if TopIcon and TopIcon:IsA('ImageLabel') and Entry.Image then
 State.LocalSpoofs.SetStatsUI(TopIcon, 'Image', Entry.Image)
+end
+if Entry.UserId == LP.UserId and Podium then
+for _, Label in ipairs(Podium:GetDescendants()) do
+if Label:IsA('TextLabel') or Label:IsA('TextButton') then
+State.LocalSpoofs.ApplyLeaderboardColor(Label)
+end
+end
 end
 State.LocalSpoofs.PatchBoardPedestal(Pedestals, Slot, BoardName, Entry)
 end
@@ -5539,6 +5826,7 @@ local Now = os.clock()
 if Now - (State.LocalSpoofs.LeaderboardPatchAt or 0) >= 0.8 then
 State.LocalSpoofs.LeaderboardPatchAt = Now
 pcall(State.LocalSpoofs.ApplyGlobalLeaderboards)
+pcall(State.LocalSpoofs.ApplyPlayerListHUD)
 pcall(State.LocalSpoofs.ApplyNativeNameTags)
 State.LocalSpoofs.ScanBannerRoot(LP.PlayerGui)
 if LP.Character then State.LocalSpoofs.ScanBannerRoot(LP.Character) end
@@ -20374,6 +20662,41 @@ ColorSequenceKeypoint.new(0.55, Theme.AccentBright),
 ColorSequenceKeypoint.new(1.00, Theme.Accent),
 })
 end
+if HubUI.TitleGradient and HubUI.TitleGradient.Parent then
+HubUI.TitleGradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Theme.Accent),
+ColorSequenceKeypoint.new(0.48, Theme.AccentBright),
+ColorSequenceKeypoint.new(1.00, Theme.Accent),
+})
+end
+if HubUI.EagleIcon and HubUI.EagleIcon.Parent then
+HubUI.EagleIcon.ImageColor3 = Theme.Accent
+end
+for Index = #(HubUI.GroupGradients or {}), 1, -1 do
+local Gradient = HubUI.GroupGradients[Index]
+if Gradient and Gradient.Parent then
+Gradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Theme.Panel),
+ColorSequenceKeypoint.new(0.45, Theme.Panel:Lerp(Theme.Accent, 0.26)),
+ColorSequenceKeypoint.new(0.68, Theme.Panel:Lerp(Theme.AccentBright, 0.18)),
+ColorSequenceKeypoint.new(1.00, Theme.Panel),
+})
+else
+table.remove(HubUI.GroupGradients, Index)
+end
+end
+for Index = #(HubUI.TextGradients or {}), 1, -1 do
+local Gradient = HubUI.TextGradients[Index]
+if Gradient and Gradient.Parent then
+Gradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Theme.Accent),
+ColorSequenceKeypoint.new(0.50, Theme.AccentBright),
+ColorSequenceKeypoint.new(1.00, Theme.Accent),
+})
+else
+table.remove(HubUI.TextGradients, Index)
+end
+end
 end
 HubUI.RefreshSpecialThemeSurfaces()
 HubUI.Window = Main
@@ -20393,19 +20716,40 @@ BackgroundColor3 = Theme.Border,
 BorderSizePixel = 0,
 ZIndex = 4,
 }, Topbar)
-New('TextLabel', {
-Position = UDim2.fromOffset(8, 0),
-Size = UDim2.fromOffset(116, 27),
+local EagleIcon = New('ImageLabel', {
+Position = UDim2.fromOffset(8, 4),
+Size = UDim2.fromOffset(18, 18),
+BackgroundTransparency = 1,
+Image = 'rbxassetid://117825846885101',
+-- Theme-bound tint: New() registers ImageColor3 against the Accent role.
+ImageColor3 = Theme.Accent,
+ScaleType = Enum.ScaleType.Fit,
+ZIndex = 5,
+}, Topbar)
+HubUI.EagleIcon = EagleIcon
+local HubTitle = New('TextLabel', {
+Position = UDim2.fromOffset(31, 0),
+Size = UDim2.fromOffset(94, 27),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = 'GOLDEN EAGLE HUB',
-TextColor3 = Theme.Text,
+TextColor3 = Color3.new(1, 1, 1),
+__SkipThemeBinding = true,
 TextSize = 11,
 TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 5,
 }, Topbar)
+HubUI.TitleGradient = New('UIGradient', {
+Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Theme.Accent),
+ColorSequenceKeypoint.new(0.48, Theme.AccentBright),
+ColorSequenceKeypoint.new(1.00, Theme.Accent),
+}),
+Rotation = 0,
+}, HubTitle)
+HubUI.RefreshSpecialThemeSurfaces()
 New('TextLabel', {
-Position = UDim2.fromOffset(122, 0),
+Position = UDim2.fromOffset(129, 0),
 Size = UDim2.fromOffset(12, 27),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
@@ -20415,7 +20759,7 @@ TextSize = 10,
 ZIndex = 5,
 }, Topbar)
 New('TextLabel', {
-Position = UDim2.fromOffset(137, 0),
+Position = UDim2.fromOffset(144, 0),
 Size = UDim2.fromOffset(74, 27),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
@@ -20866,20 +21210,30 @@ local Data = {
 Button = Button, Marker = Marker, Divider = Divider,
 Page = Pages[Name], BaseWidth = Width,
 SearchText = string.lower(DisplayName .. ' ' .. Definition.Search),
-Category = Definition.Category, SearchAnimationSerial = 0,
+Category = Definition.Category, SearchAnimationSerial = 0, Hovered = false,
 }
 HubUI.TabButtons[Name] = Data
 GiveSignal(Button.MouseButton1Click:Connect(function() SwitchTab(Name) end))
 GiveSignal(Button.MouseEnter:Connect(function()
 if HubUI.ActiveTab ~= Name then
+Data.Hovered = true
 Tween(Button, 0.16, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Theme.AccentBright }, Enum.EasingStyle.Sine)
-Tween(Marker, 0.16, { BackgroundTransparency = 0.55 }, Enum.EasingStyle.Sine)
+Tween(Marker, 0.16, {
+BackgroundTransparency = 0.08,
+Size = UDim2.new(1, 0, 0, 3),
+Position = UDim2.new(0, 0, 1, -3),
+}, Enum.EasingStyle.Sine)
 end
 end))
 GiveSignal(Button.MouseLeave:Connect(function()
 if HubUI.ActiveTab ~= Name then
+Data.Hovered = false
 Tween(Button, 0.18, { BackgroundColor3 = Theme.Background, TextColor3 = Theme.Muted }, Enum.EasingStyle.Sine)
-Tween(Marker, 0.16, { BackgroundTransparency = 1 }, Enum.EasingStyle.Sine)
+Tween(Marker, 0.16, {
+BackgroundTransparency = 1,
+Size = UDim2.new(1, 0, 0, 2),
+Position = UDim2.new(0, 0, 1, -2),
+}, Enum.EasingStyle.Sine)
 end
 end))
 end
@@ -20939,15 +21293,16 @@ end
 
 for TabName, TabData in pairs(HubUI.TabButtons) do
 local Selected = TabName == Name
+local Hovered = TabData.Hovered == true and not Selected
 Tween(TabData.Button, 0.22, {
-BackgroundColor3 = Selected and Theme.Panel or Theme.Background,
+BackgroundColor3 = Selected and Theme.Panel or (Hovered and Theme.SurfaceHover or Theme.Background),
 BackgroundTransparency = 0,
-TextColor3 = Selected and Theme.Accent or Theme.Muted,
+TextColor3 = Selected and Theme.Accent or (Hovered and Theme.AccentBright or Theme.Muted),
 }, Enum.EasingStyle.Sine)
 Tween(TabData.Marker, 0.22, {
-BackgroundTransparency = Selected and 0 or 1,
-Size = UDim2.new(1, 0, 0, 2),
-Position = UDim2.new(0, 0, 1, -2),
+BackgroundTransparency = Selected and 0 or (Hovered and 0.08 or 1),
+Size = UDim2.new(1, 0, 0, Hovered and 3 or 2),
+Position = UDim2.new(0, 0, 1, Hovered and -3 or -2),
 }, Enum.EasingStyle.Sine)
 end
 
@@ -21213,15 +21568,43 @@ end
 end
 HubUI.CycleTab = CycleTab
 
+HubUI.TextGradients = HubUI.TextGradients or {}
+local function ApplyThemedTextGradient(TextObject, Midpoint)
+local Gradient = New('UIGradient', {
+Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Theme.Accent),
+ColorSequenceKeypoint.new(0.50, Midpoint or Theme.AccentBright),
+ColorSequenceKeypoint.new(1.00, Theme.Accent),
+}),
+Rotation = 0,
+}, TextObject)
+table.insert(HubUI.TextGradients, Gradient)
+return Gradient
+end
+
 local function CreateGroup(Name, Parent, Position, Size)
 local Group = New('Frame', {
 Name = Name:gsub('%s+', '') .. 'Groupbox',
 Position = Position,
 Size = Size,
 BackgroundColor3 = Theme.Panel,
+-- The panel gets its own theme gradient, so it remains visible instead
+-- of being hidden behind an opaque group background.
+BackgroundTransparency = 0,
 BorderSizePixel = 0,
 ZIndex = 4,
 }, Parent)
+local PanelGradient = New('UIGradient', {
+Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Theme.Panel),
+ColorSequenceKeypoint.new(0.45, Theme.Panel:Lerp(Theme.Accent, 0.26)),
+ColorSequenceKeypoint.new(0.68, Theme.Panel:Lerp(Theme.AccentBright, 0.18)),
+ColorSequenceKeypoint.new(1.00, Theme.Panel),
+}),
+Rotation = 18,
+}, Group)
+HubUI.GroupGradients = HubUI.GroupGradients or {}
+table.insert(HubUI.GroupGradients, PanelGradient)
 local GroupStroke = DarkStroke(Group)
 GroupStroke.Transparency = 0
 
@@ -21230,6 +21613,7 @@ local TitleBack = New('Frame', {
 Position = UDim2.fromOffset(7, -1),
 Size = UDim2.fromOffset(TitleWidth, 12),
 BackgroundColor3 = Theme.Panel,
+BackgroundTransparency = 0.10,
 BorderSizePixel = 0,
 ZIndex = 7,
 }, Group)
@@ -21239,11 +21623,13 @@ Size = UDim2.new(1, -8, 1, 0),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = Name,
-TextColor3 = Theme.Text,
+TextColor3 = Color3.new(1, 1, 1),
+__SkipThemeBinding = true,
 TextSize = 10,
 TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 8,
 }, TitleBack)
+ApplyThemedTextGradient(Title)
 local Body = New('Frame', {
 Name = 'Content',
 Position = UDim2.fromOffset(0, 10),
@@ -21256,11 +21642,9 @@ ZIndex = 5,
 
 GiveSignal(Group.MouseEnter:Connect(function()
 Tween(GroupStroke, 0.12, { Color = Theme.Accent, Transparency = 0.28 })
-Tween(Title, 0.12, { TextColor3 = Theme.AccentBright })
 end))
 GiveSignal(Group.MouseLeave:Connect(function()
 Tween(GroupStroke, 0.15, { Color = Theme.Border, Transparency = 0 })
-Tween(Title, 0.15, { TextColor3 = Theme.Text })
 end))
 return Body
 end
@@ -21272,11 +21656,13 @@ Size = UDim2.new(1, -16, 0, 13),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = Text,
-TextColor3 = Theme.Muted,
+TextColor3 = Color3.new(1, 1, 1),
+__SkipThemeBinding = true,
 TextSize = 8,
 TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 6,
 }, Parent)
+ApplyThemedTextGradient(Label, Theme.Text)
 New('Frame', {
 Position = UDim2.fromOffset(8, Y + 14),
 Size = UDim2.new(1, -16, 0, 1),
@@ -21336,15 +21722,16 @@ System = CreateGroup('Transfer & Lifecycle', Pages.Configs, UDim2.fromOffset(Rig
 local StaticGradientLayer = New('Frame', {
 __SkipThemeBinding = true,
 Name = 'StaticBlackGoldGradient', Size = UDim2.fromScale(1, 1),
-BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 1,
-BorderSizePixel = 0, Active = false, Visible = false, ZIndex = 2,
+-- Visible themed backdrop beneath the now-translucent feature panels.
+BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.05,
+BorderSizePixel = 0, Active = false, Visible = true, ZIndex = 2,
 }, Main)
 local BackgroundGradient = New('UIGradient', {
 Color = ColorSequence.new({
 ColorSequenceKeypoint.new(0.00, Color3.fromRGB(2, 2, 2)),
-ColorSequenceKeypoint.new(0.30, Color3.fromRGB(24, 18, 5)),
-ColorSequenceKeypoint.new(0.50, Color3.fromRGB(112, 78, 10)),
-ColorSequenceKeypoint.new(0.70, Color3.fromRGB(24, 18, 5)),
+ColorSequenceKeypoint.new(0.28, Theme.Panel:Lerp(Theme.Accent, 0.22)),
+ColorSequenceKeypoint.new(0.50, Theme.Panel:Lerp(Theme.AccentBright, 0.55)),
+ColorSequenceKeypoint.new(0.72, Theme.Panel:Lerp(Theme.Accent, 0.22)),
 ColorSequenceKeypoint.new(1.00, Color3.fromRGB(2, 2, 2)),
 }), Rotation = 18, Offset = Vector2.zero,
 }, StaticGradientLayer)
@@ -21383,12 +21770,14 @@ Size = UDim2.new(1, -72, 1, 0),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = Label,
-TextColor3 = Theme.Text,
+TextColor3 = Color3.new(1, 1, 1),
+__SkipThemeBinding = true,
 TextSize = 11,
 TextTruncate = Enum.TextTruncate.AtEnd,
 TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 6,
 }, Button)
+ApplyThemedTextGradient(LabelObject)
 local KeyButton = New('TextButton', {
 AnchorPoint = Vector2.new(1, 0),
 Position = UDim2.new(1, -6, 0, Y + 1),
@@ -21466,12 +21855,14 @@ Size = UDim2.new(1, -ButtonWidth - (ShowKeyButton and 72 or 24), 0, 20),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = Label,
-TextColor3 = Theme.Text,
+TextColor3 = Color3.new(1, 1, 1),
+__SkipThemeBinding = true,
 TextSize = 11,
 TextTruncate = Enum.TextTruncate.AtEnd,
 TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 5,
 }, Parent)
+ApplyThemedTextGradient(LabelObject)
 local Container = New('Frame', {
 AnchorPoint = Vector2.new(1, 0),
 Position = UDim2.new(1, -8, 0, Y),
@@ -21558,18 +21949,20 @@ end
 
 local function CreateDropdown(Parent, Y, Label, Options, InitialValue, Callback, ButtonWidth)
 ButtonWidth = ButtonWidth or 168
-New('TextLabel', {
+local LabelObject = New('TextLabel', {
 Position = UDim2.fromOffset(8, Y),
 Size = UDim2.new(1, -ButtonWidth - 24, 0, 23),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = Label,
-TextColor3 = Theme.Text,
+TextColor3 = Color3.new(1, 1, 1),
+__SkipThemeBinding = true,
 TextSize = 11,
 TextTruncate = Enum.TextTruncate.AtEnd,
 TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 20,
 }, Parent)
+ApplyThemedTextGradient(LabelObject)
 local Button = New('TextButton', {
 AnchorPoint = Vector2.new(1, 0),
 Position = UDim2.new(1, -8, 0, Y),
@@ -22307,6 +22700,7 @@ local PickerApply = CreateActionButton(ColorPickerCard, UDim2.fromOffset(160, 19
 local PickerCancel = CreateActionButton(ColorPickerCard, UDim2.fromOffset(236, 196), UDim2.fromOffset(69, 25), 'CANCEL', function() end)
 
 local PickerRole, PickerOriginal, PickerOriginalPreset, PickerH, PickerS, PickerV = nil, nil, nil, 0, 1, 1
+local PickerInitialColor, PickerPreviewCallback, PickerCommitCallback, PickerCustomTitle = nil, nil, nil, nil
 local DragSV, DragHue = false, false
 local function RefreshPickerVisuals(ApplyLive)
 local Color = Color3.fromHSV(PickerH, PickerS, PickerV)
@@ -22319,6 +22713,8 @@ if ApplyLive and PickerRole then
 InterfaceConfig.ThemePreset = 'Custom'
 InterfaceConfig.Theme[PickerRole] = ColorToHex(Color)
 HubUI.ApplyTheme(InterfaceConfig.Theme, false)
+elseif ApplyLive and PickerPreviewCallback then
+PickerPreviewCallback(Color)
 end
 end
 local function SetPickerFromPoint(Field, Position, IsHue)
@@ -22328,15 +22724,20 @@ if IsHue then PickerH = RelativeY else PickerS, PickerV = RelativeX, 1 - Relativ
 RefreshPickerVisuals(true)
 end
 local PickerAnimationSerial = 0
-function HubUI.OpenColorPicker(Role)
-if not Theme[Role] then return end
+function HubUI.OpenColorPicker(Role, InitialColor, PreviewCallback, CommitCallback, Title)
+local IsThemeRole = Role ~= nil and Theme[Role] ~= nil
+if not IsThemeRole and typeof(InitialColor) ~= 'Color3' then return end
 if ActiveDropdown then ActiveDropdown:Close() end
 PickerAnimationSerial += 1
-PickerRole = Role
-PickerOriginal = InterfaceConfig.Theme[Role]
-PickerOriginalPreset = InterfaceConfig.ThemePreset
-PickerH, PickerS, PickerV = Theme[Role]:ToHSV()
-PickerTitle.Text = string.upper(Role:gsub('(%l)(%u)', '%1 %2'))
+PickerRole = IsThemeRole and Role or nil
+PickerOriginal = IsThemeRole and InterfaceConfig.Theme[Role] or nil
+PickerOriginalPreset = IsThemeRole and InterfaceConfig.ThemePreset or nil
+PickerInitialColor = IsThemeRole and Theme[Role] or InitialColor
+PickerPreviewCallback = IsThemeRole and nil or PreviewCallback
+PickerCommitCallback = IsThemeRole and nil or CommitCallback
+PickerCustomTitle = IsThemeRole and nil or Title
+PickerH, PickerS, PickerV = PickerInitialColor:ToHSV()
+PickerTitle.Text = IsThemeRole and string.upper(Role:gsub('(%l)(%u)', '%1 %2')) or string.upper(tostring(Title or 'COLOR'))
 local WasVisible = ColorPickerOverlay.Visible
 if not WasVisible then
 ColorPickerOverlay.BackgroundTransparency = 1
@@ -22360,8 +22761,12 @@ if not Commit and PickerRole and PickerOriginal then
 InterfaceConfig.ThemePreset = PickerOriginalPreset or InterfaceConfig.ThemePreset
 InterfaceConfig.Theme[PickerRole] = PickerOriginal
 HubUI.ApplyTheme(InterfaceConfig.Theme, false)
+elseif not Commit and PickerPreviewCallback and PickerInitialColor then
+PickerPreviewCallback(PickerInitialColor)
 elseif Commit and PickerRole then
 SaveInterfaceConfig()
+elseif Commit and PickerCommitCallback then
+PickerCommitCallback(Color3.fromHSV(PickerH, PickerS, PickerV))
 end
 Tween(ColorPickerOverlay, 0.20, {
 BackgroundTransparency = 1,
@@ -22374,19 +22779,21 @@ if PickerAnimationSerial == Serial and ColorPickerOverlay.Parent then ColorPicke
 end)
 DragSV, DragHue = false, false
 PickerRole, PickerOriginal, PickerOriginalPreset = nil, nil, nil
+PickerInitialColor, PickerPreviewCallback, PickerCommitCallback, PickerCustomTitle = nil, nil, nil, nil
+end
+HubUI.OpenCustomColorPicker = function(Title, InitialColor, PreviewCallback, CommitCallback)
+HubUI.OpenColorPicker(nil, InitialColor, PreviewCallback, CommitCallback, Title)
 end
 PickerApply.MouseButton1Click:Connect(function()
-if PickerRole then
-local Color = HexToColor(PickerHex.Text, Theme[PickerRole])
+local Color = HexToColor(PickerHex.Text, PickerInitialColor or Theme[PickerRole] or Color3.new(1, 1, 1))
 PickerH, PickerS, PickerV = Color:ToHSV()
 RefreshPickerVisuals(true)
-end
 ClosePicker(true)
 end)
 PickerCancel.MouseButton1Click:Connect(function() ClosePicker(false) end)
 GiveSignal(PickerHex.FocusLost:Connect(function(EnterPressed)
-if not PickerRole then return end
-local Color = HexToColor(PickerHex.Text, Theme[PickerRole])
+if not (PickerRole or PickerInitialColor) then return end
+local Color = HexToColor(PickerHex.Text, PickerInitialColor or Theme[PickerRole] or Color3.new(1, 1, 1))
 PickerH, PickerS, PickerV = Color:ToHSV()
 RefreshPickerVisuals(true)
 if EnterPressed then ClosePicker(true) end
@@ -23297,17 +23704,17 @@ CONFIG.LocalGoalEffect = Value
 if State.LocalGoalEffectSpoofEnabled then State.LocalSpoofs.SetGoalEffect(true, false) end
 end, 145
 )
-CreateSectionHeader(CosmeticSpoofsGroup, 231, 'Profile stats / history')
+CreateSectionHeader(CosmeticSpoofsGroup, 231, 'Profile stats & match history (local)')
 HubUI.Controls.LocalStatsSpoof = CreateCheckbox(
 CosmeticSpoofsGroup, 251, 'Spoof stats, banner & boards', State.LocalStatsSpoofEnabled,
 function(Value) State.LocalSpoofs.SetStatsSpoof(Value) end
 )
 do
 local Fields = {
-{ 'LocalWins', 'LocalWins', 'W', 8, 279 }, { 'LocalLosses', 'LocalLosses', 'L', 88, 279 },
-{ 'LocalGoals', 'LocalGoals', 'G', 168, 279 }, { 'LocalAttempts', 'LocalAttempts', 'A', 8, 302 },
-{ 'LocalStreak', 'LocalStreak', 'S', 88, 302 }, { 'LocalHighestStreak', 'LocalHighestStreak', 'H', 168, 302 },
-{ 'LocalDonation', 'LocalDonation', 'D', 8, 325 },
+{ 'LocalWins', 'LocalWins', 'Wins', 8, 279 }, { 'LocalLosses', 'LocalLosses', 'Losses', 88, 279 },
+{ 'LocalGoals', 'LocalGoals', 'Goals', 168, 279 }, { 'LocalAttempts', 'LocalAttempts', 'Shots', 8, 302 },
+{ 'LocalStreak', 'LocalStreak', 'Streak', 88, 302 }, { 'LocalHighestStreak', 'LocalHighestStreak', 'Best streak', 168, 302 },
+{ 'LocalDonation', 'LocalDonation', 'Donated', 8, 325 },
 }
 State.LocalSpoofs.StatBoxes = {}
 for _, Data in ipairs(Fields) do
@@ -23320,7 +23727,8 @@ ClearTextOnFocus = false,
 Font = Enum.Font.Code,
 Text = Data[3] .. ': ' .. tostring(State[Data[1]]),
 TextColor3 = Theme.Text,
-TextSize = 10,
+-- Full labels stay readable in the compact three-column layout.
+TextSize = 8,
 ZIndex = 6,
 }, CosmeticSpoofsGroup)
 AccentStroke(Box, 1, 0.18)
@@ -23342,18 +23750,18 @@ TextColor3=Theme.Text, TextSize=9, ZIndex=6,
 AccentStroke(AddFake,1,0.2)
 local ClearFake = New('TextButton', {
 Position=UDim2.fromOffset(130,348), Size=UDim2.fromOffset(119,16), BackgroundColor3=Theme.Surface,
-BorderSizePixel=0, AutoButtonColor=false, Font=Enum.Font.Code, Text='Clear fake matches',
+BorderSizePixel=0, AutoButtonColor=false, Font=Enum.Font.Code, Text='Leaderboard style',
 TextColor3=Theme.Text, TextSize=9, ZIndex=6,
 }, CosmeticSpoofsGroup)
 AccentStroke(ClearFake,1,0.2)
-CreateSectionHeader(CosmeticSpoofsGroup, 372, 'Clan & achievements')
+CreateSectionHeader(CosmeticSpoofsGroup, 372, 'Clan & achievements (local)')
 HubUI.Controls.LocalClanSpoof = CreateCheckbox(
-CosmeticSpoofsGroup, 392, 'Spoof clan page locally', State.LocalClanSpoofEnabled,
+CosmeticSpoofsGroup, 392, 'Show custom clan details locally', State.LocalClanSpoofEnabled,
 function(Value) State.LocalSpoofs.SetClanSpoof(Value) end
 )
 for _, Data in ipairs({
-{ 'LocalClanName', 'CN', 8, 415, 119 },
-{ 'LocalClanTagText', 'TAG', 130, 415, 119 },
+{ 'LocalClanName', 'Clan name', 8, 415, 119 },
+{ 'LocalClanTagText', 'Clan tag', 130, 415, 119 },
 }) do
 local Box = New('TextBox', {
 Position = UDim2.fromOffset(Data[3], Data[4]),
@@ -23382,8 +23790,8 @@ if State.LocalClanSpoofEnabled then pcall(State.LocalSpoofs.ApplyClanSpoof) end
 end))
 end
 for _, Data in ipairs({
-{ 'LocalClanELO', 'E', 8, 438 }, { 'LocalClanFunds', 'F', 88, 438 }, { 'LocalClanLevel', 'LV', 168, 438 },
-{ 'LocalClanWins', 'CW', 8, 461 }, { 'LocalClanLosses', 'CL', 88, 461 }, { 'LocalAchMultiplier', 'MX', 168, 461 },
+{ 'LocalClanELO', 'ELO', 8, 438 }, { 'LocalClanFunds', 'Funds', 88, 438 }, { 'LocalClanLevel', 'Level', 168, 438 },
+{ 'LocalClanWins', 'Wins', 8, 461 }, { 'LocalClanLosses', 'Losses', 88, 461 }, { 'LocalAchMultiplier', 'Ach. x', 168, 461 },
 }) do
 local Box = New('TextBox', {
 Position = UDim2.fromOffset(Data[3], Data[4]),
@@ -23412,7 +23820,7 @@ if State.LocalAchievementSpoofEnabled then pcall(State.LocalSpoofs.ApplyAchievem
 end))
 end
 HubUI.Controls.LocalAchievementSpoof = CreateCheckbox(
-CosmeticSpoofsGroup, 484, 'Unlock achievements locally', State.LocalAchievementSpoofEnabled,
+CosmeticSpoofsGroup, 484, 'Show achievements unlocked locally', State.LocalAchievementSpoofEnabled,
 function(Value) State.LocalSpoofs.SetAchievementSpoof(Value) end
 )
 local FakeModal=New('Frame',{
@@ -23471,10 +23879,126 @@ State.LocalSpoofs.AddFakeMatch({Result=FakeResult,TeamSize=FakeTeamSize,HomePlay
 HomeScore=string.match(HomeScore.Text,'%d+'),AwayScore=string.match(AwayScore.Text,'%d+')})
 FakeModal.Visible=false
 end))
-GiveSignal(ClearFake.MouseButton1Click:Connect(State.LocalSpoofs.ClearFakeMatches))
-HubUI.Controls.ClearFakeMatchesAction = {
+-- Board appearance editor, opened from the Cosmetics panel.
+local LeaderboardStyleModal = New('Frame', {
+AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.52),
+Size = UDim2.fromOffset(390, 278), BackgroundColor3 = Theme.Background,
+BorderSizePixel = 0, Visible = false, Active = true, ZIndex = 100,
+}, Main)
+AccentStroke(LeaderboardStyleModal, 2, 0.02)
+New('TextLabel', {
+Position = UDim2.fromOffset(14, 10), Size = UDim2.new(1, -28, 0, 24),
+BackgroundTransparency = 1, Font = Enum.Font.Code, Text = 'LEADERBOARD APPEARANCE',
+TextColor3 = Theme.Text, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 101,
+}, LeaderboardStyleModal)
+New('TextLabel', {
+Position = UDim2.fromOffset(14, 39), Size = UDim2.fromOffset(106, 20),
+BackgroundTransparency = 1, Font = Enum.Font.Code, Text = 'STYLE', TextColor3 = Theme.Muted,
+TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 101,
+}, LeaderboardStyleModal)
+local LeaderboardModes = { 'Solid', 'Gradient', 'Animated Gradient' }
+local LeaderboardModeButton = New('TextButton', {
+Position = UDim2.fromOffset(122, 38), Size = UDim2.fromOffset(254, 23),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = tostring(CONFIG.LeaderboardColorMode), TextColor3 = Theme.Text,
+TextSize = 10, ZIndex = 101,
+}, LeaderboardStyleModal)
+AccentStroke(LeaderboardModeButton, 1, 0.18)
+local function StyleField(Y, Label, Text)
+New('TextLabel', {
+Position = UDim2.fromOffset(14, Y), Size = UDim2.fromOffset(106, 22),
+BackgroundTransparency = 1, Font = Enum.Font.Code, Text = Label, TextColor3 = Theme.Muted,
+TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 101,
+}, LeaderboardStyleModal)
+local Box = New('TextBox', {
+Position = UDim2.fromOffset(122, Y), Size = UDim2.fromOffset(254, 23),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, ClearTextOnFocus = false,
+Font = Enum.Font.Code, Text = Text, TextColor3 = Theme.Text, PlaceholderColor3 = Theme.Muted,
+TextSize = 11, ZIndex = 101,
+}, LeaderboardStyleModal)
+AccentStroke(Box, 1, 0.18)
+return Box
+end
+local LeaderboardPrimaryColor = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LeaderboardPrimaryColor, Color3.fromRGB(255, 59, 213))
+local LeaderboardSecondaryColor = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LeaderboardSecondaryColor, Color3.fromRGB(53, 217, 255))
+local function CreateLeaderboardColorPicker(Y, Label, GetColor, SetColor)
+New('TextLabel', {
+Position = UDim2.fromOffset(14, Y), Size = UDim2.fromOffset(106, 22),
+BackgroundTransparency = 1, Font = Enum.Font.Code, Text = Label, TextColor3 = Theme.Muted,
+TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 101,
+}, LeaderboardStyleModal)
+local Button = New('TextButton', {
+Position = UDim2.fromOffset(122, Y), Size = UDim2.fromOffset(254, 23),
+BackgroundColor3 = GetColor(), BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = 'PICK COLOR', TextColor3 = Color3.new(1, 1, 1), TextSize = 10, ZIndex = 101,
+}, LeaderboardStyleModal)
+AccentStroke(Button, 1, 0.18)
+local function Preview(Color) Button.BackgroundColor3 = Color end
+GiveSignal(Button.MouseButton1Click:Connect(function()
+HubUI.OpenCustomColorPicker(Label, GetColor(), Preview, function(Color)
+SetColor(Color)
+Preview(Color)
+end)
+end))
+return Button
+end
+local LeaderboardPrimaryPicker = CreateLeaderboardColorPicker(70, 'PRIMARY COLOR',
+function() return LeaderboardPrimaryColor end,
+function(Color) LeaderboardPrimaryColor = Color end
+)
+local LeaderboardSecondaryPicker = CreateLeaderboardColorPicker(101, 'SECONDARY COLOR',
+function() return LeaderboardSecondaryColor end,
+function(Color) LeaderboardSecondaryColor = Color end
+)
+local LeaderboardSpeedBox = StyleField(132, 'ANIMATION SPEED', tostring(CONFIG.LeaderboardGradientSpeed))
+New('TextLabel', {
+Position = UDim2.fromOffset(14, 165), Size = UDim2.fromOffset(362, 32),
+BackgroundTransparency = 1, Font = Enum.Font.Code,
+Text = 'Click either color bar to use the full picker. Gradient modes color your row and podium text.',
+TextWrapped = true, TextColor3 = Theme.Muted, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left,
+ZIndex = 101,
+}, LeaderboardStyleModal)
+local ApplyLeaderboardStyle = New('TextButton', {
+Position = UDim2.fromOffset(14, 223), Size = UDim2.fromOffset(230, 34),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = 'APPLY STYLE', TextColor3 = Theme.Text, TextSize = 11, ZIndex = 101,
+}, LeaderboardStyleModal)
+local CancelLeaderboardStyle = New('TextButton', {
+Position = UDim2.fromOffset(252, 223), Size = UDim2.fromOffset(124, 34),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = 'CANCEL', TextColor3 = Theme.Text, TextSize = 11, ZIndex = 101,
+}, LeaderboardStyleModal)
+AccentStroke(ApplyLeaderboardStyle, 1, 0.1)
+AccentStroke(CancelLeaderboardStyle, 1, 0.1)
+GiveSignal(LeaderboardModeButton.MouseButton1Click:Connect(function()
+local Index = table.find(LeaderboardModes, LeaderboardModeButton.Text) or 1
+LeaderboardModeButton.Text = LeaderboardModes[Index % #LeaderboardModes + 1]
+end))
+local function OpenLeaderboardStyle()
+LeaderboardModeButton.Text = tostring(CONFIG.LeaderboardColorMode or 'Solid')
+LeaderboardPrimaryColor = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LeaderboardPrimaryColor, Color3.fromRGB(255, 59, 213))
+LeaderboardSecondaryColor = State.LocalSpoofs.ParseLeaderboardColor(CONFIG.LeaderboardSecondaryColor, Color3.fromRGB(53, 217, 255))
+LeaderboardPrimaryPicker.BackgroundColor3 = LeaderboardPrimaryColor
+LeaderboardSecondaryPicker.BackgroundColor3 = LeaderboardSecondaryColor
+LeaderboardSpeedBox.Text = tostring(CONFIG.LeaderboardGradientSpeed or 0.65)
+LeaderboardStyleModal.Visible = true
+end
+local function CommitLeaderboardStyle()
+CONFIG.LeaderboardColorMode = table.find(LeaderboardModes, LeaderboardModeButton.Text) and LeaderboardModeButton.Text or 'Solid'
+CONFIG.LeaderboardPrimaryColor = ColorToHex(LeaderboardPrimaryColor)
+CONFIG.LeaderboardSecondaryColor = ColorToHex(LeaderboardSecondaryColor)
+CONFIG.LeaderboardGradientSpeed = math.clamp(tonumber(LeaderboardSpeedBox.Text) or 0.65, 0.05, 5)
+LeaderboardStyleModal.Visible = false
+pcall(State.LocalSpoofs.ApplyGlobalLeaderboards)
+pcall(State.LocalSpoofs.ApplyPlayerListHUD)
+pcall(State.LocalSpoofs.UpdateLeaderboardGradients)
+end
+GiveSignal(ClearFake.MouseButton1Click:Connect(OpenLeaderboardStyle))
+GiveSignal(CancelLeaderboardStyle.MouseButton1Click:Connect(function() LeaderboardStyleModal.Visible = false end))
+GiveSignal(ApplyLeaderboardStyle.MouseButton1Click:Connect(CommitLeaderboardStyle))
+HubUI.Controls.LeaderboardStyleAction = {
 SearchRoot = ClearFake, SearchParent = CosmeticSpoofsGroup,
-SearchLabel = 'Clear fake matches', Kind = 'Action', Trigger = State.LocalSpoofs.ClearFakeMatches,
+SearchLabel = 'Edit leaderboard color and gradient', Kind = 'Action', Trigger = OpenLeaderboardStyle,
 }
 end
 
@@ -24104,40 +24628,10 @@ function(Value)
 State.LocalCosmeticExtras.SetCourtSkin(Value, State.LocalCourtSkin, true)
 end
 )
-New('TextLabel', {
-Position = UDim2.fromOffset(8, 481),
-Size = UDim2.fromOffset(78, 24),
-BackgroundTransparency = 1,
-Font = Enum.Font.Code,
-Text = 'Custom tag',
-TextColor3 = Theme.Text,
-TextSize = 11,
-TextXAlignment = Enum.TextXAlignment.Left,
-ZIndex = 5,
-}, CosmeticsGroup)
-State.LocalCosmeticExtras.ClanTagBox = New('TextBox', {
-Position = UDim2.fromOffset(94, 481),
-Size = UDim2.new(1, -102, 0, 24),
-BackgroundColor3 = Theme.Surface,
-BorderSizePixel = 0,
-ClearTextOnFocus = false,
-Font = Enum.Font.Code,
-PlaceholderText = 'GEH',
-Text = State.LocalClanTag,
-TextColor3 = Theme.Text,
-PlaceholderColor3 = Theme.Muted,
-TextSize = 11,
-ZIndex = 6,
-}, CosmeticsGroup)
-AccentStroke(State.LocalCosmeticExtras.ClanTagBox, 1, 0.18)
-GiveSignal(State.LocalCosmeticExtras.ClanTagBox.FocusLost:Connect(function(EnterPressed)
-local Box = State.LocalCosmeticExtras.ClanTagBox
-Box.Text = State.LocalCosmeticExtras.SanitizeClanTag(Box.Text)
-if EnterPressed then
-State.LocalCosmeticExtras.SetClanTag(
-State.LocalClanTagSpoofEnabled, Box.Text, true)
-end
-end))
+-- Custom chat-tag appearance editor removed.
+
+local CustomChatTagIndex = table.find(State.LocalCosmeticExtras.ChatTagStyles, 'Custom tag')
+if CustomChatTagIndex then table.remove(State.LocalCosmeticExtras.ChatTagStyles, CustomChatTagIndex) end
 HubUI.Controls.LocalChatTagStyle = CreateDropdown(
 CosmeticsGroup, 451, 'Chat tags',
 State.LocalCosmeticExtras.ChatTagStyles,
@@ -25317,7 +25811,8 @@ local Value = math.max(0, math.floor(tonumber(Data[Key]) or 0))
 State[Key] = Value
 CONFIG[Key] = Value
 local Box = State.LocalSpoofs.StatBoxes and State.LocalSpoofs.StatBoxes[Key]
-if Box then Box.Text = string.sub(Key, 6, 6) .. ': ' .. tostring(Value) end
+local Prefix = State.LocalSpoofs.StatBoxPrefixes and State.LocalSpoofs.StatBoxPrefixes[Key]
+if Box and Prefix then Box.Text = Prefix .. ': ' .. tostring(Value) end
 end
 end
 for _, Key in ipairs({ 'LocalClanELO', 'LocalClanFunds', 'LocalClanLevel', 'LocalClanWins', 'LocalClanLosses', 'LocalAchMultiplier' }) do
@@ -28063,7 +28558,7 @@ warn('[GOLDEN EAGLE HUB] UI update paused: ' .. tostring(RenderError))
 end
 end)))
 
-local function FitClassicGroupboxes()
+HubUI.FitClassicGroupboxes = function()
 for _, Page in pairs(Pages) do
 for _, Group in ipairs(Page:GetChildren()) do
 if Group:IsA('Frame') and string.sub(Group.Name, -4) == 'Card' then
@@ -28083,8 +28578,8 @@ end
 end
 end
 end
-FitClassicGroupboxes()
-task.defer(FitClassicGroupboxes)
+HubUI.FitClassicGroupboxes()
+task.defer(HubUI.FitClassicGroupboxes)
 
 HubUI.ApplyFont(InterfaceConfig.Font, false)
 Main.BackgroundTransparency = 0
