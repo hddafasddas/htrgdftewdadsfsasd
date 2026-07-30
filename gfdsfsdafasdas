@@ -704,7 +704,8 @@ LastSelfPassAt = 0,
 LocalAnonymizerEnabled = CONFIG.LocalAnonymizer,
 LocalAlias = CONFIG.LocalAlias,
 LocalCosmeticSpoofEnabled = CONFIG.LocalCosmeticSpoof,
-LocalLogos = { VIP = false, Youtuber = false, SilverYoutuber = false, GoldYoutuber = false, Twitch = false, Booster = false, Tester = false, Staff = false },
+LocalLogos = { VIP = false, Youtuber = false, Twitch = false, Booster = false, Tester = false, Staff = false },
+CustomLogos = {},
 LocalAura = CONFIG.LocalAura,
 LocalTrail = CONFIG.LocalTrail,
 LocalBall = CONFIG.LocalBall,
@@ -3123,7 +3124,7 @@ end)
 
 State.Cosmetics = {}
 State.Cosmetics.Originals = {}
-for _, LogoName in ipairs({ 'VIP', 'Youtuber', 'SilverYoutuber', 'GoldYoutuber', 'Twitch', 'Booster', 'Tester', 'Staff' }) do
+for _, LogoName in ipairs({ 'VIP', 'Youtuber', 'Twitch', 'Booster', 'Tester', 'Staff' }) do
 State.Cosmetics.Originals[LogoName] = safe_get_attribute(LP, LogoName)
 end
 
@@ -3395,8 +3396,6 @@ EquippedAsset = 'http://www.roblox.com/asset/?id=10572060873',
 UINames = {
 VIP = 'VIP',
 Youtuber = 'Youtube',
-SilverYoutuber = 'Silver',
-GoldYoutuber = 'Gold',
 Twitch = 'Twitch',
 Booster = 'Booster',
 Tester = 'Tester',
@@ -3404,13 +3403,18 @@ Staff = 'Staff',
 },
 -- Overhead character logos live in HumanoidRootPart.CreatorTag, which is a
 -- DIFFERENT BillboardGui from NameTag. Element names confirmed from a live
--- dump. Silver/Gold YouTube have no element of their own on the character
--- tag, so they light the standard YouTube icon.
+-- dump.
+-- Custom icons are cloned from this native element, so they inherit the
+-- game's own sizing, anchoring and list layout behaviour.
+CustomTemplate = 'VIP',
+CustomPrefix = 'GE_Custom_',
+CustomInstances = {},
+-- Maps the user-entered asset id to either its immediate thumbnail or the
+-- actual Decal.Texture once Roblox has resolved the decal object.
+CustomImageCache = {},
 CreatorTagNames = {
 VIP = 'VIP',
 Youtuber = 'Youtuber',
-SilverYoutuber = 'Youtuber',
-GoldYoutuber = 'Youtuber',
 Twitch = 'Twitch',
 Booster = 'Booster',
 Tester = 'Tester',
@@ -3440,9 +3444,11 @@ pcall(function() Object[Property] = Value end)
 end
 end
 State.LogoBadges.Originals = setmetatable({}, { __mode = 'k' })
+State.LogoBadges.ClearCustomIcons(false)
 end
 
 function State.LogoBadges.AnyActive()
+if #State.CustomLogos > 0 then return true end
 for _, Enabled in pairs(State.LocalLogos) do
 if Enabled then return true end
 end
@@ -3466,6 +3472,7 @@ if Badge and Enabled then
 State.LogoBadges.SetUI(Badge, 'Visible', true)
 end
 end
+State.LogoBadges.ApplyCustomLogos(Badges)
 end
 end
 end
@@ -3498,6 +3505,185 @@ end
 end
 end
 
+-- Accepts a bare id, rbxassetid://id, or a full roblox asset URL.
+function State.LogoBadges.NormalizeAssetId(Value)
+local Text = tostring(Value or ''):gsub('%s+', '')
+if Text == '' then return nil end
+local Digits = Text:match('id=(%d+)') or Text:match('(%d+)$') or Text:match('(%d+)')
+if not Digits then return nil end
+local Id = tonumber(Digits)
+if not Id or Id <= 0 then return nil end
+return math.floor(Id)
+end
+
+-- Returns an image source that works immediately for ANY public asset id.
+-- Decal ids are not image texture ids, so we start with rbxthumb and then
+-- asynchronously replace it with the Decal.Texture when GetObjects resolves it.
+function State.LogoBadges.ResolveCustomImage(Id)
+local Cached = State.LogoBadges.CustomImageCache[Id]
+if Cached then return Cached end
+local Thumbnail = 'rbxthumb://type=Asset&id=' .. tostring(Id) .. '&w=420&h=420'
+State.LogoBadges.CustomImageCache[Id] = Thumbnail
+task.spawn(function()
+local Resolved = Thumbnail
+local Ok, Objects = pcall(function()
+return game:GetObjects('rbxassetid://' .. tostring(Id))
+end)
+if Ok and type(Objects) == 'table' then
+for _, Object in ipairs(Objects) do
+local Decal = Object:IsA('Decal') and Object or Object:FindFirstChildWhichIsA('Decal', true)
+local Image = Object:IsA('ImageLabel') and Object or Object:FindFirstChildWhichIsA('ImageLabel', true)
+if Decal and Decal.Texture ~= '' then
+Resolved = Decal.Texture
+break
+elseif Image and Image.Image ~= '' then
+Resolved = Image.Image
+break
+end
+end
+end
+State.LogoBadges.CustomImageCache[Id] = Resolved
+for _, Icon in ipairs(State.LogoBadges.CustomInstances) do
+if Icon and Icon.Parent and Icon.Name == State.LogoBadges.CustomPrefix .. tostring(Id) then
+pcall(function()
+Icon.Image = Resolved
+Icon.ImageColor3 = Color3.fromRGB(255, 255, 255)
+Icon.ImageTransparency = 0
+Icon.Visible = true
+end)
+end
+end
+end)
+return Thumbnail
+end
+
+-- Adds one id to the custom list. Rejects junk and duplicates.
+function State.LogoBadges.AddCustomLogo(Value)
+local Id = State.LogoBadges.NormalizeAssetId(Value)
+if not Id then return false, 'invalid asset id' end
+for _, Existing in ipairs(State.CustomLogos) do
+if Existing == Id then return false, 'already added' end
+end
+table.insert(State.CustomLogos, Id)
+State.LogoBadges.StartLoop()
+pcall(State.LogoBadges.Apply)
+return true
+end
+
+-- Destroys every icon the hub built. Pass true to also empty the id list.
+function State.LogoBadges.ClearCustomIcons(AlsoForgetIds)
+for Index = #State.LogoBadges.CustomInstances, 1, -1 do
+pcall(function() State.LogoBadges.CustomInstances[Index]:Destroy() end)
+State.LogoBadges.CustomInstances[Index] = nil
+end
+if AlsoForgetIds then
+for Index = #State.CustomLogos, 1, -1 do
+State.CustomLogos[Index] = nil
+end
+end
+end
+
+function State.LogoBadges.RemoveCustomLogo(Value)
+local Id = State.LogoBadges.NormalizeAssetId(Value)
+if not Id then return false end
+for Index = #State.CustomLogos, 1, -1 do
+if State.CustomLogos[Index] == Id then
+table.remove(State.CustomLogos, Index)
+end
+end
+State.LogoBadges.ClearCustomIcons(false)
+if State.LogoBadges.AnyActive() then pcall(State.LogoBadges.Apply) end
+return true
+end
+
+-- Builds (or refreshes) one ImageLabel per custom id inside a logo container.
+-- Cloned from a native icon, so the game's UIListLayout positions it for us.
+function State.LogoBadges.ApplyCustomLogos(Container)
+if typeof(Container) ~= 'Instance' then return end
+if #State.CustomLogos == 0 then return end
+local Template = Container:FindFirstChild(State.LogoBadges.CustomTemplate)
+if not Template or not Template:IsA('ImageLabel') then
+Template = nil
+for _, Child in ipairs(Container:GetChildren()) do
+if Child:IsA('ImageLabel') and not Child.Name:find(State.LogoBadges.CustomPrefix, 1, true) then
+Template = Child
+break
+end
+end
+end
+if not Template then return end
+for Index, Id in ipairs(State.CustomLogos) do
+local IconName = State.LogoBadges.CustomPrefix .. tostring(Id)
+local Icon = Container:FindFirstChild(IconName)
+if not Icon then
+local Ok, Clone = pcall(function() return Template:Clone() end)
+if Ok and Clone then
+-- Parent first so Roblox content system starts loading the image immediately.
+pcall(function()
+Clone.Name = IconName
+Clone.LayoutOrder = 50 + Index
+Clone.Visible = false
+Clone.Parent = Container
+end)
+-- Now set the image + appearance after parenting.
+pcall(function()
+local Gradient = Clone:FindFirstChildOfClass('UIGradient')
+if Gradient then Gradient:Destroy() end
+-- Try decal resolution first: Roblox auto-resolves decal IDs to their
+-- backing texture when Content is set via the rbxassetid:// scheme.
+-- Setting ScaleType to Fit ensures odd-ratio decals still show cleanly.
+Clone.ScaleType = Enum.ScaleType.Fit
+Clone.Image = State.LogoBadges.ResolveCustomImage(Id)
+Clone.ImageColor3 = Color3.fromRGB(255, 255, 255)
+Clone.ImageTransparency = 0
+Clone.BackgroundTransparency = 1
+Clone.Visible = true
+end)
+table.insert(State.LogoBadges.CustomInstances, Clone)
+Icon = Clone
+end
+end
+if Icon then
+pcall(function()
+Icon.Image = State.LogoBadges.ResolveCustomImage(Id)
+Icon.Visible = true
+end)
+end
+end
+end
+
+-- Keeps the clear button's counter honest.
+function State.LogoBadges.RefreshCustomButtons()
+if State.LogoBadges.ClearButton then
+pcall(function()
+State.LogoBadges.ClearButton.Text = 'Clear custom logos (' .. tostring(#State.CustomLogos) .. ')'
+end)
+end
+end
+
+-- Reads the id box, adds it, and reports bad input through the placeholder.
+function State.LogoBadges.AddFromBox()
+local Box = State.LogoBadges.CustomBox
+if not Box then return end
+local Ok, Reason = State.LogoBadges.AddCustomLogo(Box.Text)
+Box.Text = ''
+if not Ok then
+Box.PlaceholderText = tostring(Reason)
+task.delay(2, function()
+if State.LogoBadges.CustomBox then
+State.LogoBadges.CustomBox.PlaceholderText = 'Logo asset id'
+end
+end)
+end
+State.LogoBadges.RefreshCustomButtons()
+end
+
+function State.LogoBadges.ClearCustomFromUI()
+State.LogoBadges.ClearCustomIcons(true)
+State.LogoBadges.RefreshCustomButtons()
+if State.LogoBadges.AnyActive() then pcall(State.LogoBadges.Apply) end
+end
+
 -- Overhead logos on the character. Forced directly because the server-side
 -- renderer only shows logos the account actually owns.
 function State.LogoBadges.ApplyCreatorTag()
@@ -3515,13 +3701,29 @@ State.LogoBadges.SetUI(Element, 'Visible', true)
 end
 end
 end
+if #State.CustomLogos > 0 then
+State.LogoBadges.SetUI(CreatorTag, 'Size', UDim2.new(3.5 + 0.6 * #State.CustomLogos, 0, 0.649999976, 0))
+end
+State.LogoBadges.ApplyCustomLogos(CreatorTag)
 end
 
 function State.LogoBadges.Apply()
-if not State.LogoBadges.AnyActive() then return end
+if not State.LogoBadges.AnyActive() then
+-- Nothing enabled. Restore attributes, restore UI, destroy custom icons.
+for LogoName in pairs(State.LocalLogos) do
+local Original = State.Cosmetics.Originals[LogoName] or false
+if safe_get_attribute(LP, LogoName) ~= Original then
+pcall(function() LP:SetAttribute(LogoName, Original) end)
+end
+end
+State.LogoBadges.RestoreUI()
+State.LogoBadges.ClearCustomIcons(false)
+return
+end
 for LogoName, Enabled in pairs(State.LocalLogos) do
-if Enabled and safe_get_attribute(LP, LogoName) ~= true then
-pcall(function() LP:SetAttribute(LogoName, true) end)
+local Target = Enabled or State.Cosmetics.Originals[LogoName] or false
+if safe_get_attribute(LP, LogoName) ~= Target then
+pcall(function() LP:SetAttribute(LogoName, Target) end)
 end
 end
 pcall(State.LogoBadges.ApplyPlayerlist)
@@ -23854,12 +24056,65 @@ function(Value) State.Cosmetics.SetLocalCosmeticSpoof(Value, true) end
 CreateSectionHeader(CosmeticsGroup, 61, 'Logos')
 HubUI.Controls.LogoVIP = CreateCheckbox(CosmeticsGroup, 81, 'VIP logo', State.LocalLogos.VIP, function(Value) State.Cosmetics.SetLocalLogoSpoof('VIP', Value) end)
 HubUI.Controls.LogoYoutube = CreateCheckbox(CosmeticsGroup, 103, 'YouTube logo', State.LocalLogos.Youtuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('Youtuber', Value) end)
-HubUI.Controls.LogoSilverYoutube = CreateCheckbox(CosmeticsGroup, 125, 'Silver YouTube logo', State.LocalLogos.SilverYoutuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('SilverYoutuber', Value) end)
-HubUI.Controls.LogoGoldYoutube = CreateCheckbox(CosmeticsGroup, 147, 'Gold YouTube logo', State.LocalLogos.GoldYoutuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('GoldYoutuber', Value) end)
-HubUI.Controls.LogoTwitch = CreateCheckbox(CosmeticsGroup, 169, 'Twitch logo', State.LocalLogos.Twitch, function(Value) State.Cosmetics.SetLocalLogoSpoof('Twitch', Value) end)
-HubUI.Controls.LogoBooster = CreateCheckbox(CosmeticsGroup, 191, 'Booster logo', State.LocalLogos.Booster, function(Value) State.Cosmetics.SetLocalLogoSpoof('Booster', Value) end)
-HubUI.Controls.LogoTester = CreateCheckbox(CosmeticsGroup, 213, 'Tester logo', State.LocalLogos.Tester, function(Value) State.Cosmetics.SetLocalLogoSpoof('Tester', Value) end)
-HubUI.Controls.LogoStaff = CreateCheckbox(CosmeticsGroup, 235, 'Staff logo', State.LocalLogos.Staff, function(Value) State.Cosmetics.SetLocalLogoSpoof('Staff', Value) end)
+HubUI.Controls.LogoTwitch = CreateCheckbox(CosmeticsGroup, 125, 'Twitch logo', State.LocalLogos.Twitch, function(Value) State.Cosmetics.SetLocalLogoSpoof('Twitch', Value) end)
+HubUI.Controls.LogoBooster = CreateCheckbox(CosmeticsGroup, 147, 'Booster logo', State.LocalLogos.Booster, function(Value) State.Cosmetics.SetLocalLogoSpoof('Booster', Value) end)
+HubUI.Controls.LogoTester = CreateCheckbox(CosmeticsGroup, 169, 'Tester logo', State.LocalLogos.Tester, function(Value) State.Cosmetics.SetLocalLogoSpoof('Tester', Value) end)
+HubUI.Controls.LogoStaff = CreateCheckbox(CosmeticsGroup, 191, 'Staff logo', State.LocalLogos.Staff, function(Value) State.Cosmetics.SetLocalLogoSpoof('Staff', Value) end)
+State.LogoBadges.CustomBox = New('TextBox', {
+Position = UDim2.fromOffset(8, 211),
+Size = UDim2.new(0.58, -10, 0, 20),
+BackgroundColor3 = Theme.Surface,
+BorderSizePixel = 0,
+ClearTextOnFocus = false,
+Font = Enum.Font.Code,
+PlaceholderText = 'Logo asset id',
+Text = '',
+TextColor3 = Theme.Text,
+PlaceholderColor3 = Theme.Muted,
+TextSize = 11,
+ZIndex = 6,
+}, CosmeticsGroup)
+AccentStroke(State.LogoBadges.CustomBox, 1, 0.18)
+State.LogoBadges.AddButton = New('TextButton', {
+Position = UDim2.new(0.58, 2, 0, 211),
+Size = UDim2.new(0.42, -10, 0, 20),
+BackgroundColor3 = Theme.Surface,
+BorderSizePixel = 0,
+AutoButtonColor = false,
+Font = Enum.Font.Code,
+Text = 'Add logo',
+TextColor3 = Theme.Text,
+TextSize = 10,
+ZIndex = 5,
+}, CosmeticsGroup)
+AccentStroke(State.LogoBadges.AddButton, 1, 0.2)
+State.LogoBadges.ClearButton = New('TextButton', {
+Position = UDim2.fromOffset(8, 235),
+Size = UDim2.new(1, -18, 0, 20),
+BackgroundColor3 = Theme.Surface,
+BorderSizePixel = 0,
+AutoButtonColor = false,
+Font = Enum.Font.Code,
+Text = 'Clear custom logos (0)',
+TextColor3 = Theme.Text,
+TextSize = 10,
+ZIndex = 5,
+}, CosmeticsGroup)
+AccentStroke(State.LogoBadges.ClearButton, 1, 0.2)
+State.LogoBadges.RefreshCustomButtons()
+GiveSignal(State.LogoBadges.CustomBox.FocusLost:Connect(function(EnterPressed)
+if EnterPressed then State.LogoBadges.AddFromBox() end
+end))
+GiveSignal(State.LogoBadges.AddButton.MouseButton1Click:Connect(State.LogoBadges.AddFromBox))
+GiveSignal(State.LogoBadges.ClearButton.MouseButton1Click:Connect(State.LogoBadges.ClearCustomFromUI))
+HubUI.Controls.AddCustomLogoAction = {
+SearchRoot = State.LogoBadges.AddButton, SearchParent = CosmeticsGroup,
+SearchLabel = 'Add custom logo', Kind = 'Action', Trigger = State.LogoBadges.AddFromBox,
+}
+HubUI.Controls.ClearCustomLogoAction = {
+SearchRoot = State.LogoBadges.ClearButton, SearchParent = CosmeticsGroup,
+SearchLabel = 'Clear custom logos', Kind = 'Action', Trigger = State.LogoBadges.ClearCustomFromUI,
+}
 
 CreateSectionHeader(CosmeticsGroup, 263, 'Equipped appearance')
 HubUI.Controls.LocalAura = CreateDropdown(CosmeticsGroup, 283, 'Ball aura', AuraOptions, State.LocalAura, function(Value)
@@ -27004,8 +27259,6 @@ CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.LocalCourtSkinSpoof, State.LocalCourtSkinSpoofEnabled },
 { HubUI.Controls.LogoVIP, State.LocalLogos.VIP },
 { HubUI.Controls.LogoYoutube, State.LocalLogos.Youtuber },
-{ HubUI.Controls.LogoSilverYoutube, State.LocalLogos.SilverYoutuber },
-{ HubUI.Controls.LogoGoldYoutube, State.LocalLogos.GoldYoutuber },
 { HubUI.Controls.LogoTwitch, State.LocalLogos.Twitch },
 { HubUI.Controls.LogoBooster, State.LocalLogos.Booster },
 { HubUI.Controls.LogoTester, State.LocalLogos.Tester },
