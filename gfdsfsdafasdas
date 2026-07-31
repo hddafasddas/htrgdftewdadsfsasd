@@ -627,28 +627,89 @@ end
 local VirtualInputManager = cloneref(game:GetService('VirtualInputManager'))
 
 do
-local Required = {
-getactors = getactors,
-run_on_actor = run_on_actor,
-hookfunction = hookfunction,
-getrawmetatable = getrawmetatable,
-newcclosure = newcclosure,
-isfunctionhooked = isfunctionhooked,
-restorefunction = restorefunction,
-}
-local Missing
-for _, Name in ipairs({
-'getactors', 'run_on_actor', 'hookfunction', 'getrawmetatable',
-'newcclosure', 'isfunctionhooked', 'restorefunction',
-}) do
-if type(Required[Name]) ~= 'function' then
-Missing = Missing and (Missing .. ', ' .. Name) or Name
+-- ===== EXECUTOR COMPATIBILITY LAYER =====
+-- Instead of aborting on executors that are missing functions, fill the
+-- gaps with safe fallbacks and record what had to be degraded.
+local Compat = { Missing = {}, Shimmed = {} }
+GlobalEnv.__GEH_COMPAT = Compat
+
+-- getrawmetatable: fall back to debug.getmetatable (identical on most executors).
+if type(getrawmetatable) ~= 'function' then
+if type(debug) == 'table' and type(debug.getmetatable) == 'function' then
+GlobalEnv.getrawmetatable = debug.getmetatable
+table.insert(Compat.Shimmed, 'getrawmetatable')
+else
+Compat.NoRawMeta = true
+table.insert(Compat.Missing, 'getrawmetatable')
 end
 end
-if Missing then
-Notify('GOLDEN EAGLE HUB', 'Executor missing: ' .. Missing)
-warn('[GOLDEN EAGLE HUB] Missing required function(s): ' .. Missing)
-return
+
+-- newcclosure: a plain passthrough keeps every feature working (the wrapper
+-- only exists to disguise hooks as C closures).
+if type(newcclosure) ~= 'function' then
+GlobalEnv.newcclosure = function(Fn) return Fn end
+table.insert(Compat.Shimmed, 'newcclosure')
+end
+
+-- hookfunction: try the common aliases before giving up.
+if type(hookfunction) ~= 'function' then
+local Alias = (type(replaceclosure) == 'function' and replaceclosure)
+or (type(hookfunc) == 'function' and hookfunc)
+or (type(detour_function) == 'function' and detour_function)
+if Alias then
+GlobalEnv.hookfunction = Alias
+table.insert(Compat.Shimmed, 'hookfunction')
+else
+Compat.NoHooking = true
+table.insert(Compat.Missing, 'hookfunction')
+end
+end
+
+-- isfunctionhooked / restorefunction: when absent, wrap hookfunction with a
+-- registry that remembers each original so hooks stay checkable + reversible.
+if not Compat.NoHooking
+and (type(isfunctionhooked) ~= 'function' or type(restorefunction) ~= 'function') then
+local RealHook = (type(hookfunction) == 'function' and hookfunction) or GlobalEnv.hookfunction
+local HookOriginals = setmetatable({}, { __mode = 'k' })
+GlobalEnv.hookfunction = function(Target, Replacement)
+local Original = RealHook(Target, Replacement)
+if HookOriginals[Target] == nil then HookOriginals[Target] = Original end
+return Original
+end
+if type(isfunctionhooked) ~= 'function' then
+GlobalEnv.isfunctionhooked = function(Target)
+return HookOriginals[Target] ~= nil
+end
+table.insert(Compat.Shimmed, 'isfunctionhooked')
+end
+if type(restorefunction) ~= 'function' then
+GlobalEnv.restorefunction = function(Target)
+local Original = HookOriginals[Target]
+if Original ~= nil then
+RealHook(Target, Original)
+HookOriginals[Target] = nil
+end
+end
+table.insert(Compat.Shimmed, 'restorefunction')
+end
+end
+
+-- Actor functions are optional: without them the hub runs in main-VM mode
+-- and Silent Aim relies on the verified main-VM CameraData spoof alone.
+if type(getactors) ~= 'function' or type(run_on_actor) ~= 'function' then
+Compat.NoActors = true
+table.insert(Compat.Missing, 'getactors/run_on_actor')
+end
+
+if Compat.NoHooking then
+Notify('GOLDEN EAGLE HUB', 'No hookfunction or alias found - aim spoof features are disabled, everything else works.')
+warn('[GOLDEN EAGLE HUB] Compatibility mode, missing: ' .. table.concat(Compat.Missing, ', '))
+elseif #Compat.Shimmed > 0 or #Compat.Missing > 0 then
+local Parts = {}
+if #Compat.Shimmed > 0 then table.insert(Parts, 'shimmed: ' .. table.concat(Compat.Shimmed, ', ')) end
+if Compat.NoActors then table.insert(Parts, 'main-VM mode (no actor support)') end
+Notify('GOLDEN EAGLE HUB', 'Compatibility mode - ' .. table.concat(Parts, '; '))
+warn('[GOLDEN EAGLE HUB] Compatibility mode - ' .. table.concat(Parts, '; '))
 end
 end
 
@@ -10996,6 +11057,12 @@ local MyGeneration = SilentAim.EnsureGeneration
 SilentAim.HookNewActors()
 
 if SilentAim.ActorHookCount == 0 then
+if GlobalEnv.__GEH_COMPAT and GlobalEnv.__GEH_COMPAT.NoActors then
+-- No actor support on this executor: the main-VM CameraData spoof was
+-- installed and live-verified above, so run Silent Aim from it alone.
+SilentAim.ActorAimReady = true
+return true
+end
 SilentAim.ActorAimReady = false
 Notify('GOLDEN EAGLE HUB', 'No actors found to hook - Silent Aim inactive.')
 return false
@@ -17565,6 +17632,9 @@ end)
 local AimToggleGeneration = 0
 
 local function ActorsAvailable()
+-- Executors without actor support skip the wait and go straight to the
+-- main-VM CameraData spoof.
+if GlobalEnv.__GEH_COMPAT and GlobalEnv.__GEH_COMPAT.NoActors then return true end
 local Ok, Actors = pcall(getactors)
 return Ok and type(Actors) == 'table' and next(Actors) ~= nil
 end
