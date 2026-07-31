@@ -529,6 +529,8 @@ GhostLoop = false,
 AnklesReach = false,
 AnklesReachRadius = 8,
 Desync = false,
+DesyncVisualizer = false,
+DesyncVisualizerTransparency = 0.8,
 Outline = false,
 OutlineMode = 'both',
 JumpBeforePass = true,
@@ -19299,6 +19301,189 @@ end
 if HubUI.Sync then HubUI.Sync() end
 end
 
+-- Client/server desync visualizer. Renders a ghost outline of your rig at the
+-- estimated server position (red) alongside your rendered client rig (green).
+-- The server estimate is ping-delayed based on current network latency.
+State.DesyncVisualizer = {
+Enabled = false,
+Status = 'off',
+Ghost = nil,
+GhostParts = {},
+SourceParts = {},
+SourceCharacter = nil,
+ClientHighlight = nil,
+ServerHighlight = nil,
+History = {},
+FrozenCFrame = nil,
+WarnedUpdate = false,
+}
+
+function State.DesyncVisualizer.DestroyGhost()
+if State.DesyncVisualizer.Ghost then pcall(function() State.DesyncVisualizer.Ghost:Destroy() end) end
+if State.DesyncVisualizer.ServerHighlight then pcall(function() State.DesyncVisualizer.ServerHighlight:Destroy() end) end
+if State.DesyncVisualizer.ClientHighlight then pcall(function() State.DesyncVisualizer.ClientHighlight:Destroy() end) end
+State.DesyncVisualizer.Ghost = nil
+State.DesyncVisualizer.ServerHighlight = nil
+State.DesyncVisualizer.ClientHighlight = nil
+State.DesyncVisualizer.SourceCharacter = nil
+table.clear(State.DesyncVisualizer.GhostParts)
+table.clear(State.DesyncVisualizer.SourceParts)
+table.clear(State.DesyncVisualizer.History)
+State.DesyncVisualizer.FrozenCFrame = nil
+end
+
+function State.DesyncVisualizer.BuildGhost()
+State.DesyncVisualizer.DestroyGhost()
+local Character = LP.Character
+local Root = Character and safe_find(Character, 'HumanoidRootPart')
+if not (Character and Root) then
+State.DesyncVisualizer.Status = 'waiting for character'
+return false
+end
+local Ghost = State.GhostReplay.CloneCompleteInstance(Character)
+if not Ghost then
+State.DesyncVisualizer.Status = 'snapshot failed'
+return false
+end
+Ghost.Name = 'GoldenEagleDesyncGhost'
+local Transparency = math.clamp(tonumber(CONFIG.DesyncVisualizerTransparency) or 0.8, 0.05, 1)
+for _, Object in ipairs(Ghost:GetDescendants()) do
+if Object:IsA('Script') or Object:IsA('LocalScript') or Object:IsA('ModuleScript')
+or Object:IsA('Sound') or Object:IsA('BillboardGui') or Object:IsA('ProximityPrompt')
+or Object:IsA('ForceField') then
+Object:Destroy()
+elseif Object:IsA('Humanoid') then
+Object.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+Object.NameDisplayDistance = 0
+Object.HealthDisplayDistance = 0
+Object.AutoRotate = false
+Object.PlatformStand = true
+Object.BreakJointsOnDeath = false
+-- Stop the Humanoid state machine from re-enabling limb collisions each step.
+pcall(function() Object.EvaluateStateMachine = false end)
+pcall(function() Object:ChangeState(Enum.HumanoidStateType.Physics) end)
+elseif Object:IsA('BasePart') then
+Object.Anchored = true
+Object.CanCollide = false
+Object.CanTouch = false
+Object.CanQuery = false
+Object.Massless = true
+Object.CastShadow = false
+Object.LocalTransparencyModifier = Transparency
+end
+end
+local Map = {}
+for _, Object in ipairs(Ghost:GetDescendants()) do
+if Object:IsA('BasePart') then
+Map[State.GhostReplay.GetPartPath(Object, Ghost)] = Object
+end
+end
+for _, Object in ipairs(Character:GetDescendants()) do
+if Object:IsA('BasePart') then
+local Twin = Map[State.GhostReplay.GetPartPath(Object, Character)]
+if Twin then
+table.insert(State.DesyncVisualizer.SourceParts, Object)
+table.insert(State.DesyncVisualizer.GhostParts, Twin)
+end
+end
+end
+Ghost.Parent = HiddenWorld()
+local ServerHighlight = Instance.new('Highlight')
+ServerHighlight.Name = 'GoldenEagleDesyncServerHighlight'
+ServerHighlight.Adornee = Ghost
+ServerHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+ServerHighlight.FillColor = Color3.fromRGB(255, 64, 64)
+ServerHighlight.FillTransparency = 0.9
+ServerHighlight.OutlineColor = Color3.fromRGB(255, 70, 70)
+ServerHighlight.OutlineTransparency = 0
+ServerHighlight.Parent = HiddenGui()
+local ClientHighlight = Instance.new('Highlight')
+ClientHighlight.Name = 'GoldenEagleDesyncClientHighlight'
+ClientHighlight.Adornee = Character
+ClientHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+ClientHighlight.FillTransparency = 1
+ClientHighlight.OutlineColor = Color3.fromRGB(64, 255, 96)
+ClientHighlight.OutlineTransparency = 0
+ClientHighlight.Parent = HiddenGui()
+State.DesyncVisualizer.Ghost = Ghost
+State.DesyncVisualizer.ServerHighlight = ServerHighlight
+State.DesyncVisualizer.ClientHighlight = ClientHighlight
+State.DesyncVisualizer.SourceCharacter = Character
+State.DesyncVisualizer.Status = 'active'
+return true
+end
+
+function State.DesyncVisualizer.EstimateServerRootCFrame(RootCFrame, Now)
+State.DesyncVisualizer.FrozenCFrame = nil
+local Delay = math.clamp((State.Utility.GetPing() or 0) / 1000, 0.03, 0.6)
+local History = State.DesyncVisualizer.History
+local Best = RootCFrame
+for Index = #History, 1, -1 do
+local Entry = History[Index]
+if Now - Entry[1] >= Delay then
+Best = Entry[2]
+break
+end
+end
+return Best
+end
+
+function State.DesyncVisualizer.Update()
+if not State.DesyncVisualizer.Enabled then return end
+local Character = LP.Character
+local Root = Character and safe_find(Character, 'HumanoidRootPart')
+if not (Character and Root) then
+State.DesyncVisualizer.Status = 'waiting for character'
+return
+end
+if State.DesyncVisualizer.SourceCharacter ~= Character
+or not State.DesyncVisualizer.Ghost
+or not State.DesyncVisualizer.Ghost.Parent then
+if not State.DesyncVisualizer.BuildGhost() then return end
+end
+local Now = os.clock()
+local History = State.DesyncVisualizer.History
+table.insert(History, { Now, Root.CFrame })
+while #History > 0 and Now - History[1][1] > 2 do
+table.remove(History, 1)
+end
+local ServerRoot = State.DesyncVisualizer.EstimateServerRootCFrame(Root.CFrame, Now)
+local ToServer = ServerRoot * Root.CFrame:Inverse()
+for Index, SourcePart in ipairs(State.DesyncVisualizer.SourceParts) do
+local GhostPart = State.DesyncVisualizer.GhostParts[Index]
+if GhostPart and GhostPart.Parent and SourcePart and SourcePart.Parent then
+GhostPart.CFrame = ToServer * SourcePart.CFrame
+-- The Humanoid can flip these back on; force the ghost to stay intangible.
+if GhostPart.CanCollide then GhostPart.CanCollide = false end
+if GhostPart.CanTouch then GhostPart.CanTouch = false end
+if GhostPart.CanQuery then GhostPart.CanQuery = false end
+if not GhostPart.Anchored then GhostPart.Anchored = true end
+end
+end
+local Gap = (ServerRoot.Position - Root.Position).Magnitude
+State.DesyncVisualizer.Status = string.format('active  gap %.1f studs', Gap)
+end
+
+function State.DesyncVisualizer.SetEnabled(Enabled)
+State.DesyncVisualizer.Enabled = Enabled == true
+CONFIG.DesyncVisualizer = State.DesyncVisualizer.Enabled
+if State.DesyncVisualizer.Enabled then
+State.DesyncVisualizer.BuildGhost()
+else
+State.DesyncVisualizer.DestroyGhost()
+State.DesyncVisualizer.Status = 'off'
+end
+if HubUI.Sync then HubUI.Sync() end
+end
+
+GiveSignal(RunService.RenderStepped:Connect(WYNF_JIT(function()
+local Ok, Err = pcall(State.DesyncVisualizer.Update)
+if not Ok and not State.DesyncVisualizer.WarnedUpdate then
+State.DesyncVisualizer.WarnedUpdate = true
+warn('[GOLDEN EAGLE HUB] Desync visualizer update failed: ' .. tostring(Err))
+end
+end)))
+
 State.Outline = {
 Enabled = CONFIG.Outline == true,
 Mode = CONFIG.OutlineMode or 'both',
@@ -20077,6 +20262,8 @@ LockWindow = false,
 Font = 'Code',
 KeybindMenuVisible = true,
 KeybindMenuPosition = { X = -14, Y = 86 },
+ActiveHudVisible = false,
+ActiveHudPosition = { X = 14, Y = 220 },
 MobileSupportEnabled = true,
 MobileQuickVisible = true,
 MobileLauncherPosition = { X = -18, Y = 0 },
@@ -20507,6 +20694,11 @@ InterfaceConfig.KeybindMenuPosition = type(InterfaceConfig.KeybindMenuPosition) 
 and InterfaceConfig.KeybindMenuPosition or DeepCopy(InterfaceDefaults.KeybindMenuPosition)
 InterfaceConfig.KeybindMenuPosition.X = tonumber(InterfaceConfig.KeybindMenuPosition.X) or -14
 InterfaceConfig.KeybindMenuPosition.Y = tonumber(InterfaceConfig.KeybindMenuPosition.Y) or 86
+InterfaceConfig.ActiveHudVisible = InterfaceConfig.ActiveHudVisible == true
+InterfaceConfig.ActiveHudPosition = type(InterfaceConfig.ActiveHudPosition) == 'table'
+and InterfaceConfig.ActiveHudPosition or DeepCopy(InterfaceDefaults.ActiveHudPosition)
+InterfaceConfig.ActiveHudPosition.X = tonumber(InterfaceConfig.ActiveHudPosition.X) or 14
+InterfaceConfig.ActiveHudPosition.Y = tonumber(InterfaceConfig.ActiveHudPosition.Y) or 220
 InterfaceConfig.MobileSupportEnabled = InterfaceConfig.MobileSupportEnabled ~= false
 InterfaceConfig.MobileQuickVisible = InterfaceConfig.MobileQuickVisible ~= false
 InterfaceConfig.MobileLauncherPosition = type(InterfaceConfig.MobileLauncherPosition) == 'table'
@@ -20817,6 +21009,7 @@ ResetOnSpawn = false,
 ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, GuiParent)
 HubUI.ScreenGui = ScreenGui
+pcall(function() UserInputService.MouseIconEnabled = true end)
 HubUI.IntroPlaying = true
 
 -- Full-screen scrim so the intro reads as a deliberate loading state
@@ -22052,8 +22245,8 @@ local UtilitySafetyGroup = CreateGroup('Performance & Safety', Pages.Utilities, 
 HubUI.GhostRecordGroup = CreateGroup('Ghost Recording', Pages.Replay, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 HubUI.GhostPlaybackGroup = CreateGroup('Ghost Playback', Pages.Replay, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local PrivacyGroup = CreateGroup('Local Identity Privacy', Pages.Privacy, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
-local CosmeticsGroup = CreateGroup('Logos & Ball Cosmetics', Pages.Cosmetics, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
-local CosmeticSpoofsGroup = CreateGroup('REP, ELO & Goal Effects', Pages.Cosmetics, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+local CosmeticsGroup = CreateGroup('Appearance & Profile Logos', Pages.Cosmetics, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+local CosmeticSpoofsGroup = CreateGroup('Profile, Rank & Celebrations', Pages.Cosmetics, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 HubUI.BallTrailGroup = CreateGroup('Trail, Audio & Presets', Pages.BallStudio, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 HubUI.BallSkinGroup = CreateGroup('Ball Models & Effects', Pages.BallStudio, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local MovementCoreGroup = CreateGroup('Walk & Jump', Pages.Movement, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
@@ -24008,7 +24201,7 @@ CosmeticSpoofsGroup, 123, 'REP image', State.LocalSpoofs.RankImageOptions, State
 function(Value) State.LocalSpoofs.SetRepImage(State.LocalRepImageSpoofEnabled, Value, true) end, 145
 )
 
-CreateSectionHeader(CosmeticSpoofsGroup, 155, 'Goal effect')
+CreateSectionHeader(CosmeticSpoofsGroup, 155, 'Goal celebration')
 HubUI.Controls.LocalGoalEffectSpoof = CreateCheckbox(
 CosmeticSpoofsGroup, 175, 'Spoof goal effect locally', State.LocalGoalEffectSpoofEnabled,
 function(Value) State.LocalSpoofs.SetGoalEffect(Value, true) end
@@ -24308,7 +24501,7 @@ Trigger = function() SetCustomGoalEditorVisible(true) end,
 HubUI.CustomGoalOverlay = CustomGoalOverlay
 HubUI.SetCustomGoalEditorVisible = SetCustomGoalEditorVisible
 end
-CreateSectionHeader(CosmeticSpoofsGroup, 231, 'Profile stats & match history (local)')
+CreateSectionHeader(CosmeticSpoofsGroup, 231, 'Stats & match card')
 HubUI.Controls.LocalStatsSpoof = CreateCheckbox(
 CosmeticSpoofsGroup, 251, 'Spoof stats, banner & boards', State.LocalStatsSpoofEnabled,
 function(Value) State.LocalSpoofs.SetStatsSpoof(Value) end
@@ -24359,7 +24552,7 @@ BorderSizePixel=0, AutoButtonColor=false, Font=Enum.Font.Code, Text='Leaderboard
 TextColor3=Theme.Text, TextSize=9, ZIndex=6,
 }, CosmeticSpoofsGroup)
 AccentStroke(ClearFake,1,0.2)
-CreateSectionHeader(CosmeticSpoofsGroup, 372, 'Clan & achievements (local)')
+CreateSectionHeader(CosmeticSpoofsGroup, 372, 'Clan & achievements')
 HubUI.Controls.LocalClanSpoof = CreateCheckbox(
 CosmeticSpoofsGroup, 392, 'Show custom clan details locally', State.LocalClanSpoofEnabled,
 function(Value) State.LocalSpoofs.SetClanSpoof(Value) end
@@ -25131,58 +25324,77 @@ CONFIG.ShotSoundDuration = Value
 if HubUI.Controls.BallPreset then HubUI.Controls.BallPreset:Set('Custom', false) end
 end)
 
-CreateSectionHeader(CosmeticsGroup, 9, 'Master')
+CreateSectionHeader(CosmeticsGroup, 9, 'Local appearance')
 HubUI.Controls.LocalCosmeticSpoof = CreateCheckbox(
-CosmeticsGroup, 29, 'Enable local cosmetics', State.LocalCosmeticSpoofEnabled,
+CosmeticsGroup, 29, 'Enable cosmetic previews', State.LocalCosmeticSpoofEnabled,
 function(Value) State.Cosmetics.SetLocalCosmeticSpoof(Value, true) end
 )
+HubUI.Controls.LocalAura = CreateDropdown(CosmeticsGroup, 59, 'Ball aura', AuraOptions, State.LocalAura, function(Value)
+State.LocalAura = Value; CONFIG.LocalAura = Value
+if Value == 'None' then State.BallStudio.HardUnequip(GetLocalBallHandle(), 'Aura') end
+State.Cosmetics.ApplyLocalCosmetics()
+end, 125)
+HubUI.Controls.LocalTrail = CreateDropdown(CosmeticsGroup, 87, 'Ball trail', TrailOptions, State.LocalTrail, function(Value)
+State.LocalTrail = Value; CONFIG.LocalTrail = Value
+if Value == 'None' then State.BallStudio.HardUnequip(GetLocalBallHandle(), 'Trail') end
+State.Cosmetics.ApplyLocalCosmetics()
+end, 125)
+HubUI.Controls.LocalBall = CreateDropdown(CosmeticsGroup, 115, 'Ball skin', BallOptions, State.LocalBall, function(Value)
+State.LocalBall = Value; CONFIG.LocalBall = Value
+if Value == 'None' then State.BallStudio.HardUnequip(GetLocalBallHandle(), 'Ball') end
+State.Cosmetics.ApplyLocalCosmetics()
+end, 125)
+HubUI.Controls.LocalBodyAura = CreateDropdown(CosmeticsGroup, 143, 'Body aura', BodyAuraOptions, State.LocalBodyAura, function(Value)
+State.LocalBodyAura = Value; CONFIG.LocalBodyAura = Value
+if Value == 'None' then State.BallStudio.StripBodyAura(LP.Character) end
+State.Cosmetics.Runtime.Character = nil
+State.Cosmetics.ApplyLocalCosmetics()
+end, 125)
+HubUI.Controls.LocalCourtSkin = CreateDropdown(
+CosmeticsGroup, 171, 'Court skin',
+State.LocalCosmeticExtras.CourtSkinOptions, State.LocalCourtSkin,
+function(Value)
+State.LocalCourtSkin = Value
+CONFIG.LocalCourtSkin = Value
+if State.LocalCourtSkinSpoofEnabled then State.LocalCosmeticExtras.SetCourtSkin(true, Value, true) end
+end, 130
+)
+HubUI.Controls.LocalCourtSkinSpoof = CreateCheckbox(
+CosmeticsGroup, 199, 'Apply court skin preview', State.LocalCourtSkinSpoofEnabled,
+function(Value) State.LocalCosmeticExtras.SetCourtSkin(Value, State.LocalCourtSkin, true) end
+)
+local CustomChatTagIndex = table.find(State.LocalCosmeticExtras.ChatTagStyles, 'Custom tag')
+if CustomChatTagIndex then table.remove(State.LocalCosmeticExtras.ChatTagStyles, CustomChatTagIndex) end
+HubUI.Controls.LocalChatTagStyle = CreateDropdown(
+CosmeticsGroup, 227, 'Chat tag style', State.LocalCosmeticExtras.ChatTagStyles,
+State.LocalCosmeticExtras.DescribeChatTagStyles(),
+function(Value) State.LocalCosmeticExtras.ToggleChatTagStyle(Value, true) end, 130
+)
 
-CreateSectionHeader(CosmeticsGroup, 61, 'Logos')
-HubUI.Controls.LogoVIP = CreateCheckbox(CosmeticsGroup, 81, 'VIP logo', State.LocalLogos.VIP, function(Value) State.Cosmetics.SetLocalLogoSpoof('VIP', Value) end)
-HubUI.Controls.LogoYoutube = CreateCheckbox(CosmeticsGroup, 103, 'YouTube logo', State.LocalLogos.Youtuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('Youtuber', Value) end)
-HubUI.Controls.LogoTwitch = CreateCheckbox(CosmeticsGroup, 125, 'Twitch logo', State.LocalLogos.Twitch, function(Value) State.Cosmetics.SetLocalLogoSpoof('Twitch', Value) end)
-HubUI.Controls.LogoBooster = CreateCheckbox(CosmeticsGroup, 147, 'Booster logo', State.LocalLogos.Booster, function(Value) State.Cosmetics.SetLocalLogoSpoof('Booster', Value) end)
-HubUI.Controls.LogoTester = CreateCheckbox(CosmeticsGroup, 169, 'Tester logo', State.LocalLogos.Tester, function(Value) State.Cosmetics.SetLocalLogoSpoof('Tester', Value) end)
-HubUI.Controls.LogoStaff = CreateCheckbox(CosmeticsGroup, 191, 'Staff logo', State.LocalLogos.Staff, function(Value) State.Cosmetics.SetLocalLogoSpoof('Staff', Value) end)
+CreateSectionHeader(CosmeticsGroup, 263, 'Profile logos')
+HubUI.Controls.LogoVIP = CreateCheckbox(CosmeticsGroup, 283, 'VIP', State.LocalLogos.VIP, function(Value) State.Cosmetics.SetLocalLogoSpoof('VIP', Value) end)
+HubUI.Controls.LogoYoutube = CreateCheckbox(CosmeticsGroup, 305, 'YouTube', State.LocalLogos.Youtuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('Youtuber', Value) end)
+HubUI.Controls.LogoTwitch = CreateCheckbox(CosmeticsGroup, 327, 'Twitch', State.LocalLogos.Twitch, function(Value) State.Cosmetics.SetLocalLogoSpoof('Twitch', Value) end)
+HubUI.Controls.LogoBooster = CreateCheckbox(CosmeticsGroup, 349, 'Booster', State.LocalLogos.Booster, function(Value) State.Cosmetics.SetLocalLogoSpoof('Booster', Value) end)
+HubUI.Controls.LogoTester = CreateCheckbox(CosmeticsGroup, 371, 'Tester', State.LocalLogos.Tester, function(Value) State.Cosmetics.SetLocalLogoSpoof('Tester', Value) end)
+HubUI.Controls.LogoStaff = CreateCheckbox(CosmeticsGroup, 393, 'Staff', State.LocalLogos.Staff, function(Value) State.Cosmetics.SetLocalLogoSpoof('Staff', Value) end)
 State.LogoBadges.CustomBox = New('TextBox', {
-Position = UDim2.fromOffset(8, 211),
-Size = UDim2.new(0.58, -10, 0, 20),
-BackgroundColor3 = Theme.Surface,
-BorderSizePixel = 0,
-ClearTextOnFocus = false,
-Font = Enum.Font.Code,
-PlaceholderText = 'Logo asset id',
-Text = '',
-TextColor3 = Theme.Text,
-PlaceholderColor3 = Theme.Muted,
-TextSize = 11,
-ZIndex = 6,
+Position = UDim2.fromOffset(8, 419), Size = UDim2.new(0.58, -10, 0, 20),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, ClearTextOnFocus = false,
+Font = Enum.Font.Code, PlaceholderText = 'Custom logo asset ID', Text = '',
+TextColor3 = Theme.Text, PlaceholderColor3 = Theme.Muted, TextSize = 11, ZIndex = 6,
 }, CosmeticsGroup)
 AccentStroke(State.LogoBadges.CustomBox, 1, 0.18)
 State.LogoBadges.AddButton = New('TextButton', {
-Position = UDim2.new(0.58, 2, 0, 211),
-Size = UDim2.new(0.42, -10, 0, 20),
-BackgroundColor3 = Theme.Surface,
-BorderSizePixel = 0,
-AutoButtonColor = false,
-Font = Enum.Font.Code,
-Text = 'Add logo',
-TextColor3 = Theme.Text,
-TextSize = 10,
-ZIndex = 5,
+Position = UDim2.new(0.58, 2, 0, 419), Size = UDim2.new(0.42, -10, 0, 20),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = 'Add logo', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, CosmeticsGroup)
 AccentStroke(State.LogoBadges.AddButton, 1, 0.2)
 State.LogoBadges.ClearButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 235),
-Size = UDim2.new(1, -18, 0, 20),
-BackgroundColor3 = Theme.Surface,
-BorderSizePixel = 0,
-AutoButtonColor = false,
-Font = Enum.Font.Code,
-Text = 'Clear custom logos (0)',
-TextColor3 = Theme.Text,
-TextSize = 10,
-ZIndex = 5,
+Position = UDim2.fromOffset(8, 443), Size = UDim2.new(1, -18, 0, 20),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = 'Clear custom logos (0)', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, CosmeticsGroup)
 AccentStroke(State.LogoBadges.ClearButton, 1, 0.2)
 State.LogoBadges.RefreshCustomButtons()
@@ -25191,72 +25403,16 @@ if EnterPressed then State.LogoBadges.AddFromBox() end
 end))
 GiveSignal(State.LogoBadges.AddButton.MouseButton1Click:Connect(State.LogoBadges.AddFromBox))
 GiveSignal(State.LogoBadges.ClearButton.MouseButton1Click:Connect(State.LogoBadges.ClearCustomFromUI))
-HubUI.Controls.AddCustomLogoAction = {
-SearchRoot = State.LogoBadges.AddButton, SearchParent = CosmeticsGroup,
-SearchLabel = 'Add custom logo', Kind = 'Action', Trigger = State.LogoBadges.AddFromBox,
-}
-HubUI.Controls.ClearCustomLogoAction = {
-SearchRoot = State.LogoBadges.ClearButton, SearchParent = CosmeticsGroup,
-SearchLabel = 'Clear custom logos', Kind = 'Action', Trigger = State.LogoBadges.ClearCustomFromUI,
-}
-
-CreateSectionHeader(CosmeticsGroup, 263, 'Equipped appearance')
-HubUI.Controls.LocalAura = CreateDropdown(CosmeticsGroup, 283, 'Ball aura', AuraOptions, State.LocalAura, function(Value)
-State.LocalAura = Value; CONFIG.LocalAura = Value
-if Value == 'None' then State.BallStudio.HardUnequip(GetLocalBallHandle(), 'Aura') end
-State.Cosmetics.ApplyLocalCosmetics()
-end, 125)
-HubUI.Controls.LocalTrail = CreateDropdown(CosmeticsGroup, 311, 'Ball trail', TrailOptions, State.LocalTrail, function(Value)
-State.LocalTrail = Value; CONFIG.LocalTrail = Value
-if Value == 'None' then State.BallStudio.HardUnequip(GetLocalBallHandle(), 'Trail') end
-State.Cosmetics.ApplyLocalCosmetics()
-end, 125)
-HubUI.Controls.LocalBall = CreateDropdown(CosmeticsGroup, 339, 'Ball skin', BallOptions, State.LocalBall, function(Value)
-State.LocalBall = Value; CONFIG.LocalBall = Value
-if Value == 'None' then State.BallStudio.HardUnequip(GetLocalBallHandle(), 'Ball') end
-State.Cosmetics.ApplyLocalCosmetics()
-end, 125)
-HubUI.Controls.LocalCourtSkin = CreateDropdown(
-CosmeticsGroup, 395, 'Court skin',
-State.LocalCosmeticExtras.CourtSkinOptions, State.LocalCourtSkin,
-function(Value)
-State.LocalCourtSkin = Value
-CONFIG.LocalCourtSkin = Value
-if State.LocalCourtSkinSpoofEnabled then
-State.LocalCosmeticExtras.SetCourtSkin(true, Value, true)
-end
-end, 130
-)
-HubUI.Controls.LocalCourtSkinSpoof = CreateCheckbox(
-CosmeticsGroup, 423, 'Apply court skin locally', State.LocalCourtSkinSpoofEnabled,
-function(Value)
-State.LocalCosmeticExtras.SetCourtSkin(Value, State.LocalCourtSkin, true)
-end
-)
--- Custom chat-tag appearance editor removed.
-
-local CustomChatTagIndex = table.find(State.LocalCosmeticExtras.ChatTagStyles, 'Custom tag')
-if CustomChatTagIndex then table.remove(State.LocalCosmeticExtras.ChatTagStyles, CustomChatTagIndex) end
-HubUI.Controls.LocalChatTagStyle = CreateDropdown(
-CosmeticsGroup, 451, 'Chat tags',
-State.LocalCosmeticExtras.ChatTagStyles,
-State.LocalCosmeticExtras.DescribeChatTagStyles(),
-function(Value)
-State.LocalCosmeticExtras.ToggleChatTagStyle(Value, true)
-end, 130
-)
-HubUI.Controls.LocalBodyAura = CreateDropdown(CosmeticsGroup, 367, 'Body aura', BodyAuraOptions, State.LocalBodyAura, function(Value)
-State.LocalBodyAura = Value; CONFIG.LocalBodyAura = Value
-if Value == 'None' then State.BallStudio.StripBodyAura(LP.Character) end
-State.Cosmetics.Runtime.Character = nil
-State.Cosmetics.ApplyLocalCosmetics()
-end, 125)
+HubUI.Controls.AddCustomLogoAction = { SearchRoot = State.LogoBadges.AddButton, SearchParent = CosmeticsGroup, SearchLabel = 'Add custom logo', Kind = 'Action', Trigger = State.LogoBadges.AddFromBox }
+HubUI.Controls.ClearCustomLogoAction = { SearchRoot = State.LogoBadges.ClearButton, SearchParent = CosmeticsGroup, SearchLabel = 'Clear custom logos', Kind = 'Action', Trigger = State.LogoBadges.ClearCustomFromUI }
 
 CreateSectionHeader(LeftGroup, 9, 'Core')
 HubUI.Controls.Desync = CreateCheckbox(HubUI.SyncGroup, 17, 'Desync Detection', State.Desync.Enabled, function(Value) State.Desync.SetEnabled(Value) end)
-HubUI.Controls.Outline = CreateCheckbox(HubUI.SyncGroup, 47, 'Position Outlines', State.Outline.Enabled, function(Value) State.Outline.SetEnabled(Value) end)
-HubUI.Controls.OutlineMode = CreateSelector(HubUI.SyncGroup, 77, 'Show outlines for', { 'both', 'self', 'enemies' }, State.Outline.Mode, function(Value) State.Outline.SetMode(Value) end, 135)
-HubUI.DesyncStatusText = CreateParagraph(HubUI.SyncGroup, UDim2.fromOffset(8, 108), UDim2.new(1, -16, 0, 112), 'status  off\noffset  --\navg offset  --\nsamples  0')
+HubUI.Controls.DesyncVisualizer = CreateCheckbox(HubUI.SyncGroup, 47, 'Position Visualizer', State.DesyncVisualizer.Enabled, function(Value) State.DesyncVisualizer.SetEnabled(Value) end)
+HubUI.Controls.Outline = CreateCheckbox(HubUI.SyncGroup, 77, 'Position Outlines', State.Outline.Enabled, function(Value) State.Outline.SetEnabled(Value) end)
+HubUI.Controls.OutlineMode = CreateSelector(HubUI.SyncGroup, 107, 'Show outlines for', { 'both', 'self', 'enemies' }, State.Outline.Mode, function(Value) State.Outline.SetMode(Value) end, 135)
+HubUI.DesyncStatusText = CreateParagraph(HubUI.SyncGroup, UDim2.fromOffset(8, 138), UDim2.new(1, -16, 0, 82), 'status  off\noffset  --\navg offset  --\nsamples  0')
+if CONFIG.DesyncVisualizer then task.defer(function() State.DesyncVisualizer.SetEnabled(true) end) end
 
 HubUI.Controls.SilentAim = CreateCheckbox(LeftGroup, 29, 'Silent Aim', State.RequestedEnabled, function(Value)
 SetSilentAimEnabled(Value, true)
@@ -28258,6 +28414,7 @@ CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.AntiTravel, State.AntiTravelEnabled },
 { HubUI.Controls.AntiFall, State.AntiFallEnabled },
 { HubUI.Controls.Desync, State.Desync.Enabled },
+{ HubUI.Controls.DesyncVisualizer, State.DesyncVisualizer.Enabled },
 { HubUI.Controls.Outline, State.Outline.Enabled },
 }
 for _, Data in ipairs(SyncValues) do
@@ -28440,6 +28597,960 @@ end)
 end
 end
 
+
+-- ===== QUALITY OF LIFE SUITE =====
+-- Global command palette (CTRL+K), hover tooltips, active-features HUD,
+-- playstyle quick presets, config share codes, and a custom accent picker.
+-- Runs in its own closure for a fresh Luau register budget (200-local limit).
+task.spawn(function()
+local B64Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+local function B64Encode(Data)
+local Out = {}
+for Index = 1, #Data, 3 do
+local A, B, C = string.byte(Data, Index, Index + 2)
+local N = A * 65536 + (B or 0) * 256 + (C or 0)
+local C1 = math.floor(N / 262144) % 64
+local C2 = math.floor(N / 4096) % 64
+local C3 = math.floor(N / 64) % 64
+local C4 = N % 64
+table.insert(Out, string.sub(B64Alphabet, C1 + 1, C1 + 1) .. string.sub(B64Alphabet, C2 + 1, C2 + 1)
+.. (B and string.sub(B64Alphabet, C3 + 1, C3 + 1) or '=')
+.. (C and string.sub(B64Alphabet, C4 + 1, C4 + 1) or '='))
+end
+return table.concat(Out)
+end
+local B64Lookup = {}
+for Index = 1, 64 do B64Lookup[string.sub(B64Alphabet, Index, Index)] = Index - 1 end
+local function B64Decode(Data)
+Data = string.gsub(tostring(Data or ''), '[^%w%+%/%=]', '')
+if #Data == 0 or #Data % 4 ~= 0 then return nil end
+local Out = {}
+for Index = 1, #Data, 4 do
+local C1 = B64Lookup[string.sub(Data, Index, Index)]
+local C2 = B64Lookup[string.sub(Data, Index + 1, Index + 1)]
+local Q3 = string.sub(Data, Index + 2, Index + 2)
+local Q4 = string.sub(Data, Index + 3, Index + 3)
+if not (C1 and C2) then return nil end
+local C3 = Q3 ~= '=' and B64Lookup[Q3] or nil
+local C4 = Q4 ~= '=' and B64Lookup[Q4] or nil
+if Q3 ~= '=' and not C3 then return nil end
+if Q4 ~= '=' and not C4 then return nil end
+local N = C1 * 262144 + C2 * 4096 + (C3 or 0) * 64 + (C4 or 0)
+table.insert(Out, string.char(math.floor(N / 65536) % 256))
+if C3 then table.insert(Out, string.char(math.floor(N / 256) % 256)) end
+if C4 then table.insert(Out, string.char(N % 256)) end
+end
+return table.concat(Out)
+end
+
+-- Shared modal scrim + manager -------------------------------------------
+local ActiveModal
+local Scrim = New('TextButton', {
+Name = 'QoLScrim', Size = UDim2.fromScale(1, 1),
+BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 1,
+BorderSizePixel = 0, AutoButtonColor = false, Text = '', Visible = false, ZIndex = 289,
+}, ScreenGui)
+local function CloseModal()
+if not ActiveModal then return end
+local Modal = ActiveModal
+ActiveModal = nil
+Tween(Modal, 0.14, { GroupTransparency = 1 }, Enum.EasingStyle.Quint)
+Tween(Scrim, 0.14, { BackgroundTransparency = 1 })
+task.delay(0.16, function()
+if ActiveModal ~= Modal then Modal.Visible = false end
+if not ActiveModal then Scrim.Visible = false end
+end)
+end
+local function OpenModal(Modal)
+if ActiveModal == Modal then return end
+if ActiveModal then ActiveModal.Visible = false end
+ActiveModal = Modal
+Scrim.Visible = true
+Tween(Scrim, 0.14, { BackgroundTransparency = 0.45 })
+Modal.Visible = true
+Modal.GroupTransparency = 1
+Tween(Modal, 0.16, { GroupTransparency = 0 }, Enum.EasingStyle.Quint)
+end
+GiveSignal(Scrim.MouseButton1Click:Connect(CloseModal))
+local function MakeModal(Name, Width, Height, Title)
+local Modal = New('CanvasGroup', {
+Name = Name, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.46),
+Size = UDim2.fromOffset(Width, Height), BackgroundColor3 = Theme.Panel, BorderSizePixel = 0,
+Visible = false, GroupTransparency = 1, Active = true, ZIndex = 291,
+}, ScreenGui)
+New('UICorner', { CornerRadius = UDim.new(0, 5) }, Modal)
+AccentStroke(Modal, 1, 0.10)
+local Header = New('TextLabel', {
+Position = UDim2.fromOffset(12, 8), Size = UDim2.new(1, -96, 0, 16), BackgroundTransparency = 1,
+Font = Enum.Font.Code, Text = Title, TextColor3 = Theme.Accent, TextSize = 11,
+TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 292,
+}, Modal)
+BindAccent(Header, 'TextColor3')
+local CloseButton = New('TextButton', {
+AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -8, 0, 6), Size = UDim2.fromOffset(34, 18),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = '[X]', TextColor3 = Theme.Muted, TextSize = 10, ZIndex = 292,
+}, Modal)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, CloseButton)
+GiveSignal(CloseButton.MouseButton1Click:Connect(CloseModal))
+GiveSignal(CloseButton.MouseEnter:Connect(function() Tween(CloseButton, 0.1, { TextColor3 = Theme.Bad }) end))
+GiveSignal(CloseButton.MouseLeave:Connect(function() Tween(CloseButton, 0.1, { TextColor3 = Theme.Muted }) end))
+New('Frame', {
+Position = UDim2.fromOffset(1, 30), Size = UDim2.new(1, -2, 0, 1),
+BackgroundColor3 = Theme.Border, BorderSizePixel = 0, ZIndex = 292,
+}, Modal)
+return Modal
+end
+local function MakeButton(Parent, Position, Size, Text, Callback)
+local Button = New('TextButton', {
+Position = Position, Size = Size, BackgroundColor3 = Theme.Surface, BorderSizePixel = 0,
+AutoButtonColor = false, Font = Enum.Font.Code, Text = Text, TextColor3 = Theme.Text,
+TextSize = 10, ZIndex = 293,
+}, Parent)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, Button)
+AccentStroke(Button, 1, 0.18)
+GiveSignal(Button.MouseButton1Click:Connect(Callback))
+GiveSignal(Button.MouseEnter:Connect(function() Tween(Button, 0.1, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Theme.AccentBright }) end))
+GiveSignal(Button.MouseLeave:Connect(function() Tween(Button, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Text }) end))
+return Button
+end
+
+-- Contextual hover tooltips ------------------------------------------------
+local TooltipText = {
+SilentAim = 'Server-side shot redirection toward the hoop. The ball visually leaves your hands normally. Recommended: ON. Default arc: High.',
+AutoPower = 'Automatically picks a shot power the silent arc can green from your position. Recommended: ON while Silent Aim is on.',
+AutoPowerPreference = 'Which valid power to prefer. Lowest = flattest arc, Highest = rainbow, Closest Current = smallest visible change. Default: Lowest.',
+RequireBall = 'Only arms Silent Aim while you actually hold the basketball, preventing wasted redirects. Recommended: ON.',
+PerfectRelease = 'Times your release for a Perfect Shot rating. Recommended: ON.',
+PerfectReleaseAutoCalibrate = 'Learns from Perfect Shot feedback and nudges the release window automatically. Recommended: ON for your first few games.',
+SilentMode = 'High = normal rainbow arc, Low = flat dart at the rim. Low looks suspicious on full jumpshots. Default: High.',
+Desync = 'Measures the gap between your visual position and the server position. Purely informational overlay.',
+DesyncVisualizer = 'Draws two outlines of your character: green is your rendered position; red is the ping-delayed server-position estimate. This is a visual latency aid, not a desync exploit.',
+Outline = 'Draws server-position outlines so you can see real defender coverage. Recommended mode: enemies.',
+BallMag = 'Pulls loose balls toward you inside the radius. Obvious at high values. Recommended radius: 12 or less.',
+BallReach = 'Extends your steal and pickup hitbox. Values above 8 are visible to good players. Recommended: 6 to 8.',
+AnklesReach = 'Extended reach for ankle-breaker interactions. Pairs with Ball Reach.',
+AntiReach = 'Blocks reach-extended steal attempts against you. Recommended: ON.',
+AntiReachNoStealKeeper = 'Keeps the no-steal window active while you protect the ball.',
+Spinbot = 'Spins your character so ankle animations whiff. Extremely visible. Rage lobbies only.',
+WalkSpeed = 'Overrides movement speed. Values above 20 are easy to spot in replays. Default game speed: 16.',
+InfiniteJump = 'Jump again in mid-air. Very visible. Rage lobbies only.',
+JumpPower = 'Overrides jump height. Subtle below 55, obvious above 65.',
+Flight = 'Free flight rig. Use only in private servers.',
+Noclip = 'Walk through players and geometry. Very visible.',
+AirWalk = 'Walk on an invisible platform at your current height.',
+BodyColliders = 'Adjusts body collision boxes to win box-outs and screens.',
+AutoTipOff = 'Times the opening tip-off jump automatically.',
+FPSCapEnabled = 'Caps your framerate to reduce GPU load and keep timing stable.',
+AntiAFK = 'Blocks the idle kick so you can stay in lobbies indefinitely.',
+GhostRecording = 'Records your movement so a ghost can replay it later from the Replay group.',
+DeviceSpoof = 'Shows a different device icon to other players. Cosmetic only.',
+DeviceSpoofType = 'Which device icon other players see next to your name.',
+AimMode = 'How the silent arc behaves when redirecting. Default handles standard shots best.',
+TargetMode = 'Chooses which rim redirected shots aim for. Automatic follows your current match.',
+ArcPreview = 'Draws the predicted silent arc before you shoot so you can sanity-check the path.',
+ArcPreviewMarker = 'Adds a landing marker where the previewed arc comes down.',
+Trajectory = 'Renders the live ball flight path while the ball is in the air.',
+Backboard = 'Allows bank shots off the glass when the direct arc is contested.',
+RangeIndicator = 'Draws a circle showing your reliable make range from your current spot.',
+MatchArc = 'Copies your legit shot arc so redirected shots look like a normal release. Recommended: ON.',
+MatchArcAngle = 'Arc angle used by Match Arc. Higher values give a bigger rainbow.',
+ReleaseMode = 'Where inside the green window the auto release fires.',
+PingAdaptiveRelease = 'Shifts release timing based on current ping so greens stay consistent on laggy servers.',
+PingAdaptiveStrength = 'How aggressively ping compensation shifts your release timing.',
+PingAdaptiveBaseline = 'Ping treated as normal. Compensation only kicks in above this value.',
+PingAdaptiveMaxLead = 'Upper cap on how early ping compensation is allowed to release.',
+AutoDunk = 'Jumps and finishes dunks automatically when a lane opens. Pair with Dunk Lane Check.',
+DunkMode = 'Which dunk package the auto dunk performs.',
+DunkLaneCheck = 'Only triggers the auto dunk when the driving lane is actually clear. Recommended: ON.',
+DunkRangeIndicator = 'Shows the zone where the auto dunk can trigger.',
+DunkManualOverride = 'Your own inputs instantly cancel an in-progress auto dunk.',
+DunkRandomOwned = 'Picks a random dunk you own each time instead of repeating one.',
+AutoPass = 'Automatically passes to the best open teammate when you are pressured.',
+AutoSelfPass = 'Bounces the ball off the board or floor back to yourself for self-alley plays.',
+JumpBeforePass = 'Hops right before passing to sell fake animations.',
+PassLead = 'How far ahead of the receiver automatic passes are thrown.',
+PassArcMode = 'Arc shape used for automatic passes. Flat is fastest, lob clears defenders.',
+PassRangeIndicator = 'Shows the range where auto pass will consider teammates.',
+AutoDefense = 'Defensive autopilot. Marks the ball handler, mirrors movement, and contests shots.',
+AutoDefenseNoclip = 'Lets the defense autopilot clip through screens to stay attached. Very visible.',
+AutoGuard = 'Sticks to your assigned matchup and mirrors their movement on defense.',
+GuardMode = 'How the auto guard picks who to lock onto.',
+GuardStyle = 'How tightly the auto guard presses. Tight denies drives, soft protects the paint.',
+AutoOffense = 'Offensive autopilot. Drives, spaces, and takes shots automatically.',
+OffenseStyle = 'Shot selection profile the offense autopilot uses.',
+OffenseManualOverride = 'Your own inputs instantly take control back from the offense autopilot.',
+AutoMix = 'Blended autopilot that chains dribble moves based on how defenders react.',
+AutoMixMode = 'Overall aggression profile for the auto mixer.',
+AutoBody = 'Automatic body positioning to seal defenders and win driving space.',
+AutoBodyMode = 'Positioning style the auto body system uses.',
+AutoGetOpen = 'Moves you to open spots off the ball so you are always a pass target.',
+AutoGetOpenDestination = 'Preferred zone the get-open logic drifts toward.',
+AutoHeadRide = 'Follows a chosen player and rides on top of them. Meme feature, very visible.',
+AutoTipOff = 'Times the opening tip-off jump automatically.',
+BallMagRadius = 'Pull radius in studs for the ball magnet. Keep at 12 or less to stay subtle.',
+BallMagSpeed = 'How fast the magnet drags loose balls toward you.',
+BallReachRadius = 'Extra steal reach in studs. 6 to 8 stays under the radar.',
+AntiReachCounterRadius = 'Radius where reach-steal attempts against you get countered.',
+AntiReachCounterWindow = 'Time window after a steal attempt where the counter stays active.',
+AntiReachNoStealRange = 'Range of the no-steal protection bubble.',
+WalkSpeedValue = 'Movement speed applied while the override is on. Game default is 16.',
+JumpPowerValue = 'Jump strength applied while the override is on. Game default is 50.',
+FlightSpeed = 'Movement speed while flight is active.',
+SpeedProfiles = 'Uses different speeds on-ball, off-ball, and on defense so the override looks natural.',
+OutOfMatchSpeed = 'Separate speed override that only applies in lobbies, never in a match.',
+NoJumpMode = 'Disables jumping so pump fakes can never bait you into the air.',
+AutoQueue = 'Joins the match queue automatically when you enter the lobby.',
+AutoRequeue = 'Re-queues automatically after every match ends.',
+QueueMode = 'Which playlist the auto queue joins.',
+AutoServerHop = 'Hops to a fresh server automatically on your chosen condition.',
+AutoDailySpin = 'Claims the daily spin reward automatically.',
+AutoReconnect = 'Rejoins the game automatically if you disconnect or get kicked.',
+AutoStreamerMode = 'Hides identifying info automatically when a known streamer is in the lobby.',
+AutoPerformanceMode = 'Drops graphics settings automatically when your framerate dips.',
+FPSCap = 'Frame limit applied while the FPS cap is enabled.',
+AntiTravel = 'Prevents travel violations from fast move chains.',
+AntiFall = 'Stops slip and ankle-fall animations from playing on you.',
+GhostLoop = 'Replays your recorded ghost on a loop.',
+GhostPlaybackSpeed = 'Playback rate for ghost replays. 1 is real time.',
+GhostSampleRate = 'How often the recorder samples your movement. Higher is smoother but heavier.',
+LocalAnonymizer = 'Hides names and avatars on your screen only. Made for streaming.',
+LocalELOSpoof = 'Changes the ELO shown on your screen only. Other players see your real rating.',
+LocalStatsSpoof = 'Client-side stat display override. Nobody else sees it.',
+LocalClanSpoof = 'Client-side clan tag override. Nobody else sees it.',
+LocalAchievementSpoof = 'Client-side achievement display override. Nobody else sees it.',
+LocalCosmeticSpoof = 'Previews cosmetics you do not own. Visible only to you.',
+CustomBall = 'Replaces the ball model on your screen with a custom one.',
+CustomBallTint = 'Applies your custom RGB tint to the ball.',
+BallStudio = 'Full local ball editor with presets, tint, and scale.',
+ShotSound = 'Plays a custom sound on your release. Client-side only.',
+WatchCourt = 'Spectates a court without joining the match.',
+WatchCameraMode = 'Camera style used while spectating.',
+UnloadAction = 'Fully removes the hub, disconnects everything, and restores default character values.',
+InterfaceScale = 'Overall UI scale. AUTO fits the window to your screen.',
+InterfaceOpacity = 'Window transparency. Lower values let you see the game through the hub.',
+InterfaceLockWindow = 'Locks the window in place so it cannot be dragged by accident.',
+InterfaceReducedMotion = 'Disables UI animations for lower distraction and better performance.',
+InterfaceAnimationSpeed = 'How fast UI animations play.',
+InterfaceFont = 'Font used across the entire hub.',
+InterfaceThemePreset = 'Color theme for the hub. Pick Custom to use your own accent color.',
+InterfaceIntro = 'Plays the intro animation when the hub loads.',
+ConfigIncludeInterface = 'Also saves theme and window settings inside config files.',
+BodyColliderIncludeSelf = 'Applies collider adjustments to your own body as well.',
+BallColliderPossessionGrace = 'Grace period after losing possession before ball colliders re-arm.',
+}
+local TipCard = New('Frame', {
+Name = 'QoLTooltip', Size = UDim2.fromOffset(250, 60), BackgroundColor3 = Theme.Panel,
+BorderSizePixel = 0, Visible = false, ZIndex = 400,
+}, ScreenGui)
+New('UICorner', { CornerRadius = UDim.new(0, 4) }, TipCard)
+AccentStroke(TipCard, 1, 0.12)
+local TipTitle = New('TextLabel', {
+Position = UDim2.fromOffset(9, 6), Size = UDim2.new(1, -18, 0, 12), BackgroundTransparency = 1,
+Font = Enum.Font.Code, Text = '', TextColor3 = Theme.Accent, TextSize = 10,
+TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 401,
+}, TipCard)
+BindAccent(TipTitle, 'TextColor3')
+local TipBody = New('TextLabel', {
+Position = UDim2.fromOffset(9, 20), Size = UDim2.new(1, -18, 1, -26), BackgroundTransparency = 1,
+Font = Enum.Font.Code, Text = '', TextColor3 = Theme.Text, TextSize = 10, TextWrapped = true,
+TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 401,
+}, TipCard)
+local TipSerial = 0
+local function HideTip()
+TipSerial += 1
+TipCard.Visible = false
+end
+local function PlaceTip()
+local Mouse = UserInputService:GetMouseLocation()
+local Camera = Workspace.CurrentCamera
+local View = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+local X = math.clamp(Mouse.X + 16, 4, math.max(4, View.X - 254))
+local Y = math.clamp(Mouse.Y + 18, 4, math.max(4, View.Y - TipCard.Size.Y.Offset - 6))
+TipCard.Position = UDim2.fromOffset(X, Y)
+end
+local function ShowTip(Label, Body)
+TipSerial += 1
+local Serial = TipSerial
+task.delay(0.35, function()
+if Serial ~= TipSerial then return end
+TipTitle.Text = string.upper(tostring(Label or ''))
+TipBody.Text = Body
+local Lines = math.clamp(math.ceil(#Body / 42), 1, 8)
+TipCard.Size = UDim2.fromOffset(250, 26 + Lines * 13)
+PlaceTip()
+TipCard.Visible = true
+end)
+end
+GiveSignal(UserInputService.InputChanged:Connect(function(Input)
+if TipCard.Visible and Input.UserInputType == Enum.UserInputType.MouseMovement then PlaceTip() end
+end))
+local KindHints = {
+Toggle = 'Click to switch this feature on or off.',
+Number = 'Numeric setting. Use the stepper arrows or type an exact value.',
+Selector = 'Click the arrows to cycle through the available options.',
+Dropdown = 'Click to open the list and pick an option.',
+Action = 'Click to run this action immediately.',
+}
+local function TipBodyFor(TipKey, Control)
+local Body = TooltipText[TipKey]
+if Body then return Body end
+Body = KindHints[Control.Kind] or 'Hub setting.'
+local Options = Control.Options
+if type(Options) == 'table' and #Options > 0 then
+local Preview = table.concat(Options, ', ')
+if #Preview > 110 then Preview = string.sub(Preview, 1, 107) .. '...' end
+Body = Body .. ' Options: ' .. Preview .. '.'
+end
+return Body
+end
+for TipKey, Control in pairs(HubUI.Controls) do
+if type(Control) == 'table' and Control.Kind then
+local Root = Control.Button or Control.SearchRoot
+if typeof(Root) == 'Instance' and Root:IsA('GuiObject') then
+local Label = Control.SearchLabel or TipKey
+local Body = TipBodyFor(TipKey, Control)
+GiveSignal(Root.MouseEnter:Connect(function() ShowTip(Label, Body) end))
+GiveSignal(Root.MouseLeave:Connect(HideTip))
+end
+end
+end
+
+-- Playstyle quick presets ---------------------------------------------------
+local Playstyles = {
+{
+Name = 'Legit Guard',
+Values = {
+SilentAim = false, AutoPower = false, PerfectRelease = true, PerfectReleaseAutoCalibrate = true,
+Desync = true, Outline = true, AntiReach = true, AntiReachTeamSafety = true,
+BallMag = false, BallReach = false, AnklesReach = false, Spinbot = false,
+WalkSpeed = false, InfiniteJump = false, JumpPower = false, Flight = false,
+Noclip = false, AirWalk = false, AutoTipOff = true,
+},
+},
+{
+Name = 'Rage Offense',
+Values = {
+SilentAim = true, AutoPower = true, RequireBall = true, PerfectRelease = true,
+PerfectReleaseAutoCalibrate = true, BallMag = true, BallReach = true, AnklesReach = true,
+Spinbot = true, WalkSpeed = true, InfiniteJump = true, AutoTipOff = true,
+Desync = true, Outline = true, AntiReach = true,
+},
+},
+{
+Name = 'League / Tournament Safe',
+Values = {
+SilentAim = false, AutoPower = false, PerfectRelease = false, PerfectReleaseAutoCalibrate = false,
+BallMag = false, BallReach = false, AnklesReach = false, AntiReach = false, Spinbot = false,
+WalkSpeed = false, InfiniteJump = false, JumpPower = false, Flight = false, Noclip = false,
+AirWalk = false, AutoTipOff = false, Desync = true, Outline = false,
+},
+},
+}
+local function ApplyPlaystyle(Preset)
+local Changed = 0
+for Key, Value in pairs(Preset.Values) do
+local Control = HubUI.Controls[Key]
+if Control and Control.Set and Control.Value ~= Value then
+local Ok = pcall(function() Control:Set(Value, true) end)
+if Ok then Changed += 1 end
+end
+end
+Notify('GOLDEN EAGLE HUB', Preset.Name .. ' applied. ' .. Changed .. ' settings changed.')
+end
+
+-- Active features HUD -------------------------------------------------------
+local HudSignature
+local Hud = New('CanvasGroup', {
+Name = 'ActiveFeaturesHud',
+Position = UDim2.fromOffset(InterfaceConfig.ActiveHudPosition.X, InterfaceConfig.ActiveHudPosition.Y),
+Size = UDim2.fromOffset(196, 46), BackgroundColor3 = Theme.Background, BackgroundTransparency = 0.02,
+BorderSizePixel = 0, ClipsDescendants = true, Active = true,
+Visible = InterfaceConfig.ActiveHudVisible == true, ZIndex = 118,
+}, ScreenGui)
+local HudStroke = AccentStroke(Hud, 1, 0.04)
+local HudAccentLine = New('Frame', {
+Position = UDim2.fromOffset(1, 1), Size = UDim2.new(1, -2, 0, 1),
+BackgroundColor3 = Theme.Accent, BorderSizePixel = 0, ZIndex = 121,
+}, Hud)
+BindAccent(HudAccentLine, 'BackgroundColor3')
+local HudHeader = New('TextButton', {
+Position = UDim2.fromOffset(1, 2), Size = UDim2.new(1, -2, 0, 18),
+BackgroundColor3 = Theme.Panel, BackgroundTransparency = 0.06, BorderSizePixel = 0,
+AutoButtonColor = false, Font = Enum.Font.Code, Text = 'Active Features',
+TextColor3 = Theme.Text, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 120,
+}, Hud)
+New('UIPadding', { PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5) }, HudHeader)
+local HudList = New('Frame', {
+Position = UDim2.fromOffset(6, 24), Size = UDim2.new(1, -12, 1, -28),
+BackgroundTransparency = 1, ZIndex = 119,
+}, Hud)
+New('UIListLayout', { FillDirection = Enum.FillDirection.Vertical, SortOrder = Enum.SortOrder.LayoutOrder }, HudList)
+local function RefreshHud()
+if not Hud.Visible then return end
+local Labels = {}
+for _, Control in pairs(HubUI.Controls) do
+if type(Control) == 'table' and Control.Kind == 'Toggle' and Control.Value == true and Control.SearchLabel then
+table.insert(Labels, Control.SearchLabel)
+end
+end
+table.sort(Labels)
+local Extra = math.max(0, #Labels - 12)
+while #Labels > 12 do table.remove(Labels) end
+local Signature = table.concat(Labels, '|') .. '|' .. Extra
+if Signature == HudSignature then return end
+HudSignature = Signature
+for _, Child in ipairs(HudList:GetChildren()) do
+if Child:IsA('TextLabel') then Child:Destroy() end
+end
+local Count = 0
+for Index, Label in ipairs(Labels) do
+Count += 1
+New('TextLabel', {
+Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1, Font = Enum.Font.Code,
+Text = '- ' .. Label, TextColor3 = Theme.AccentBright, TextSize = 10,
+TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = Enum.TextXAlignment.Left,
+LayoutOrder = Index, ZIndex = 119,
+}, HudList)
+end
+if Extra > 0 then
+Count += 1
+New('TextLabel', {
+Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1, Font = Enum.Font.Code,
+Text = '+ ' .. Extra .. ' more', TextColor3 = Theme.Muted, TextSize = 10,
+TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 99, ZIndex = 119,
+}, HudList)
+end
+if Count == 0 then
+Count = 1
+New('TextLabel', {
+Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1, Font = Enum.Font.Code,
+Text = 'Nothing active', TextColor3 = Theme.Muted, TextSize = 10,
+TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 1, ZIndex = 119,
+}, HudList)
+end
+Hud.Size = UDim2.fromOffset(196, 28 + Count * 15 + 4)
+end
+local HudDragging, HudDragStart, HudStartPosition = false, nil, nil
+GiveSignal(HudHeader.InputBegan:Connect(function(Input)
+if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+HudDragging = true
+HudDragStart = Input.Position
+HudStartPosition = Hud.Position
+end
+end))
+GiveSignal(UserInputService.InputChanged:Connect(function(Input)
+if HudDragging and (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) then
+local Delta = Input.Position - HudDragStart
+Hud.Position = UDim2.new(
+HudStartPosition.X.Scale, HudStartPosition.X.Offset + Delta.X,
+HudStartPosition.Y.Scale, HudStartPosition.Y.Offset + Delta.Y
+)
+end
+end))
+GiveSignal(UserInputService.InputEnded:Connect(function(Input)
+if HudDragging and (Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch) then
+HudDragging = false
+InterfaceConfig.ActiveHudPosition.X = Hud.Position.X.Offset
+InterfaceConfig.ActiveHudPosition.Y = Hud.Position.Y.Offset
+SaveInterfaceConfig()
+end
+end))
+local HudClock = 0
+GiveSignal(RunService.Heartbeat:Connect(function(Step)
+HudClock += Step
+if HudClock >= 0.4 then
+HudClock = 0
+pcall(RefreshHud)
+end
+end))
+local function SetHudVisible(Visible)
+InterfaceConfig.ActiveHudVisible = Visible == true
+Hud.Visible = InterfaceConfig.ActiveHudVisible
+HudSignature = nil
+if Hud.Visible then pcall(RefreshHud) end
+SaveInterfaceConfig()
+Notify('GOLDEN EAGLE HUB', Hud.Visible and 'Active Features HUD shown. Drag its header to move it.' or 'Active Features HUD hidden.')
+end
+if Hud.Visible then pcall(RefreshHud) end
+
+-- Custom accent colour picker -----------------------------------------------
+local AccentModal = MakeModal('AccentPicker', 320, 220, 'CUSTOM ACCENT COLOUR')
+local Swatch = New('Frame', {
+Position = UDim2.fromOffset(12, 44), Size = UDim2.fromOffset(64, 64),
+BackgroundColor3 = Theme.Accent, BorderSizePixel = 0, ZIndex = 292,
+}, AccentModal)
+New('UICorner', { CornerRadius = UDim.new(0, 4) }, Swatch)
+DarkStroke(Swatch)
+local HexBox = New('TextBox', {
+Position = UDim2.fromOffset(12, 114), Size = UDim2.fromOffset(64, 20),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, ClearTextOnFocus = false,
+Font = Enum.Font.Code, Text = '', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 292,
+}, AccentModal)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, HexBox)
+DarkStroke(HexBox)
+local Channels = {}
+local ChannelDrag
+local SyncVisual
+local function CurrentColor()
+return Color3.fromRGB(Channels.R.Value, Channels.G.Value, Channels.B.Value)
+end
+local function MakeChannel(Y, Name)
+New('TextLabel', {
+Position = UDim2.fromOffset(92, Y), Size = UDim2.fromOffset(12, 14), BackgroundTransparency = 1,
+Font = Enum.Font.Code, Text = Name, TextColor3 = Theme.Muted, TextSize = 10,
+TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 292,
+}, AccentModal)
+local Track = New('Frame', {
+Position = UDim2.fromOffset(108, Y + 4), Size = UDim2.new(1, -156, 0, 6),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, ZIndex = 292,
+}, AccentModal)
+New('UICorner', { CornerRadius = UDim.new(1, 0) }, Track)
+DarkStroke(Track)
+local Fill = New('Frame', {
+Size = UDim2.fromScale(0, 1), BackgroundColor3 = Theme.Accent, BorderSizePixel = 0, ZIndex = 293,
+}, Track)
+New('UICorner', { CornerRadius = UDim.new(1, 0) }, Fill)
+local ValueLabel = New('TextLabel', {
+AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, Y), Size = UDim2.fromOffset(30, 14),
+BackgroundTransparency = 1, Font = Enum.Font.Code, Text = '0', TextColor3 = Theme.Text,
+TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 292,
+}, AccentModal)
+local Hit = New('TextButton', {
+Position = UDim2.fromOffset(0, -6), Size = UDim2.new(1, 0, 1, 12),
+BackgroundTransparency = 1, Text = '', ZIndex = 294,
+}, Track)
+local Entry = { Value = 0 }
+function Entry:Set(Value, SkipHex)
+Value = math.clamp(math.floor(Value + 0.5), 0, 255)
+Entry.Value = Value
+Fill.Size = UDim2.fromScale(Value / 255, 1)
+ValueLabel.Text = tostring(Value)
+if SyncVisual then SyncVisual(SkipHex) end
+end
+function Entry:FromX(X)
+local Width = Track.AbsoluteSize.X
+if Width <= 0 then return end
+Entry:Set((X - Track.AbsolutePosition.X) / Width * 255)
+end
+GiveSignal(Hit.MouseButton1Down:Connect(function(X)
+ChannelDrag = Entry
+Entry:FromX(X)
+end))
+Channels[Name] = Entry
+end
+MakeChannel(44, 'R')
+MakeChannel(74, 'G')
+MakeChannel(104, 'B')
+SyncVisual = function(SkipHex)
+local Color = CurrentColor()
+Swatch.BackgroundColor3 = Color
+if not SkipHex then HexBox.Text = ColorToHex(Color) end
+end
+GiveSignal(UserInputService.InputChanged:Connect(function(Input)
+if ChannelDrag and Input.UserInputType == Enum.UserInputType.MouseMovement then
+ChannelDrag:FromX(Input.Position.X)
+end
+end))
+GiveSignal(UserInputService.InputEnded:Connect(function(Input)
+if Input.UserInputType == Enum.UserInputType.MouseButton1 then ChannelDrag = nil end
+end))
+GiveSignal(HexBox.FocusLost:Connect(function()
+local Color = HexToColor(HexBox.Text, nil)
+if not Color then
+HexBox.Text = ColorToHex(CurrentColor())
+return
+end
+Channels.R:Set(Color.R * 255, true)
+Channels.G:Set(Color.G * 255, true)
+Channels.B:Set(Color.B * 255, true)
+HexBox.Text = ColorToHex(CurrentColor())
+end))
+local function ResetAccentPicker()
+local Color = Theme.Accent
+Channels.R:Set(Color.R * 255, true)
+Channels.G:Set(Color.G * 255, true)
+Channels.B:Set(Color.B * 255, true)
+HexBox.Text = ColorToHex(CurrentColor())
+end
+ResetAccentPicker()
+MakeButton(AccentModal, UDim2.fromOffset(92, 144), UDim2.fromOffset(100, 24), 'APPLY', function()
+local Color = CurrentColor()
+local Custom = DeepCopy(InterfaceConfig.Theme)
+Custom.Accent = ColorToHex(Color)
+Custom.AccentBright = ColorToHex(Color:Lerp(Color3.new(1, 1, 1), 0.35))
+InterfaceConfig.ThemePreset = 'Custom'
+HubUI.ApplyTheme(Custom, true)
+if ThemePresetControl and ThemePresetControl.Set then ThemePresetControl:Set('Custom', false) end
+if HubUI.RefreshThemeEditor then pcall(HubUI.RefreshThemeEditor) end
+Notify('GOLDEN EAGLE HUB', 'Custom accent ' .. Custom.Accent .. ' applied.')
+end)
+MakeButton(AccentModal, UDim2.fromOffset(200, 144), UDim2.fromOffset(100, 24), 'FROM THEME', ResetAccentPicker)
+New('TextLabel', {
+Position = UDim2.fromOffset(12, 180), Size = UDim2.new(1, -24, 0, 26), BackgroundTransparency = 1,
+Font = Enum.Font.Code, Text = 'Applies as the Custom theme preset. Fine-tune every other role in Interface > Theme.',
+TextColor3 = Theme.Muted, TextSize = 9, TextWrapped = true,
+TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 292,
+}, AccentModal)
+
+-- Config share codes ---------------------------------------------------------
+local ShareModal = MakeModal('ShareCodes', 430, 340, 'CONFIG SHARE CODES')
+local CodeBox = New('TextBox', {
+Position = UDim2.fromOffset(12, 40), Size = UDim2.new(1, -24, 0, 54),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, ClearTextOnFocus = false,
+Font = Enum.Font.Code, PlaceholderText = 'Paste a share code here, or press EXPORT to create one.',
+PlaceholderColor3 = Theme.Muted, Text = '', TextColor3 = Theme.Text, TextSize = 9,
+TextWrapped = true, MultiLine = true, TextXAlignment = Enum.TextXAlignment.Left,
+TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 292,
+}, ShareModal)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, CodeBox)
+New('UIPadding', { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6), PaddingTop = UDim.new(0, 4) }, CodeBox)
+DarkStroke(CodeBox)
+local DiffList = New('ScrollingFrame', {
+Position = UDim2.fromOffset(12, 134), Size = UDim2.new(1, -24, 1, -146),
+BackgroundColor3 = Theme.Background, BackgroundTransparency = 0.4, BorderSizePixel = 0,
+CanvasSize = UDim2.fromOffset(0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+ScrollBarThickness = 3, ScrollBarImageColor3 = Theme.Accent,
+ScrollingDirection = Enum.ScrollingDirection.Y, ZIndex = 292,
+}, ShareModal)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, DiffList)
+New('UIListLayout', { FillDirection = Enum.FillDirection.Vertical, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 1) }, DiffList)
+New('UIPadding', { PaddingLeft = UDim.new(0, 6), PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4) }, DiffList)
+local DiffOrder = 0
+local function AddDiffRow(Text, Muted)
+DiffOrder += 1
+New('TextLabel', {
+Size = UDim2.new(1, -10, 0, 14), BackgroundTransparency = 1, Font = Enum.Font.Code,
+Text = Text, TextColor3 = Muted and Theme.Muted or Theme.Text, TextSize = 10,
+TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = Enum.TextXAlignment.Left,
+LayoutOrder = DiffOrder, ZIndex = 293,
+}, DiffList)
+end
+local function ClearDiff()
+DiffOrder = 0
+for _, Child in ipairs(DiffList:GetChildren()) do
+if Child:IsA('TextLabel') then Child:Destroy() end
+end
+end
+local function FormatDiffValue(Value)
+if Value == true then return 'ON' elseif Value == false then return 'OFF' end
+return tostring(Value)
+end
+local PendingImport
+local function BuildSnapshot()
+local Data = { Version = 1, Toggles = {}, Numbers = {}, Selects = {} }
+for Key, Control in pairs(HubUI.Controls) do
+if type(Control) == 'table' and Control.Kind and Control.Value ~= nil then
+if Control.Kind == 'Toggle' then
+Data.Toggles[Key] = Control.Value == true
+elseif Control.Kind == 'Number' then
+Data.Numbers[Key] = tonumber(Control.Value)
+elseif Control.Kind == 'Selector' or Control.Kind == 'Dropdown' then
+Data.Selects[Key] = tostring(Control.Value)
+end
+end
+end
+Data.Interface = {
+Theme = DeepCopy(InterfaceConfig.Theme),
+ThemePreset = InterfaceConfig.ThemePreset,
+Font = InterfaceConfig.Font,
+}
+return Data
+end
+local function ExportCode()
+local Ok, Encoded = pcall(HttpService.JSONEncode, HttpService, BuildSnapshot())
+if not Ok then
+Notify('GOLDEN EAGLE HUB', 'Could not encode the current config.')
+return
+end
+local Code = 'GEH1.' .. B64Encode(Encoded)
+CodeBox.Text = Code
+ClearDiff()
+AddDiffRow('Share code generated: ' .. #Code .. ' characters.', true)
+if type(setclipboard) == 'function' then
+pcall(setclipboard, Code)
+Notify('GOLDEN EAGLE HUB', 'Share code copied to clipboard.')
+else
+Notify('GOLDEN EAGLE HUB', 'Share code placed in the box. Copy it manually.')
+end
+end
+local function DecodeCode(Text)
+Text = string.gsub(tostring(Text or ''), '%s+', '')
+local Body = string.match(Text, '^GEH1%.(.+)$') or Text
+local Raw = B64Decode(Body)
+if not Raw or #Raw == 0 then return nil, 'Not a valid share code.' end
+local Ok, Data = pcall(HttpService.JSONDecode, HttpService, Raw)
+if not Ok or type(Data) ~= 'table' then return nil, 'Share code payload is corrupted.' end
+return Data
+end
+local function PreviewCode()
+ClearDiff()
+PendingImport = nil
+local Data, DecodeError = DecodeCode(CodeBox.Text)
+if not Data then
+AddDiffRow(DecodeError or 'Not a valid share code.', true)
+return
+end
+local Rows = 0
+local function Record(Text)
+Rows += 1
+if Rows <= 22 then AddDiffRow(Text, false) end
+end
+for Key, Value in pairs(type(Data.Toggles) == 'table' and Data.Toggles or {}) do
+local Control = HubUI.Controls[Key]
+if Control and Control.Kind == 'Toggle' and (Control.Value == true) ~= (Value == true) then
+Record((Control.SearchLabel or Key) .. '   ' .. FormatDiffValue(Control.Value == true) .. '  >  ' .. FormatDiffValue(Value == true))
+end
+end
+for Key, Value in pairs(type(Data.Numbers) == 'table' and Data.Numbers or {}) do
+local Control = HubUI.Controls[Key]
+local Target = tonumber(Value)
+if Control and Control.Kind == 'Number' and Target and math.abs((tonumber(Control.Value) or 0) - Target) > 1e-6 then
+Record((Control.SearchLabel or Key) .. '   ' .. tostring(Control.Value) .. '  >  ' .. tostring(Target))
+end
+end
+for Key, Value in pairs(type(Data.Selects) == 'table' and Data.Selects or {}) do
+local Control = HubUI.Controls[Key]
+if Control and (Control.Kind == 'Selector' or Control.Kind == 'Dropdown') and tostring(Control.Value) ~= tostring(Value) then
+Record((Control.SearchLabel or Key) .. '   ' .. tostring(Control.Value) .. '  >  ' .. tostring(Value))
+end
+end
+if type(Data.Interface) == 'table' and Data.Interface.ThemePreset
+and tostring(Data.Interface.ThemePreset) ~= tostring(InterfaceConfig.ThemePreset) then
+Record('Theme preset   ' .. tostring(InterfaceConfig.ThemePreset) .. '  >  ' .. tostring(Data.Interface.ThemePreset))
+end
+if Rows == 0 then
+AddDiffRow('No changes - this code matches your current setup.', true)
+return
+end
+if Rows > 22 then AddDiffRow('... plus ' .. (Rows - 22) .. ' more change(s).', true) end
+PendingImport = Data
+AddDiffRow(tostring(Rows) .. ' change(s) staged. Press APPLY to import.', true)
+end
+local function ApplyCode()
+if not PendingImport then PreviewCode() end
+if not PendingImport then
+Notify('GOLDEN EAGLE HUB', 'Preview a valid share code before applying.')
+return
+end
+local Data = PendingImport
+local Changed = 0
+for Key, Value in pairs(type(Data.Toggles) == 'table' and Data.Toggles or {}) do
+local Control = HubUI.Controls[Key]
+if Control and Control.Kind == 'Toggle' and Control.Set and (Control.Value == true) ~= (Value == true) then
+if pcall(function() Control:Set(Value == true, true) end) then Changed += 1 end
+end
+end
+for Key, Value in pairs(type(Data.Numbers) == 'table' and Data.Numbers or {}) do
+local Control = HubUI.Controls[Key]
+local Target = tonumber(Value)
+if Control and Control.Kind == 'Number' and Control.Set and Target
+and math.abs((tonumber(Control.Value) or 0) - Target) > 1e-6 then
+if pcall(function() Control:Set(Target, true) end) then Changed += 1 end
+end
+end
+for Key, Value in pairs(type(Data.Selects) == 'table' and Data.Selects or {}) do
+local Control = HubUI.Controls[Key]
+if Control and (Control.Kind == 'Selector' or Control.Kind == 'Dropdown') and Control.Set
+and tostring(Control.Value) ~= tostring(Value) then
+if pcall(function() Control:Set(tostring(Value), true) end) then Changed += 1 end
+end
+end
+if type(Data.Interface) == 'table' and type(Data.Interface.Theme) == 'table' then
+local Merged = DeepCopy(InterfaceConfig.Theme)
+for Role, Hex in pairs(Data.Interface.Theme) do
+if type(Role) == 'string' and type(Hex) == 'string' then Merged[Role] = Hex end
+end
+InterfaceConfig.ThemePreset = tostring(Data.Interface.ThemePreset or 'Custom')
+pcall(HubUI.ApplyTheme, Merged, true)
+if HubUI.RefreshThemeEditor then pcall(HubUI.RefreshThemeEditor) end
+end
+PendingImport = nil
+ClearDiff()
+AddDiffRow('Applied. ' .. Changed .. ' settings changed.', true)
+Notify('GOLDEN EAGLE HUB', 'Share code applied. ' .. Changed .. ' settings changed.')
+end
+MakeButton(ShareModal, UDim2.fromOffset(12, 102), UDim2.fromOffset(96, 24), 'EXPORT', ExportCode)
+MakeButton(ShareModal, UDim2.fromOffset(116, 102), UDim2.fromOffset(96, 24), 'PREVIEW', PreviewCode)
+MakeButton(ShareModal, UDim2.fromOffset(220, 102), UDim2.fromOffset(96, 24), 'APPLY', ApplyCode)
+AddDiffRow('Press EXPORT to copy your loadout, or paste a code and press PREVIEW to see what it changes.', true)
+
+-- Global command palette -----------------------------------------------------
+local PaletteModal = MakeModal('CommandPalette', 460, 400, 'COMMAND PALETTE')
+New('TextLabel', {
+AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -48, 0, 8), Size = UDim2.fromOffset(60, 16),
+BackgroundTransparency = 1, Font = Enum.Font.Code, Text = 'CTRL+K / TAB', TextColor3 = Theme.Muted,
+TextSize = 9, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 292,
+}, PaletteModal)
+local PaletteBox = New('TextBox', {
+Position = UDim2.fromOffset(12, 38), Size = UDim2.new(1, -24, 0, 24),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, ClearTextOnFocus = false,
+Font = Enum.Font.Code, PlaceholderText = 'Type to search every feature and command...',
+PlaceholderColor3 = Theme.Muted, Text = '', TextColor3 = Theme.Text, TextSize = 10,
+TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 292,
+}, PaletteModal)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, PaletteBox)
+New('UIPadding', { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 7) }, PaletteBox)
+AccentStroke(PaletteBox, 1, 0.18)
+local PaletteList = New('ScrollingFrame', {
+Position = UDim2.fromOffset(12, 70), Size = UDim2.new(1, -24, 1, -82),
+BackgroundTransparency = 1, BorderSizePixel = 0, CanvasSize = UDim2.fromOffset(0, 0),
+ScrollBarThickness = 3, ScrollBarImageColor3 = Theme.Accent,
+ScrollingDirection = Enum.ScrollingDirection.Y, ZIndex = 292,
+}, PaletteModal)
+New('UIListLayout', { FillDirection = Enum.FillDirection.Vertical, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2) }, PaletteList)
+local PaletteCommands = {
+{ Label = 'Preset: Legit Guard - defense-first, low visibility', Run = function() ApplyPlaystyle(Playstyles[1]) end },
+{ Label = 'Preset: Rage Offense - maximum scoring pressure', Run = function() ApplyPlaystyle(Playstyles[2]) end },
+{ Label = 'Preset: League / Tournament Safe - info overlays only', Run = function() ApplyPlaystyle(Playstyles[3]) end },
+{ Label = 'Toggle Active Features HUD', Run = function() SetHudVisible(not InterfaceConfig.ActiveHudVisible) end },
+{ Label = 'Custom Accent Colour Picker', Run = function() OpenModal(AccentModal) end },
+{ Label = 'Config Share Codes - export or import', Run = function() OpenModal(ShareModal) end },
+}
+local function RefreshPalette()
+for _, Child in ipairs(PaletteList:GetChildren()) do
+if Child:IsA('TextButton') then Child:Destroy() end
+end
+local Query = string.lower(PaletteBox.Text or '')
+Query = string.gsub(string.gsub(Query, '^%s+', ''), '%s+$', '')
+local Entries = {}
+for _, Command in ipairs(PaletteCommands) do
+if Query == '' or string.find(string.lower(Command.Label), Query, 1, true) then
+table.insert(Entries, { Label = Command.Label, Kind = 'Command', Run = Command.Run })
+end
+end
+local Keys = {}
+for Key, Control in pairs(HubUI.Controls) do
+if type(Control) == 'table' and Control.Kind and Control.SearchLabel then
+if Control.Kind ~= 'Action' or type(Control.Trigger) == 'function' then
+table.insert(Keys, Key)
+end
+end
+end
+table.sort(Keys, function(A, B)
+return string.lower(tostring(HubUI.Controls[A].SearchLabel)) < string.lower(tostring(HubUI.Controls[B].SearchLabel))
+end)
+for _, Key in ipairs(Keys) do
+local Control = HubUI.Controls[Key]
+local Haystack = string.lower(tostring(Control.SearchLabel) .. ' ' .. Key .. ' ' .. tostring(Control.Kind))
+if Query == '' or string.find(Haystack, Query, 1, true) then
+table.insert(Entries, { Label = Control.SearchLabel, Kind = Control.Kind, Control = Control })
+end
+end
+local Shown = 0
+for Index, Entry in ipairs(Entries) do
+if Shown >= 40 then break end
+Shown += 1
+local Control = Entry.Control
+local Row = New('TextButton', {
+Size = UDim2.new(1, -4, 0, 22), BackgroundColor3 = Theme.Surface, BackgroundTransparency = 0.25,
+BorderSizePixel = 0, AutoButtonColor = false, Font = Enum.Font.Code, Text = '',
+LayoutOrder = Index, ZIndex = 293,
+}, PaletteList)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, Row)
+New('TextLabel', {
+Position = UDim2.fromOffset(8, 0), Size = UDim2.new(1, -118, 1, 0), BackgroundTransparency = 1,
+Font = Enum.Font.Code, Text = Entry.Label, TextColor3 = Entry.Kind == 'Command' and Theme.AccentBright or Theme.Text,
+TextSize = 10, TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 294,
+}, Row)
+local Status = New('TextLabel', {
+AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, Entry.Kind == 'Number' and -56 or -8, 0, 0),
+Size = UDim2.fromOffset(Entry.Kind == 'Number' and 52 or 100, 22), BackgroundTransparency = 1,
+Font = Enum.Font.Code, Text = '', TextColor3 = Theme.Muted, TextSize = 10,
+TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 294,
+}, Row)
+local function Repaint()
+if Entry.Kind == 'Command' or Entry.Kind == 'Action' then
+Status.Text = 'RUN'
+Status.TextColor3 = Theme.Accent
+elseif Entry.Kind == 'Toggle' then
+Status.Text = Control.Value and 'ON' or 'OFF'
+Status.TextColor3 = Control.Value and (Theme.Success or Theme.Accent) or Theme.Muted
+else
+Status.Text = tostring(Control.Value)
+Status.TextColor3 = Theme.Accent
+end
+end
+Repaint()
+if Entry.Kind == 'Number' then
+local Minus = New('TextButton', {
+AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -30, 0, 3), Size = UDim2.fromOffset(20, 16),
+BackgroundColor3 = Theme.Background, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = '-', TextColor3 = Theme.Text, TextSize = 11, ZIndex = 295,
+}, Row)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, Minus)
+DarkStroke(Minus)
+local Plus = New('TextButton', {
+AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -6, 0, 3), Size = UDim2.fromOffset(20, 16),
+BackgroundColor3 = Theme.Background, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = '+', TextColor3 = Theme.Text, TextSize = 11, ZIndex = 295,
+}, Row)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, Plus)
+DarkStroke(Plus)
+GiveSignal(Minus.MouseButton1Click:Connect(function()
+if Control.Step then pcall(function() Control:Step(-1) end) end
+Repaint()
+end))
+GiveSignal(Plus.MouseButton1Click:Connect(function()
+if Control.Step then pcall(function() Control:Step(1) end) end
+Repaint()
+end))
+end
+GiveSignal(Row.MouseButton1Click:Connect(function()
+if Entry.Kind == 'Command' then
+CloseModal()
+Entry.Run()
+elseif Entry.Kind == 'Toggle' then
+pcall(function() Control:Set(not Control.Value, true) end)
+Repaint()
+elseif Entry.Kind == 'Selector' or Entry.Kind == 'Dropdown' then
+local Options = Control.Options or {}
+if #Options > 0 then
+local Position = table.find(Options, Control.Value) or 0
+pcall(function() Control:Set(Options[Position % #Options + 1], true) end)
+Repaint()
+end
+elseif Entry.Kind == 'Action' then
+pcall(Control.Trigger)
+Status.Text = 'DONE'
+task.delay(0.6, function()
+if Status.Parent then Repaint() end
+end)
+end
+end))
+GiveSignal(Row.MouseEnter:Connect(function() Tween(Row, 0.08, { BackgroundColor3 = Theme.SurfaceHover, BackgroundTransparency = 0 }) end))
+GiveSignal(Row.MouseLeave:Connect(function() Tween(Row, 0.1, { BackgroundColor3 = Theme.Surface, BackgroundTransparency = 0.25 }) end))
+end
+PaletteList.CanvasSize = UDim2.fromOffset(0, Shown * 24)
+end
+GiveSignal(PaletteBox:GetPropertyChangedSignal('Text'):Connect(RefreshPalette))
+local function OpenPalette()
+OpenModal(PaletteModal)
+PaletteBox.Text = ''
+RefreshPalette()
+task.defer(function()
+pcall(function() PaletteBox:CaptureFocus() end)
+end)
+end
+GiveSignal(UserInputService.InputBegan:Connect(function(Input, GameProcessed)
+if Input.KeyCode == Enum.KeyCode.K
+and (UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)) then
+if ActiveModal == PaletteModal then CloseModal() else OpenPalette() end
+return
+end
+if Input.KeyCode == Enum.KeyCode.Escape and ActiveModal then
+CloseModal()
+return
+end
+if GameProcessed then return end
+if Input.KeyCode == Enum.KeyCode.Tab and not ActiveModal then
+OpenPalette()
+end
+end))
+HubUI.OpenCommandPalette = OpenPalette
+HubUI.SetActiveHudVisible = SetHudVisible
+HubUI.ApplyPlaystyle = ApplyPlaystyle
+end)
 
 -- ===== TOAST NOTIFICATIONS =====
 -- Themed in-hub toasts replace the stock Roblox notification popups.
@@ -28637,6 +29748,7 @@ end
 function HubUI.Destroy()
 if ScreenGui then pcall(function() ScreenGui:Destroy() end) end
 HubUI.ScreenGui = nil
+pcall(function() UserInputService.MouseIconEnabled = true end)
 HubUI.Window = nil
 HubUI.Open = false
 HubUI.IntroPlaying = false
@@ -30212,6 +31324,7 @@ pcall(function() State.Utility.SetStreamerMode(false) end)
 pcall(function() State.Extras.SetSpinbot(false) end)
 pcall(function() State.AutoMix.SetEnabled(false) end)
 pcall(function() State.Desync.SetEnabled(false) end)
+pcall(function() State.DesyncVisualizer.SetEnabled(false) end)
 pcall(function() State.Outline.SetEnabled(false) end)
 pcall(function() State.Extras.SetAnklesReach(false) end)
 pcall(function() State.Extras.SetLocalUnlock(false) end)
