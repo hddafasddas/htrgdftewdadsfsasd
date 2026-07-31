@@ -611,6 +611,11 @@ return Workspace.CurrentCamera
 end
 
 local function Notify(Title, Text)
+-- Prefer the themed in-hub toast renderer once the UI has built it.
+local ToastSink = GlobalEnv.__GEH_TOAST
+if type(ToastSink) == 'function' and pcall(ToastSink, Title, Text) then
+return
+end
 pcall(function()
 StarterGui:SetCore('SendNotification', {Title = Title, Text = Text, Duration = 2})
 end)
@@ -22707,6 +22712,18 @@ Control:BeginDrag(Input)
 end
 end))
 
+-- Scroll over the slider to nudge the value; hold Shift for x10 steps.
+GiveSignal(Hitbox.InputChanged:Connect(function(Input)
+if Input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+if Control.Dragging then return end
+local WheelStep = Decimals and Decimals > 0 and (1 / Scale) or 1
+if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+or UserInputService:IsKeyDown(Enum.KeyCode.RightShift) then
+WheelStep = WheelStep * 10
+end
+Control:Set(Control.Value + WheelStep * (Input.Position.Z > 0 and 1 or -1), true)
+end))
+
 GiveSignal(Box.Focused:Connect(function()
 Box.CursorPosition = 1
 Box.SelectionStart = #Box.Text + 1
@@ -23316,7 +23333,7 @@ HubUI.WatchMatchGroup, 31, 'Match / court', State.Watch.CourtOptions, State.Watc
 function(Value) State.Watch.SetCourt(Value) end, 155
 )
 HubUI.WatchRefreshMatches = New('TextButton', {
-Position = UDim2.fromOffset(8, 64), Size = UDim2.new(1, -16, 0, 27),
+Position = UDim2.fromOffset(8, 62), Size = UDim2.new(1, -16, 0, 27),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'REFRESH MATCHES', TextColor3 = Theme.Muted, TextSize = 9, ZIndex = 5,
 }, HubUI.WatchMatchGroup)
@@ -23327,7 +23344,7 @@ HubUI.Controls.WatchCourt:RefreshOptions(nil, State.Watch.CourtSelection)
 State.Watch.Court = State.Watch.GetCourt()
 end))
 HubUI.WatchStartButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 101), Size = UDim2.new(1, -16, 0, 31),
+Position = UDim2.fromOffset(8, 99), Size = UDim2.new(1, -16, 0, 31),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'START WATCHING MATCH', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, HubUI.WatchMatchGroup)
@@ -23337,26 +23354,22 @@ State.Watch.SetActive(not State.Watch.Active)
 HubUI.WatchStartButton.Text = State.Watch.Active and 'STOP WATCHING' or 'START WATCHING MATCH'
 end))
 HubUI.WatchPreviousButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 140), Size = UDim2.new(0.5, -12, 0, 27),
+Position = UDim2.fromOffset(8, 138), Size = UDim2.new(0.5, -12, 0, 27),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = '< PREVIOUS MATCH', TextColor3 = Theme.Muted, TextSize = 9, ZIndex = 5,
 }, HubUI.WatchMatchGroup)
 HubUI.WatchNextButton = New('TextButton', {
-Position = UDim2.new(0.5, 4, 0, 140), Size = UDim2.new(0.5, -12, 0, 27),
+Position = UDim2.new(0.5, 4, 0, 138), Size = UDim2.new(0.5, -12, 0, 27),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'NEXT MATCH >', TextColor3 = Theme.Muted, TextSize = 9, ZIndex = 5,
 }, HubUI.WatchMatchGroup)
 DarkStroke(HubUI.WatchPreviousButton); DarkStroke(HubUI.WatchNextButton)
 GiveSignal(HubUI.WatchPreviousButton.MouseButton1Click:Connect(function() State.Watch.CycleCourt(-1) end))
 GiveSignal(HubUI.WatchNextButton.MouseButton1Click:Connect(function() State.Watch.CycleCourt(1) end))
-CreateSectionHeader(HubUI.WatchMatchGroup, 180, 'Live match status')
+CreateSectionHeader(HubUI.WatchMatchGroup, 178, 'Live match status')
 HubUI.WatchStatusText = CreateParagraph(
-HubUI.WatchMatchGroup, UDim2.fromOffset(8, 200), UDim2.new(1, -16, 0, 91),
+HubUI.WatchMatchGroup, UDim2.fromOffset(8, 198), UDim2.new(1, -16, 0, 91),
 'STATUS  READY\nMATCH   AUTO LIVE MATCH\nPLAYERS --\nCAMERA  2K CAM'
-)
-CreateParagraph(
-HubUI.WatchMatchGroup, UDim2.fromOffset(8, 303), UDim2.new(1, -16, 0, 109),
-'Matches are read straight from each court\'s _CourtPlayers slots and _CourtSettings.Started flag, so only real games with players in them are listed. Practice courts are never shown. Auto Live Match follows the busiest active game.'
 )
 
 CreateSectionHeader(HubUI.WatchCameraGroup, 11, '50 reference cameras')
@@ -23365,23 +23378,19 @@ HubUI.WatchCameraGroup, 31, 'Camera', State.Watch.CameraModes, State.Watch.Mode,
 function(Value) State.Watch.SetMode(Value) end, 164
 )
 HubUI.WatchPreviousCamera = New('TextButton', {
-Position = UDim2.fromOffset(8, 68), Size = UDim2.new(0.5, -12, 0, 29),
+Position = UDim2.fromOffset(8, 62), Size = UDim2.new(0.5, -12, 0, 29),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = '< PREV CAMERA', TextColor3 = Theme.Muted, TextSize = 9, ZIndex = 5,
 }, HubUI.WatchCameraGroup)
 HubUI.WatchNextCamera = New('TextButton', {
-Position = UDim2.new(0.5, 4, 0, 68), Size = UDim2.new(0.5, -12, 0, 29),
+Position = UDim2.new(0.5, 4, 0, 62), Size = UDim2.new(0.5, -12, 0, 29),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'NEXT CAMERA >', TextColor3 = Theme.Muted, TextSize = 9, ZIndex = 5,
 }, HubUI.WatchCameraGroup)
 DarkStroke(HubUI.WatchPreviousCamera); DarkStroke(HubUI.WatchNextCamera)
 GiveSignal(HubUI.WatchPreviousCamera.MouseButton1Click:Connect(function() State.Watch.CycleMode(-1) end))
 GiveSignal(HubUI.WatchNextCamera.MouseButton1Click:Connect(function() State.Watch.CycleMode(1) end))
-CreateSectionHeader(HubUI.WatchCameraGroup, 111, 'Camera collection')
-CreateParagraph(
-HubUI.WatchCameraGroup, UDim2.fromOffset(8, 131), UDim2.new(1, -16, 0, 281),
-'Uses the 50-shot camera catalog as match cameras. Ball and automatic action-focus shots stay scoped to the selected court; no individual player selection or spectating is used.'
-)
+CreateSectionHeader(HubUI.WatchCameraGroup, 104, 'Camera collection')
 
 State.Extras.RefreshTravelOptions()
 CreateSectionHeader(QuickTravelWorldGroup, 11, 'Destination')
@@ -23391,7 +23400,7 @@ CONFIG.QuickTravelDestination,
 function(Value) CONFIG.QuickTravelDestination = Value end, 155
 )
 HubUI.QuickTravelButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 64), Size = UDim2.new(1, -16, 0, 29),
+Position = UDim2.fromOffset(8, 62), Size = UDim2.new(1, -16, 0, 29),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'TRAVEL TO DESTINATION', TextColor3 = Theme.Text,
 TextSize = 10, ZIndex = 5,
@@ -23406,7 +23415,7 @@ SearchLabel = 'Travel to destination', Kind = 'Action',
 Trigger = function() State.Extras.QuickTravel(CONFIG.QuickTravelDestination) end,
 }
 local RefreshTravelButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 101), Size = UDim2.new(1, -16, 0, 25),
+Position = UDim2.fromOffset(8, 99), Size = UDim2.new(1, -16, 0, 25),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'REFRESH DESTINATIONS', TextColor3 = Theme.Muted,
 TextSize = 9, ZIndex = 5,
@@ -23428,14 +23437,10 @@ HubUI.Controls.QuickTravelPlayer:RefreshOptions(nil, CONFIG.QuickTravelPlayer)
 State.Extras.TravelStatus = 'DESTINATIONS REFRESHED'
 end,
 }
-CreateSectionHeader(QuickTravelWorldGroup, 137, 'Live status')
+CreateSectionHeader(QuickTravelWorldGroup, 135, 'Live status')
 local QuickTravelStatusText = CreateParagraph(
-QuickTravelWorldGroup, UDim2.fromOffset(8, 157), UDim2.new(1, -16, 0, 76),
+QuickTravelWorldGroup, UDim2.fromOffset(8, 155), UDim2.new(1, -16, 0, 76),
 'STATUS  STANDBY\nTARGET  --'
-)
-CreateParagraph(
-QuickTravelWorldGroup, UDim2.fromOffset(8, 243), UDim2.new(1, -16, 0, 91),
-'Includes spawn, event areas, practice, leaderboards, Courts A-K, every detected queue pad, and Park/Arena server travel.'
 )
 
 CreateSectionHeader(QuickTravelPlayerGroup, 11, 'Teleport to player')
@@ -23445,7 +23450,7 @@ CONFIG.QuickTravelPlayer,
 function(Value) CONFIG.QuickTravelPlayer = Value end, 158
 )
 local TravelPlayerButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 64), Size = UDim2.new(1, -16, 0, 29),
+Position = UDim2.fromOffset(8, 62), Size = UDim2.new(1, -16, 0, 29),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'TELEPORT TO PLAYER', TextColor3 = Theme.Text,
 TextSize = 10, ZIndex = 5,
@@ -23460,7 +23465,7 @@ SearchLabel = 'Teleport to player', Kind = 'Action',
 Trigger = function() State.Extras.QuickTravelToPlayer(CONFIG.QuickTravelPlayer) end,
 }
 local RefreshPlayersButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 101), Size = UDim2.new(1, -16, 0, 25),
+Position = UDim2.fromOffset(8, 99), Size = UDim2.new(1, -16, 0, 25),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'REFRESH PLAYER LIST', TextColor3 = Theme.Muted,
 TextSize = 9, ZIndex = 5,
@@ -23480,11 +23485,7 @@ HubUI.Controls.QuickTravelPlayer:RefreshOptions(nil, CONFIG.QuickTravelPlayer)
 State.Extras.TravelStatus = 'PLAYER LIST REFRESHED'
 end,
 }
-CreateSectionHeader(QuickTravelPlayerGroup, 137, 'Behavior')
-CreateParagraph(
-QuickTravelPlayerGroup, UDim2.fromOffset(8, 157), UDim2.new(1, -16, 0, 177),
-'The searchable dropdown lists every other player by username and display name. Teleport lands four studs behind the selected player, clears momentum, and automatically refreshes as players join or leave.'
-)
+CreateSectionHeader(QuickTravelPlayerGroup, 135, 'Behavior')
 
 HubUI.Controls.AutoDailySpin = CreateCheckbox(
 UtilityAutomationGroup, 31, 'Auto Daily Spin', State.AutoDailySpinEnabled,
@@ -23572,7 +23573,7 @@ HubUI.GhostRecordGroup, 91, 'Samples per second', CONFIG.GhostSampleRate, 10, 60
 function(Value) State.GhostReplay.SetSampleRate(Value) end
 )
 HubUI.GhostClearButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 127), Size = UDim2.new(1, -16, 0, 29),
+Position = UDim2.fromOffset(8, 123), Size = UDim2.new(1, -16, 0, 29),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'CLEAR RECORDING', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, HubUI.GhostRecordGroup)
@@ -23582,14 +23583,10 @@ HubUI.Controls.GhostClearAction = {
 SearchRoot = HubUI.GhostClearButton, SearchParent = HubUI.GhostRecordGroup,
 SearchLabel = 'Clear ghost recording', Kind = 'Action', Trigger = State.GhostReplay.ClearRecording,
 }
-CreateSectionHeader(HubUI.GhostRecordGroup, 171, 'Recording status')
+CreateSectionHeader(HubUI.GhostRecordGroup, 165, 'Recording status')
 HubUI.GhostRecordStatus = CreateParagraph(
-HubUI.GhostRecordGroup, UDim2.fromOffset(8, 191), UDim2.new(1, -16, 0, 136),
+HubUI.GhostRecordGroup, UDim2.fromOffset(8, 185), UDim2.new(1, -16, 0, 136),
 'STATUS  READY\nTIME  0.0 / 30.0 SEC\nFRAMES  0\nPARTS  0'
-)
-CreateParagraph(
-HubUI.GhostRecordGroup, UDim2.fromOffset(8, 341), UDim2.new(1, -16, 0, 76),
-'Records your exact transparent avatar, face, accessories, body-part poses, held ball, shot movement, and route. Recording stops automatically at the selected length.'
 )
 
 CreateSectionHeader(HubUI.GhostPlaybackGroup, 11, 'Playback')
@@ -23606,12 +23603,12 @@ HubUI.GhostPlaybackGroup, 91, 'Transparency', CONFIG.GhostTransparency, 0.05, 0.
 function(Value) State.GhostReplay.SetTransparency(Value) end
 )
 HubUI.GhostPlayButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 127), Size = UDim2.new(0.5, -12, 0, 29),
+Position = UDim2.fromOffset(8, 123), Size = UDim2.new(0.5, -12, 0, 29),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'PLAY LAST', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, HubUI.GhostPlaybackGroup)
 HubUI.GhostStopButton = New('TextButton', {
-Position = UDim2.new(0.5, 4, 0, 127), Size = UDim2.new(0.5, -12, 0, 29),
+Position = UDim2.new(0.5, 4, 0, 123), Size = UDim2.new(0.5, -12, 0, 29),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'STOP GHOST', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, HubUI.GhostPlaybackGroup)
@@ -23627,14 +23624,10 @@ HubUI.Controls.GhostStopAction = {
 SearchRoot = HubUI.GhostStopButton, SearchParent = HubUI.GhostPlaybackGroup,
 SearchLabel = 'Stop replay ghost', Kind = 'Action', Trigger = State.GhostReplay.StopPlayback,
 }
-CreateSectionHeader(HubUI.GhostPlaybackGroup, 171, 'Ghost status')
+CreateSectionHeader(HubUI.GhostPlaybackGroup, 165, 'Ghost status')
 HubUI.GhostPlaybackStatus = CreateParagraph(
-HubUI.GhostPlaybackGroup, UDim2.fromOffset(8, 191), UDim2.new(1, -16, 0, 136),
+HubUI.GhostPlaybackGroup, UDim2.fromOffset(8, 185), UDim2.new(1, -16, 0, 136),
 'STATUS  READY\nPLAYHEAD  0.0 SEC\nSPEED  1.00X\nLOOP  OFF'
-)
-CreateParagraph(
-HubUI.GhostPlaybackGroup, UDim2.fromOffset(8, 341), UDim2.new(1, -16, 0, 76),
-'The ghost is a transparent local-only copy of your complete appearance. Face, clothing, accessories, body poses, and recorded basketball movement are preserved.'
 )
 
 CreateSectionHeader(MovementCoreGroup, 11, 'Speed')
@@ -23680,10 +23673,6 @@ MovementCoreGroup, 315, 'Include your own body',
 State.Movement.BodyColliderIncludeSelf,
 function(Value) State.Movement.SetBodyColliderIncludeSelf(Value) end
 )
-CreateParagraph(
-MovementCoreGroup, UDim2.fromOffset(8, 347), UDim2.new(1, -16, 0, 92),
-'Auto Tip Off arms at match start, waits out the countdown, then attacks the ball the instant it spawns at center court. Force body colliders keeps player limbs solid so you can body and screen instead of being phased through. HumanoidRootPart, accessories and the ball are never touched, and your own body is skipped while Noclip is on.'
-)
 
 CreateSectionHeader(MovementFlightGroup, 11, 'Air movement')
 HubUI.Controls.Flight = CreateCheckbox(
@@ -23713,10 +23702,6 @@ CreateSectionHeader(MovementFlightGroup, 205, 'Extras')
 HubUI.Controls.Spinbot = CreateCheckbox(
 MovementFlightGroup, 225, 'Spinbot', State.Extras.SpinbotEnabled,
 function(Value) State.Extras.SetSpinbot(Value) end
-)
-CreateParagraph(
-MovementFlightGroup, UDim2.fromOffset(8, 260), UDim2.new(1, -16, 0, 74),
-'Match detection selects the lobby speed outside active games. Spinbot remains opt-in.'
 )
 
 CreateSectionHeader(BallReachGroup, 11, 'Reach settings')
@@ -23783,28 +23768,20 @@ BallMagGroup, 91, 'Pull speed', State.BallAssist.MagSpeed, 10, 200, 0,
 function(Value) State.BallAssist.SetMagSpeed(Value) end
 )
 CreateSectionHeader(BallMagGroup, 123, 'Behavior')
-CreateParagraph(
-BallMagGroup, UDim2.fromOffset(8, 143), UDim2.new(1, -16, 0, 44),
-'Pulls loose match and practice basketballs toward the front of your character, then attempts pickup at close range. Your own held ball is ignored.'
-)
-CreateSectionHeader(BallMagGroup, 195, 'Safe colliders')
+CreateSectionHeader(BallMagGroup, 143, 'Safe colliders')
 HubUI.Controls.BallColliders = CreateCheckbox(
-BallMagGroup, 215, 'Force ball colliders', State.BallAssist.ColliderEnabled,
+BallMagGroup, 163, 'Force ball colliders', State.BallAssist.ColliderEnabled,
 function(Value) State.BallAssist.SetBallColliders(Value) end
 )
 HubUI.Controls.BallColliderScanInterval = CreateNumberInput(
-BallMagGroup, 245, 'Scan interval',
+BallMagGroup, 193, 'Scan interval',
 State.BallAssist.ColliderScanInterval, 0.1, 1, 2,
 function(Value) State.BallAssist.SetColliderScanInterval(Value) end
 )
 HubUI.Controls.BallColliderPossessionGrace = CreateNumberInput(
-BallMagGroup, 275, 'Steal grace',
+BallMagGroup, 223, 'Steal grace',
 State.BallAssist.ColliderPossessionGrace, 0.2, 2, 2,
 function(Value) State.BallAssist.SetColliderPossessionGrace(Value) end
-)
-CreateParagraph(
-BallMagGroup, UDim2.fromOffset(8, 307), UDim2.new(1, -16, 0, 32),
-'Held balls stay non-collidable; possession changes restore instantly.'
 )
 
 CreateSectionHeader(PrivacyGroup, 10, 'Identity')
@@ -23863,34 +23840,30 @@ HubUI.Controls.ApplyAliasAction = {
 SearchRoot = ApplyAliasButton, SearchParent = PrivacyGroup,
 SearchLabel = 'Apply local alias', Kind = 'Action', Trigger = ApplyAliasFromBox,
 }
-CreateParagraph(
-PrivacyGroup, UDim2.fromOffset(8, 127), UDim2.new(1, -16, 0, 42),
-'Local display only. Account identity and server data remain unchanged.'
-)
 
-CreateSectionHeader(PrivacyGroup, 179, 'Device / avatar preview')
+CreateSectionHeader(PrivacyGroup, 132, 'Device / avatar preview')
 HubUI.Controls.DeviceSpoofType = CreateSelector(
-PrivacyGroup, 199, 'Device icon', { 'Desktop', 'Mobile', 'Console' }, CONFIG.DeviceSpoofType,
+PrivacyGroup, 152, 'Device icon', { 'Desktop', 'Mobile', 'Console' }, CONFIG.DeviceSpoofType,
 function(Value) CONFIG.DeviceSpoofType = Value; if State.Extras.DeviceSpoofEnabled then State.Extras.SetDeviceSpoof(true, Value) end end, 145
 )
 HubUI.Controls.DeviceSpoof = CreateCheckbox(
-PrivacyGroup, 229, 'Spoof device locally', State.Extras.DeviceSpoofEnabled,
+PrivacyGroup, 182, 'Spoof device locally', State.Extras.DeviceSpoofEnabled,
 function(Value) State.Extras.SetDeviceSpoof(Value, CONFIG.DeviceSpoofType) end
 )
 State.Extras.AvatarIdBox = New('TextBox', {
-Position = UDim2.fromOffset(8, 263), Size = UDim2.new(1, -16, 0, 24),
+Position = UDim2.fromOffset(8, 212), Size = UDim2.new(1, -16, 0, 24),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, ClearTextOnFocus = false,
 Font = Enum.Font.Code, PlaceholderText = 'Roblox name or user ID', Text = '',
 TextColor3 = Theme.Text, PlaceholderColor3 = Theme.Muted, TextSize = 11, ZIndex = 6,
 }, PrivacyGroup)
 AccentStroke(State.Extras.AvatarIdBox, 1, 0.18)
 State.Extras.AvatarApplyButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 295), Size = UDim2.new(0.5, -12, 0, 27),
+Position = UDim2.fromOffset(8, 244), Size = UDim2.new(0.5, -12, 0, 27),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'APPLY FULL PACKAGE', TextColor3 = Theme.Text, TextSize = 8, ZIndex = 5,
 }, PrivacyGroup)
 State.Extras.AvatarRestoreButton = New('TextButton', {
-Position = UDim2.new(0.5, 4, 0, 295), Size = UDim2.new(0.5, -12, 0, 27),
+Position = UDim2.new(0.5, 4, 0, 244), Size = UDim2.new(0.5, -12, 0, 27),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'RESTORE', TextColor3 = Theme.Text, TextSize = 9, ZIndex = 5,
 }, PrivacyGroup)
@@ -25052,30 +25025,30 @@ CONFIG.CustomBallB = Value
 if HubUI.Controls.BallPreset then HubUI.Controls.BallPreset:Set('Custom', false) end
 pcall(State.BallStudio.Refresh)
 end)
-CreateSectionHeader(HubUI.BallSkinGroup, 301, 'Cosmetic colorizer')
-HubUI.Controls.CosmeticTint = CreateCheckbox(HubUI.BallSkinGroup, 321, 'Colorize every cosmetic', CONFIG.CosmeticTintEnabled, function(Value)
+CreateSectionHeader(HubUI.BallSkinGroup, 295, 'Cosmetic colorizer')
+HubUI.Controls.CosmeticTint = CreateCheckbox(HubUI.BallSkinGroup, 315, 'Colorize every cosmetic', CONFIG.CosmeticTintEnabled, function(Value)
 CONFIG.CosmeticTintEnabled = Value == true
 State.BallStudio.LastTintAt = 0
 end)
-CreateNumberInput(HubUI.BallSkinGroup, 343, 'Cosmetic red', CONFIG.CosmeticTintR, 0, 255, 0, function(Value)
+CreateNumberInput(HubUI.BallSkinGroup, 337, 'Cosmetic red', CONFIG.CosmeticTintR, 0, 255, 0, function(Value)
 CONFIG.CosmeticTintR = Value
 State.BallStudio.LastTintAt = 0
 end)
-CreateNumberInput(HubUI.BallSkinGroup, 367, 'Cosmetic green', CONFIG.CosmeticTintG, 0, 255, 0, function(Value)
+CreateNumberInput(HubUI.BallSkinGroup, 361, 'Cosmetic green', CONFIG.CosmeticTintG, 0, 255, 0, function(Value)
 CONFIG.CosmeticTintG = Value
 State.BallStudio.LastTintAt = 0
 end)
-CreateNumberInput(HubUI.BallSkinGroup, 391, 'Cosmetic blue', CONFIG.CosmeticTintB, 0, 255, 0, function(Value)
+CreateNumberInput(HubUI.BallSkinGroup, 385, 'Cosmetic blue', CONFIG.CosmeticTintB, 0, 255, 0, function(Value)
 CONFIG.CosmeticTintB = Value
 State.BallStudio.LastTintAt = 0
 end)
-CreateSectionHeader(HubUI.BallSkinGroup, 417, 'Sound tuning')
-HubUI.ShotSoundIdBox = HubUI.CreateIdInput(HubUI.BallSkinGroup, 437, 'Shot sound ID', CONFIG.ShotSoundId, function(Value)
+CreateSectionHeader(HubUI.BallSkinGroup, 411, 'Sound tuning')
+HubUI.ShotSoundIdBox = HubUI.CreateIdInput(HubUI.BallSkinGroup, 431, 'Shot sound ID', CONFIG.ShotSoundId, function(Value)
 CONFIG.ShotSoundId = Value
 if HubUI.Controls.BallPreset then HubUI.Controls.BallPreset:Set('Custom', false) end
 if Value > 0 then pcall(State.BallStudio.PlayShotSound, nil, true) end
 end)
-HubUI.Controls.ShotSoundVolume = CreateNumberInput(HubUI.BallSkinGroup, 467, 'Volume', CONFIG.ShotSoundVolume, 0, 10, 2, function(Value)
+HubUI.Controls.ShotSoundVolume = CreateNumberInput(HubUI.BallSkinGroup, 461, 'Volume', CONFIG.ShotSoundVolume, 0, 10, 2, function(Value)
 CONFIG.ShotSoundVolume = Value
 if HubUI.Controls.BallPreset then HubUI.Controls.BallPreset:Set('Custom', false) end
 end)
@@ -25083,7 +25056,7 @@ HubUI.Controls.ShotSoundPitch = CreateNumberInput(HubUI.BallTrailGroup, 487, 'So
 CONFIG.ShotSoundPitch = Value
 if HubUI.Controls.BallPreset then HubUI.Controls.BallPreset:Set('Custom', false) end
 end)
-HubUI.Controls.ShotSoundDuration = CreateNumberInput(HubUI.BallSkinGroup, 493, 'Duration (0 = full)', CONFIG.ShotSoundDuration, 0, 120, 2, function(Value)
+HubUI.Controls.ShotSoundDuration = CreateNumberInput(HubUI.BallSkinGroup, 487, 'Duration (0 = full)', CONFIG.ShotSoundDuration, 0, 120, 2, function(Value)
 CONFIG.ShotSoundDuration = Value
 if HubUI.Controls.BallPreset then HubUI.Controls.BallPreset:Set('Custom', false) end
 end)
@@ -25212,9 +25185,8 @@ end, 125)
 CreateSectionHeader(LeftGroup, 9, 'Core')
 HubUI.Controls.Desync = CreateCheckbox(HubUI.SyncGroup, 17, 'Desync Detection', State.Desync.Enabled, function(Value) State.Desync.SetEnabled(Value) end)
 HubUI.Controls.Outline = CreateCheckbox(HubUI.SyncGroup, 47, 'Position Outlines', State.Outline.Enabled, function(Value) State.Outline.SetEnabled(Value) end)
-HubUI.Controls.OutlineMode = CreateSelector(HubUI.SyncGroup, 82, 'Show outlines for', { 'both', 'self', 'enemies' }, State.Outline.Mode, function(Value) State.Outline.SetMode(Value) end, 135)
-HubUI.DesyncStatusText = CreateParagraph(HubUI.SyncGroup, UDim2.fromOffset(8, 124), UDim2.new(1, -16, 0, 112), 'status  off\noffset  --\navg offset  --\nsamples  0')
-CreateParagraph(HubUI.SyncGroup, UDim2.fromOffset(8, 250), UDim2.new(1, -16, 0, 78), 'Red shows server/root position. Gold or green shows the calculated client position. Lines connect offsets.')
+HubUI.Controls.OutlineMode = CreateSelector(HubUI.SyncGroup, 77, 'Show outlines for', { 'both', 'self', 'enemies' }, State.Outline.Mode, function(Value) State.Outline.SetMode(Value) end, 135)
+HubUI.DesyncStatusText = CreateParagraph(HubUI.SyncGroup, UDim2.fromOffset(8, 108), UDim2.new(1, -16, 0, 112), 'status  off\noffset  --\navg offset  --\nsamples  0')
 
 HubUI.Controls.SilentAim = CreateCheckbox(LeftGroup, 29, 'Silent Aim', State.RequestedEnabled, function(Value)
 SetSilentAimEnabled(Value, true)
@@ -25225,22 +25197,22 @@ if HubUI.Sync then HubUI.Sync() end
 end)
 
 HubUI.Controls.AutoPowerPreference = CreateSelector(
-LeftGroup, 91, 'Power preference',
+LeftGroup, 89, 'Power preference',
 { 'Lowest', 'Highest', 'Closest Current' },
 CONFIG.AutoPowerPreference,
 function(Value) CONFIG.AutoPowerPreference = Value end,
 118
 )
 
-CreateSectionHeader(LeftGroup, 123, 'Requirements')
-HubUI.Controls.RequireBall = CreateCheckbox(LeftGroup, 143, 'Require basketball', CONFIG.AimRequireBall, function(Value)
+CreateSectionHeader(LeftGroup, 121, 'Requirements')
+HubUI.Controls.RequireBall = CreateCheckbox(LeftGroup, 141, 'Require basketball', CONFIG.AimRequireBall, function(Value)
 CONFIG.AimRequireBall = Value
 end)
-HubUI.Controls.PerfectRelease = CreateCheckbox(LeftGroup, 173, 'Perfect release', CONFIG.PerfectRelease, function(Value)
+HubUI.Controls.PerfectRelease = CreateCheckbox(LeftGroup, 171, 'Perfect release', CONFIG.PerfectRelease, function(Value)
 CONFIG.PerfectRelease = Value
 end)
 HubUI.Controls.PerfectReleaseAutoCalibrate = CreateCheckbox(
-LeftGroup, 203, 'Self-calibrate release', CONFIG.PerfectReleaseAutoCalibrate,
+LeftGroup, 201, 'Self-calibrate release', CONFIG.PerfectReleaseAutoCalibrate,
 function(Value)
 CONFIG.PerfectReleaseAutoCalibrate = Value
 if Value then
@@ -25252,7 +25224,7 @@ or 'Release timing locked to the manual value.')
 end
 )
 HubUI.Controls.SilentMode = CreateSelector(
-LeftGroup, 233, 'Arc mode', { 'High', 'Low' },
+LeftGroup, 231, 'Arc mode', { 'High', 'Low' },
 (CONFIG.SilentMode == 'Low' and 'Low' or 'High'),
 function(Value)
 CONFIG.SilentMode = Value
@@ -25264,14 +25236,10 @@ end,
 118,
 true
 )
-CreateParagraph(
-LeftGroup, UDim2.fromOffset(8, 263), UDim2.new(1, -16, 0, 42),
-'High uses the lobbed ballistic root. Low uses the flat root. Both solve from your current release position with no movement or ping lead.'
-)
 
-CreateSectionHeader(LeftGroup, 303, 'Shot variants')
+CreateSectionHeader(LeftGroup, 264, 'Shot variants')
 HubUI.Controls.Backboard = CreateCheckbox(
-LeftGroup, 323, 'Enable backboard (bank) shots', CONFIG.BackboardEnabled == true,
+LeftGroup, 284, 'Enable backboard (bank) shots', CONFIG.BackboardEnabled == true,
 function(Value)
 CONFIG.BackboardEnabled = Value == true
 SilentAim.ArcSolveCache = {}
@@ -25283,22 +25251,16 @@ or 'Bank shots disabled: aiming directly at the rim.')
 end
 )
 HubUI.Controls.NoJumpMode = CreateCheckbox(
-LeftGroup, 353, 'Enable No Jump Shot', CONFIG.NoJumpEnabled,
+LeftGroup, 314, 'Enable No Jump Shot', CONFIG.NoJumpEnabled,
 function(Value)
 CONFIG.NoJumpEnabled = Value == true
 State.NoJump.BindKey(CONFIG.NoJumpShotKey)
 end
 )
-CreateParagraph(
-LeftGroup,
-UDim2.fromOffset(8, 383),
-UDim2.new(1, -16, 0, 54),
-'Silent aim solves purely from your current release position: no movement, velocity, or ping compensation. Backboard mode banks the exact same formula off the board mirror point.'
-)
 
-CreateSectionHeader(LeftGroup, 443, 'Match arc')
+CreateSectionHeader(LeftGroup, 346, 'Match arc')
 HubUI.Controls.MatchArc = CreateCheckbox(
-LeftGroup, 463, 'Match custom arc angle', CONFIG.MatchArcEnabled == true,
+LeftGroup, 366, 'Match custom arc angle', CONFIG.MatchArcEnabled == true,
 function(Value)
 CONFIG.MatchArcEnabled = Value == true
 SilentAim.ArcSolveCache = {}
@@ -25311,7 +25273,7 @@ or 'Match Arc off: arc follows the High/Low mode at the current power.')
 end
 )
 HubUI.Controls.MatchArcAngle = CreateNumberInput(
-LeftGroup, 493, 'Desired arc angle (deg)', CONFIG.MatchArcAngle, 5, 88, 0,
+LeftGroup, 396, 'Desired arc angle (deg)', CONFIG.MatchArcAngle, 5, 88, 0,
 function(Value)
 CONFIG.MatchArcAngle = Value
 SilentAim.ArcSolveCache = {}
@@ -25365,16 +25327,10 @@ if HubUI.Sync then HubUI.Sync() end
 end,
 150
 )
-CreateParagraph(
-MiddleGroup,
-UDim2.fromOffset(8, 291),
-UDim2.new(1, -16, 0, 48),
-'Arc Previewer draws the solved formula flight path live, before you shoot.'
-)
 
-CreateSectionHeader(MiddleGroup, 345, 'Ping-adaptive release')
+CreateSectionHeader(MiddleGroup, 286, 'Ping-adaptive release')
 HubUI.Controls.PingAdaptiveRelease = CreateCheckbox(
-MiddleGroup, 365, 'Ping-Adaptive Release',
+MiddleGroup, 306, 'Ping-Adaptive Release',
 CONFIG.PingAdaptiveRelease,
 function(Value)
 CONFIG.PingAdaptiveRelease = Value == true
@@ -25384,25 +25340,19 @@ end
 end
 )
 HubUI.Controls.PingAdaptiveBaseline = CreateNumberInput(
-MiddleGroup, 395, 'Baseline ping (ms)',
+MiddleGroup, 336, 'Baseline ping (ms)',
 CONFIG.PingAdaptiveBaseline, 0, 300, 0,
 function(Value) CONFIG.PingAdaptiveBaseline = Value end
 )
 HubUI.Controls.PingAdaptiveStrength = CreateNumberInput(
-MiddleGroup, 421, 'Lead strength',
+MiddleGroup, 362, 'Lead strength',
 CONFIG.PingAdaptiveStrength, 0, 3, 2,
 function(Value) CONFIG.PingAdaptiveStrength = Value end
 )
 HubUI.Controls.PingAdaptiveMaxLead = CreateNumberInput(
-MiddleGroup, 447, 'Max lead (ms)',
+MiddleGroup, 388, 'Max lead (ms)',
 CONFIG.PingAdaptiveMaxLead, 0, 500, 0,
 function(Value) CONFIG.PingAdaptiveMaxLead = Value end
-)
-CreateParagraph(
-MiddleGroup,
-UDim2.fromOffset(8, 473),
-UDim2.new(1, -16, 0, 46),
-'Only ping above the baseline adds lead, so a good connection changes nothing. Live ping and ball physics owner are on the Status tab.'
 )
 
 CreateSectionHeader(PassGroup, 11, 'Pass assist')
@@ -25437,12 +25387,6 @@ function(Value) CONFIG.MobilePassButtons = Value; State.MobilePass.Refresh() end
 )
 
 CreateSectionHeader(PassGroup, 265, 'Notes')
-CreateParagraph(
-PassGroup,
-UDim2.fromOffset(8, 285),
-UDim2.new(1, -16, 0, 139),
-'Your character glows gold when a teammate is inside formula pass range. Auto Pass preloads the actor hooks and handles click registration/retry from one number press. Pass arc picks the lobbed High root or the flat Low root from the same solver silent aim uses. Pass lead is a percentage taken from the movement of the teammate you are passing to: 0 aims straight at them with no lead at all, and higher values throw further ahead of whichever way they are running. A stationary teammate always gets a direct pass.'
-)
 
 CreateSectionHeader(DunkGroup, 11, 'Automation')
 HubUI.Controls.AutoDunk = CreateCheckbox(DunkGroup, 31, 'Auto Dunk', State.AutoDunkEnabled, function(Value)
@@ -25504,40 +25448,28 @@ function(Value) State.AutoOffense.SetSimple('AutoOffenseStyle', Value) end,
 150
 )
 HubUI.Controls.OffenseManualOverride = CreateCheckbox(
-HubUI.OffenseCoreGroup, 93, 'Manual movement override', CONFIG.AutoOffenseManualOverride,
+HubUI.OffenseCoreGroup, 92, 'Manual movement override', CONFIG.AutoOffenseManualOverride,
 function(Value) CONFIG.AutoOffenseManualOverride = Value end
 )
-CreateParagraph(
-HubUI.OffenseCoreGroup,
-UDim2.fromOffset(8, 121),
-UDim2.new(1, -16, 0, 34),
-'Get To Spot  drives hard for the 85 line.\nSafe Mode  protects the ball and turns earlier.'
-)
 
-CreateSectionHeader(HubUI.OffenseCoreGroup, 163, 'Tuning')
+CreateSectionHeader(HubUI.OffenseCoreGroup, 124, 'Tuning')
 HubUI.Controls.AutoOffenseTurnAround = CreateNumberInput(
-HubUI.OffenseCoreGroup, 183, 'Turn around at (studs)', CONFIG.AutoOffenseTurnAround, 3, 20, 1,
+HubUI.OffenseCoreGroup, 144, 'Turn around at (studs)', CONFIG.AutoOffenseTurnAround, 3, 20, 1,
 function(Value) State.AutoOffense.SetSimple('AutoOffenseTurnAround', Value) end
 )
 HubUI.Controls.AutoOffenseEdgeRoom = CreateNumberInput(
-HubUI.OffenseCoreGroup, 209, 'Out of bounds room (studs)', CONFIG.AutoOffenseEdgeRoom, 2, 25, 1,
+HubUI.OffenseCoreGroup, 170, 'Out of bounds room (studs)', CONFIG.AutoOffenseEdgeRoom, 2, 25, 1,
 function(Value) State.AutoOffense.SetSimple('AutoOffenseEdgeRoom', Value) end
 )
 HubUI.Controls.AutoOffenseSpotUrgency = CreateNumberInput(
-HubUI.OffenseCoreGroup, 235, 'Rush to 85 line (0-10)', CONFIG.AutoOffenseSpotUrgency, 0, 10, 1,
+HubUI.OffenseCoreGroup, 196, 'Rush to 85 line (0-10)', CONFIG.AutoOffenseSpotUrgency, 0, 10, 1,
 function(Value) State.AutoOffense.SetSimple('AutoOffenseSpotUrgency', Value) end
 )
-CreateParagraph(
-HubUI.OffenseCoreGroup,
-UDim2.fromOffset(8, 263),
-UDim2.new(1, -16, 0, 48),
-'Turn around  base studs, and it turns even earlier the faster they close on you.\nOut of bounds room  smaller = hugs the line closer.\nRush  higher = fewer dribbles before it attacks.'
-)
 
-CreateSectionHeader(HubUI.OffenseCoreGroup, 319, 'Live status')
+CreateSectionHeader(HubUI.OffenseCoreGroup, 230, 'Live status')
 HubUI.OffenseStatusText = CreateParagraph(
 HubUI.OffenseCoreGroup,
-UDim2.fromOffset(8, 339),
+UDim2.fromOffset(8, 250),
 UDim2.new(1, -16, 0, 110),
 'STATUS  OFF\nMODE    Get To Spot\nACTION  --\nTARGET  --\nTURN AT --\nDRIVE   --\nHANDS   --'
 )
@@ -25573,28 +25505,16 @@ State.AutoGetOpenRouteCooldowns = {}
 end,
 170
 )
-CreateParagraph(
-GetOpenGroup,
-UDim2.fromOffset(8, 91),
-UDim2.new(1, -16, 0, 52),
-'Best Available keeps smart route selection. Named destinations lock to fixed basket-relative court spots on live and practice courts. Manual movement temporarily takes control.'
-)
 
-CreateSectionHeader(GetOpenGroup, 153, 'Live status')
+CreateSectionHeader(GetOpenGroup, 94, 'Live status')
 local GetOpenStatusText = CreateParagraph(
 GetOpenGroup,
-UDim2.fromOffset(8, 173),
+UDim2.fromOffset(8, 114),
 UDim2.new(1, -16, 0, 79),
 'STATUS  OFF\nSPOT    Best Available\nMOVE    Waiting'
 )
 
-CreateSectionHeader(GetOpenGroup, 267, 'Behavior')
-CreateParagraph(
-GetOpenGroup,
-UDim2.fromOffset(8, 287),
-UDim2.new(1, -16, 0, 97),
-'Runs into the frontcourt, stays in bounds, reacts to incoming passes, and preserves handler/teammate spacing. In practice, the nearest basket is locked when Auto Get Open starts so destinations do not flip ends mid-cut.'
-)
+CreateSectionHeader(GetOpenGroup, 206, 'Behavior')
 
 CreateSectionHeader(GuardGroup, 11, 'Guard controls')
 HubUI.Controls.AutoGuard = CreateCheckbox(GuardGroup, 31, 'Adaptive Auto Guard', State.AutoGuardEnabled, function(Value)
@@ -25677,12 +25597,6 @@ GuardGroup,
 UDim2.fromOffset(8, 427),
 UDim2.new(1, -16, 0, 52),
 'STATUS  OFF\nTARGET  --\nDIST    --'
-)
-CreateParagraph(
-GuardGroup,
-UDim2.fromOffset(8, 487),
-UDim2.new(1, -16, 0, 30),
-'Normal off-ball guard closes first; Head Ride takes over only inside the engage range.'
 )
 
 CreateSectionHeader(BodyGroup, 11, 'Body controls')
@@ -25804,12 +25718,6 @@ function(Value) CONFIG.AutoBodyHandRevertDeadzone = Value end
 )
 
 CreateSectionHeader(BodySettingsGroup, 295, 'Behavior')
-CreateParagraph(
-BodySettingsGroup,
-UDim2.fromOffset(8, 315),
-UDim2.new(1, -16, 0, 139),
-'Defenders are scored on distance, closing speed, position and the hoop lane. Shield protects the ball, Drive Lane favors the rim, and Square Up keeps your shoulders forward. Mix now has its own tab.'
-)
 
 CreateSectionHeader(AutoMixControlGroup, 11, 'Core controls')
 HubUI.Controls.AutoMix = CreateCheckbox(
@@ -25876,12 +25784,6 @@ HubUI.Controls.AutoMixMoveVariety = CreateCheckbox(
 AutoMixControlGroup, 345, 'Allow safe move variety', CONFIG.AutoMixMoveVariety,
 function(Value) CONFIG.AutoMixMoveVariety = Value end
 )
-CreateParagraph(
-AutoMixControlGroup,
-UDim2.fromOffset(8, 383),
-UDim2.new(1, -16, 0, 98),
-'Smart Mix waits for a stable read instead of spamming. Emergency pressure bypasses the cooldown. Manual dribble buttons still cancel automation, while W/A/S/D is blended with the selected escape lane.'
-)
 
 CreateSectionHeader(AutoMixStrategyGroup, 11, 'Live threat read')
 local AutoMixStatusText = CreateParagraph(
@@ -25911,12 +25813,6 @@ HubUI.Controls.AutoMixMinimumClearanceGain = CreateNumberInput(
 AutoMixStrategyGroup, 329, 'Minimum clearance gain', CONFIG.AutoMixMinimumClearanceGain, 0, 3, 1,
 function(Value) CONFIG.AutoMixMinimumClearanceGain = Value end
 )
-CreateParagraph(
-AutoMixStrategyGroup,
-UDim2.fromOffset(8, 367),
-UDim2.new(1, -16, 0, 104),
-'Reads retreat, gap, ball-side shade, middle contain, lateral cutoff, hard close, reach attempts, and double teams. It holds against retreating defense, repositions against containment, and spends one safe counter only when pressure requires it.'
-)
 
 CreateSectionHeader(QueueGroup, 11, 'Queue controls')
 HubUI.Controls.AutoQueue = CreateCheckbox(QueueGroup, 31, 'Auto Queue', State.AutoQueueEnabled, function(Value)
@@ -25935,16 +25831,10 @@ end,
 HubUI.Controls.AutoRequeue = CreateCheckbox(QueueGroup, 91, 'Requeue after games', CONFIG.AutoQueueRequeue, function(Value)
 CONFIG.AutoQueueRequeue = Value
 end)
-CreateParagraph(
-QueueGroup,
-UDim2.fromOffset(8, 123),
-UDim2.new(1, -16, 0, 50),
-'Chooses a live open match pad and retries when a selected spot is taken.'
-)
 
-CreateSectionHeader(QueueGroup, 183, 'Live queue')
+CreateSectionHeader(QueueGroup, 123, 'Live queue')
 local QueueStatusBox = New('Frame', {
-Position = UDim2.fromOffset(8, 203),
+Position = UDim2.fromOffset(8, 143),
 Size = UDim2.new(1, -16, 0, 131),
 BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
@@ -26186,7 +26076,7 @@ return false
 end
 
 local StatusLabel = CreateParagraph(
-Groups.Profiles, UDim2.fromOffset(8, 264), UDim2.new(1, -16, 0, 70),
+Groups.Profiles, UDim2.fromOffset(8, 232), UDim2.new(1, -16, 0, 70),
 'No profile selected. Configs are applied in small batches to avoid client stalls.'
 )
 local function SetConfigStatus(Text, IsError)
@@ -26267,7 +26157,7 @@ end,
 HubUI.Controls.ConfigSelector = Selector
 
 local IncludeInterface = CreateCheckbox(
-Groups.Profiles, 225, 'Include interface theme / layout', true,
+Groups.Profiles, 202, 'Include interface theme / layout', true,
 function() end
 )
 HubUI.Controls.ConfigIncludeInterface = IncludeInterface
@@ -26475,7 +26365,7 @@ Refresh = RefreshNames,
 }
 
 local SaveButton = CreateConfigButton(
-Groups.Profiles, UDim2.fromOffset(8, 95), UDim2.fromOffset(113, 27), 'SAVE CURRENT',
+Groups.Profiles, UDim2.fromOffset(8, 94), UDim2.fromOffset(113, 27), 'SAVE CURRENT',
 function()
 local Name = SanitizeConfigName(NameBox.Text)
 NameBox.Text = Name
@@ -26486,14 +26376,14 @@ or ('Saved ' .. Name .. ' for this session; disk API unavailable.'))
 end
 )
 local LoadButton = CreateConfigButton(
-Groups.Profiles, UDim2.fromOffset(129, 95), UDim2.fromOffset(112, 27), 'LOAD',
+Groups.Profiles, UDim2.fromOffset(129, 94), UDim2.fromOffset(112, 27), 'LOAD',
 function()
 if SelectedName == 'None' then SetConfigStatus('Select or save a profile first.', true); return end
 ApplyProfile(ReadProfile(SelectedName))
 end
 )
 local DeleteButton = CreateConfigButton(
-Groups.Profiles, UDim2.fromOffset(8, 130), UDim2.fromOffset(113, 27), 'DELETE',
+Groups.Profiles, UDim2.fromOffset(8, 129), UDim2.fromOffset(113, 27), 'DELETE',
 function()
 if SelectedName == 'None' then SetConfigStatus('No profile is selected.', true); return end
 local Name = SelectedName
@@ -26511,11 +26401,11 @@ end,
 true
 )
 local RefreshButton = CreateConfigButton(
-Groups.Profiles, UDim2.fromOffset(129, 130), UDim2.fromOffset(112, 27), 'REFRESH',
+Groups.Profiles, UDim2.fromOffset(129, 129), UDim2.fromOffset(112, 27), 'REFRESH',
 function() RefreshNames(true); SetConfigStatus('Config list refreshed.') end
 )
 local ResetButton = CreateConfigButton(
-Groups.Profiles, UDim2.fromOffset(8, 165), UDim2.fromOffset(233, 27), 'RESTORE SESSION DEFAULTS',
+Groups.Profiles, UDim2.fromOffset(8, 164), UDim2.fromOffset(233, 27), 'RESTORE SESSION DEFAULTS',
 function() ApplyProfile(DeepCopy(HubUI.DefaultProfile)) end
 )
 
@@ -26558,22 +26448,13 @@ end
 HubUI.Controls.ConfigExportAction = { SearchRoot = ExportButton, SearchParent = Groups.System, SearchLabel = 'Export config JSON' }
 HubUI.Controls.ConfigImportAction = { SearchRoot = ImportButton, SearchParent = Groups.System, SearchLabel = 'Import config JSON' }
 
-CreateParagraph(
-Groups.System, UDim2.fromOffset(8, 69), UDim2.new(1, -16, 0, 88),
-'Profiles save visible control values, core CONFIG values, and optional interface settings. Loading is throttled so many callbacks do not fire in one frame.'
-)
-
-CreateSectionHeader(Groups.System, 171, 'Lifecycle')
+CreateSectionHeader(Groups.System, 72, 'Lifecycle')
 local UnloadButton = CreateConfigButton(
-Groups.System, UDim2.fromOffset(8, 193), UDim2.new(1, -16, 0, 42), 'UNLOAD GOLDEN EAGLE HUB',
+Groups.System, UDim2.fromOffset(8, 92), UDim2.new(1, -16, 0, 42), 'UNLOAD GOLDEN EAGLE HUB',
 function() if HubUI.AnimateUnload then HubUI.AnimateUnload() end end,
 true
 )
 HubUI.Controls.UnloadAction = { SearchRoot = UnloadButton, SearchParent = Groups.System, SearchLabel = 'Unload hub with animation' }
-CreateParagraph(
-Groups.System, UDim2.fromOffset(8, 245), UDim2.new(1, -16, 0, 89),
-'Unload animates the window out, disables active features, restores local state, disconnects listeners, removes render bindings, restores hooks, and destroys the interface.'
-)
 end
 HubUI.BuildConfigControls()
 
@@ -28486,6 +28367,144 @@ Main.GroupTransparency = 0
 MainScale.Scale = TargetScale
 end
 end)
+end
+end
+
+
+-- ===== TOAST NOTIFICATIONS =====
+-- Themed in-hub toasts replace the stock Roblox notification popups.
+do
+local ToastRoot = New('Frame', {
+Name = 'Toasts',
+AnchorPoint = Vector2.new(1, 1),
+Position = UDim2.new(1, -14, 1, -14),
+Size = UDim2.fromOffset(252, 380),
+BackgroundTransparency = 1,
+ZIndex = 90,
+}, ScreenGui)
+local ActiveToasts = {}
+local ToastSpacing = 8
+local ToastDuration = 3.2
+local function Restack()
+local Offset = 0
+for Index = #ActiveToasts, 1, -1 do
+local Toast = ActiveToasts[Index]
+Tween(Toast.Frame, 0.24, { Position = UDim2.new(1, 0, 1, -Offset) }, Enum.EasingStyle.Quint)
+Offset = Offset + Toast.Height + ToastSpacing
+end
+end
+local function Dismiss(Toast, Instant)
+if Toast.Closing then return end
+Toast.Closing = true
+Toast.Serial += 1
+if Toast.ProgressTween then pcall(function() Toast.ProgressTween:Cancel() end) end
+local Index = table.find(ActiveToasts, Toast)
+if Index then table.remove(ActiveToasts, Index) end
+Tween(Toast.Frame, Instant and 0.12 or 0.22, {
+GroupTransparency = 1,
+Position = Toast.Frame.Position + UDim2.fromOffset(264, 0),
+}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+task.delay(0.3, function()
+if Toast.Frame and Toast.Frame.Parent then Toast.Frame:Destroy() end
+end)
+Restack()
+end
+local function ArmTimer(Toast)
+Toast.Serial += 1
+local Serial = Toast.Serial
+Toast.Progress.Size = UDim2.new(1, 0, 0, 2)
+if Toast.ProgressTween then pcall(function() Toast.ProgressTween:Cancel() end) end
+Toast.ProgressTween = TweenService:Create(Toast.Progress, TweenInfo.new(
+ToastDuration, Enum.EasingStyle.Linear
+), { Size = UDim2.new(0, 0, 0, 2) })
+Toast.ProgressTween:Play()
+task.delay(ToastDuration, function()
+if Toast.Serial == Serial and not Toast.Closing then Dismiss(Toast) end
+end)
+end
+local function ShowToast(Title, Text)
+Title = tostring(Title or 'GOLDEN EAGLE HUB')
+Text = tostring(Text or '')
+-- Refresh an identical live toast instead of stacking duplicates.
+for _, Toast in ipairs(ActiveToasts) do
+if Toast.Title == Title and Toast.Text == Text and not Toast.Closing then
+ArmTimer(Toast)
+return
+end
+end
+while #ActiveToasts >= 5 do
+Dismiss(ActiveToasts[1], true)
+end
+local Lines = math.clamp(math.ceil(#Text / 36), 1, 4)
+local Height = 26 + Lines * 13
+local Frame = New('CanvasGroup', {
+AnchorPoint = Vector2.new(1, 1),
+Position = UDim2.new(1, 264, 1, 0),
+Size = UDim2.fromOffset(252, Height),
+BackgroundColor3 = Theme.Panel,
+BorderSizePixel = 0,
+GroupTransparency = 1,
+ZIndex = 91,
+}, ToastRoot)
+New('UICorner', { CornerRadius = UDim.new(0, 4) }, Frame)
+AccentStroke(Frame, 1, 0.25)
+local TitleLabel = New('TextLabel', {
+Position = UDim2.fromOffset(9, 5),
+Size = UDim2.new(1, -18, 0, 12),
+BackgroundTransparency = 1,
+Font = Enum.Font.Code,
+Text = string.upper(Title),
+TextColor3 = Theme.Accent,
+TextSize = 10,
+TextTruncate = Enum.TextTruncate.AtEnd,
+TextXAlignment = Enum.TextXAlignment.Left,
+ZIndex = 92,
+}, Frame)
+BindAccent(TitleLabel, 'TextColor3')
+New('TextLabel', {
+Position = UDim2.fromOffset(9, 19),
+Size = UDim2.new(1, -18, 0, Lines * 13),
+BackgroundTransparency = 1,
+Font = Enum.Font.Code,
+Text = Text,
+TextColor3 = Theme.Text,
+TextSize = 10,
+TextWrapped = true,
+TextTruncate = Enum.TextTruncate.AtEnd,
+TextXAlignment = Enum.TextXAlignment.Left,
+TextYAlignment = Enum.TextYAlignment.Top,
+ZIndex = 92,
+}, Frame)
+local Progress = New('Frame', {
+AnchorPoint = Vector2.new(0, 1),
+Position = UDim2.new(0, 0, 1, 0),
+Size = UDim2.new(1, 0, 0, 2),
+BackgroundColor3 = Theme.Accent,
+BorderSizePixel = 0,
+ZIndex = 93,
+}, Frame)
+BindAccent(Progress, 'BackgroundColor3')
+local Toast = {
+Frame = Frame, Progress = Progress, Height = Height,
+Title = Title, Text = Text, Serial = 0, Closing = false,
+}
+local Hit = New('TextButton', {
+Size = UDim2.fromScale(1, 1),
+BackgroundTransparency = 1,
+BorderSizePixel = 0,
+AutoButtonColor = false,
+Text = '',
+ZIndex = 94,
+}, Frame)
+GiveSignal(Hit.MouseButton1Click:Connect(function() Dismiss(Toast) end))
+table.insert(ActiveToasts, Toast)
+Restack()
+Tween(Frame, 0.28, { GroupTransparency = 0 }, Enum.EasingStyle.Quint)
+ArmTimer(Toast)
+end
+GlobalEnv.__GEH_TOAST = function(Title, Text)
+ShowToast(Title, Text)
+return true
 end
 end
 
