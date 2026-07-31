@@ -106,6 +106,14 @@ AimMaximumDistance = 0,
 AimRequireBall = true,
 ArcTableVersion = 2,
 ArcTableFile = 'hoopz_arc_table_v2.lua',
+-- Match Arc: 'any arc' mode. Sweeps every legal power, aims the ballistic
+-- root closest to MatchArcAngle, and auto-sets that power through the normal
+-- shot pipeline. Only legal inputs are used, so server-owned ball flight
+-- cannot revert it.
+MatchArcEnabled = false,
+-- Desired launch angle in degrees. The solver picks the nearest makeable
+-- arc (the power grid allows roughly 6-12 distinct arcs per distance).
+MatchArcAngle = 62,
 
 RangeIndicatorEnabled = false,
 RangeIndicatorRadius = 4.5,
@@ -6488,8 +6496,101 @@ end
 return Result
 end
 
+-- Goal effects are also requested by the game's perfect-release callback.
+-- Delay local requests briefly so that callback can be identified, then only
+-- release it after the player's court score actually increases.
+function State.LocalSpoofs.ReadGoalEffectScore(Court, Goal)
+local ResolvedCourt = Court
+if not ResolvedCourt and Goal then
+local Node = Goal
+for _ = 1, 8 do
+if not Node then break end
+if safe_find(Node, '_CourtSettings') or safe_find(Node, 'CourtSettings') then
+ResolvedCourt = Node
+break
+end
+Node = Node.Parent
+end
+end
+if not ResolvedCourt then return nil end
+local Settings = safe_find(ResolvedCourt, '_CourtSettings')
+or safe_find(ResolvedCourt, 'CourtSettings')
+if not Settings then return nil end
+local HomeObject = safe_find(Settings, 'HomeScore')
+local AwayObject = safe_find(Settings, 'AwayScore')
+local Home = HomeObject and tonumber(HomeObject.Value)
+local Away = AwayObject and tonumber(AwayObject.Value)
+if Home == nil or Away == nil then return nil end
+
+local TeamName
+local PlayersFolder = safe_find(ResolvedCourt, '_CourtPlayers')
+or safe_find(ResolvedCourt, 'CourtPlayers')
+if PlayersFolder then
+for _, Slot in ipairs(PlayersFolder:GetChildren()) do
+if safe_is_a(Slot, 'ObjectValue') and Slot.Value == LP then
+TeamName = string.match(Slot.Name, '^[A-Za-z]+')
+break
+end
+end
+end
+if TeamName == 'Home' then return Home end
+if TeamName == 'Away' then return Away end
+return Home + Away
+end
+
+function State.LocalSpoofs.PlaySelectedGoalEffect(Name, Scorer, Court, Goal, Arguments)
+if not (State.Active and State.LocalGoalEffectSpoofEnabled and Scorer == LP) then return end
+if State.LocalGoalEffect == 'None' then return end
+State.LocalSpoofs.LastMadeGoalEffectAt = os.clock()
+if State.LocalGoalEffect == 'Custom Lua' then
+State.LocalSpoofs.RunCustomGoalEffect(Scorer, Court, Goal,
+table.unpack(Arguments, 1, Arguments.n))
+return
+end
+local Selected = State.LocalSpoofs.GoalOriginals[
+State.LocalSpoofs.ResolveEffect(State.LocalGoalEffect)]
+if type(Selected) == 'function' then
+State.LocalSpoofs.CallOwnedGoalEffect(Selected, Scorer, Court, Goal,
+table.unpack(Arguments, 1, Arguments.n))
+end
+end
+
+function State.LocalSpoofs.QueueMadeGoalEffect(Name, Scorer, Court, Goal, ...)
+local RequestedAt = os.clock()
+local Arguments = table.pack(...)
+task.delay(0.06, function()
+if not (State.Active and State.LocalGoalEffectSpoofEnabled and Scorer == LP) then return end
+local PerfectAt = State.PerfectRelease and State.PerfectRelease.LastPerfectAt or 0
+local IsPerfectCallback = PerfectAt > 0 and math.abs(RequestedAt - PerfectAt) <= 0.18
+if not IsPerfectCallback then
+State.LocalSpoofs.GoalEffectGeneration = (State.LocalSpoofs.GoalEffectGeneration or 0) + 1
+State.LocalSpoofs.PlaySelectedGoalEffect(Name, Scorer, Court, Goal, Arguments)
+return
+end
+
+-- A perfect release is not necessarily a basket. Keep the request pending
+-- and confirm it against the scoreboard instead of playing immediately.
+local Before = State.LocalSpoofs.ReadGoalEffectScore(Court, Goal)
+if Before == nil then return end
+State.LocalSpoofs.GoalEffectGeneration = (State.LocalSpoofs.GoalEffectGeneration or 0) + 1
+local Generation = State.LocalSpoofs.GoalEffectGeneration
+local Deadline = os.clock() + 4
+while State.Active and State.LocalGoalEffectSpoofEnabled
+and Generation == State.LocalSpoofs.GoalEffectGeneration
+and os.clock() < Deadline do
+task.wait(0.05)
+local After = State.LocalSpoofs.ReadGoalEffectScore(Court, Goal)
+if After ~= nil and After > Before then
+State.LocalSpoofs.PlaySelectedGoalEffect(Name, Scorer, Court, Goal, Arguments)
+return
+end
+end
+end)
+end
+
 function State.LocalSpoofs.SetGoalEffect(Enabled, ShouldNotify)
 State.LocalGoalEffectSpoofEnabled = Enabled == true
+State.LocalSpoofs.GoalEffectGeneration = (State.LocalSpoofs.GoalEffectGeneration or 0) + 1
 CONFIG.LocalGoalEffectSpoof = State.LocalGoalEffectSpoofEnabled
 State.LocalSpoofs.RestoreGoalEffects()
 if State.LocalGoalEffectSpoofEnabled then pcall(function()
@@ -6499,14 +6600,8 @@ if type(Effect) == 'function' and Name ~= 'Level Up' and Name ~= 'Level Down' th
 State.LocalSpoofs.GoalOriginals[Name] = State.LocalSpoofs.GoalOriginals[Name] or Effect
 State.LocalSpoofs.GoalHooks[Name] = function(Scorer, Court, Goal, ...)
 if State.Active and State.LocalGoalEffectSpoofEnabled and Scorer == LP then
-if State.LocalGoalEffect == 'None' then return nil end
-if State.LocalGoalEffect == 'Custom Lua' then
-return State.LocalSpoofs.RunCustomGoalEffect(Scorer, Court, Goal, ...)
-end
-local Selected = State.LocalSpoofs.GoalOriginals[State.LocalSpoofs.ResolveEffect(State.LocalGoalEffect)]
-if type(Selected) == 'function' then
-return State.LocalSpoofs.CallOwnedGoalEffect(Selected, Scorer, Court, Goal, ...)
-end
+State.LocalSpoofs.QueueMadeGoalEffect(Name, Scorer, Court, Goal, ...)
+return nil
 end
 return State.LocalSpoofs.GoalOriginals[Name](Scorer, Court, Goal, ...)
 end
@@ -9527,6 +9622,7 @@ if not PerfectEvent then return end
 State.PerfectRelease.Connection = PerfectEvent.OnClientEvent:Connect(
 function(Shooter, ...)
 if Shooter ~= LP then return end
+State.PerfectRelease.LastPerfectAt = os.clock()
 State.PerfectRelease.Resolve(true)
 local Position = select(2, ...)
 if State.PerfectShotStyle then State.PerfectShotStyle.Trigger(Position) end
@@ -11223,6 +11319,55 @@ end
 return BestAngle, BestTime, BestPower
 end)
 
+-- Match Arc: sweep every legal power and return the (power, root) pair whose
+-- launch angle is closest to CONFIG.MatchArcAngle. Power quantization means
+-- only a handful of distinct arcs exist per distance; this picks the nearest
+-- one and reports which power produces it. Uses only legal inputs (aim
+-- direction + on-grid power), so server-owned ball flight cannot revert it.
+SilentAim.SolveMatchArc = WYNF_JIT_MAX(function(Distance, HeightDifference)
+local Gravity = Workspace.Gravity
+if Distance <= 0.0001 or Gravity <= 0 then return nil end
+local Desired = math.rad(math.clamp(tonumber(CONFIG.MatchArcAngle) or 62, 5, 88))
+local Key = string.format('match|%.1f|%.2f|%.2f|%.1f',
+math.deg(Desired), Distance, HeightDifference, Gravity)
+local Cached = SilentAim.ArcSolveCache[Key]
+if Cached then return Cached[1], Cached[2], Cached[3] end
+
+local Step = math.max(1, tonumber(CONFIG.FormulaArcPowerStep) or 5)
+local Minimum = tonumber(CONFIG.FormulaArcMinPower) or 10
+local Maximum = tonumber(CONFIG.FormulaArcMaxPower) or 85
+local Scan = tonumber(CONFIG.FormulaArcScanSegments) or 72
+local BestAngle, BestTime, BestPower, BestError
+
+for Candidate = Minimum, Maximum, Step do
+local Roots = SilentAim.SolveArcRoots(
+Distance, HeightDifference, Candidate, Gravity, Scan)
+for Index, Angle in ipairs(Roots) do
+-- The flat branch is the lowest root; skip it unless enabled so the
+-- dial stays on the lofted branch, matching the Custom arc behavior.
+if CONFIG.FormulaArcIncludeFlat == true or Index == #Roots then
+local AngleError = math.abs(Angle - Desired)
+if not BestError or AngleError < BestError then
+local _, FlightTime = EvaluateFormulaHeight(
+Angle, Distance, Candidate, Gravity)
+BestAngle, BestTime, BestPower, BestError =
+Angle, FlightTime, Candidate, AngleError
+end
+end
+end
+end
+
+if BestAngle then
+if SilentAim.ArcSolveCacheCount > 300 then
+SilentAim.ArcSolveCache = {}
+SilentAim.ArcSolveCacheCount = 0
+end
+SilentAim.ArcSolveCache[Key] = { BestAngle, BestTime, BestPower }
+SilentAim.ArcSolveCacheCount += 1
+end
+return BestAngle, BestTime, BestPower
+end)
+
 -- Selects only as much arc as needed to clear a defender close to the direct
 -- shooter-to-rim lane. Teammates and players behind the shooter are ignored.
 SilentAim.GetDefenderArcMode = WYNF_JIT_MAX(function(ReleaseOrigin, AimPosition)
@@ -11301,7 +11446,25 @@ local Delta = AimPosition - ReleaseOrigin
 local Flat = Vector3.new(Delta.X, 0, Delta.Z)
 local Distance = Flat.Magnitude
 if Distance <= 0.0001 then return nil end
-local Angle, FlightTime = SolveFormulaArc(Distance, Delta.Y, Power, Mode)
+local Angle, FlightTime
+-- Match Arc replaces the fixed-power solve: pick the nearest makeable arc
+-- to the requested angle and push its power onto the game's legal grid.
+-- Bank shots keep the standard solve; the mirror-point geometry is tuned
+-- around the High/Low roots.
+if CONFIG.MatchArcEnabled == true and not BankShot then
+local MatchedAngle, MatchedTime, MatchedPower =
+SilentAim.SolveMatchArc(Distance, Delta.Y)
+if MatchedAngle then
+Angle, FlightTime = MatchedAngle, MatchedTime
+if MatchedPower
+and MatchedPower ~= State.PowerBypass.GetEffectivePower() then
+State.PowerBypass.SyncChannels(MatchedPower)
+end
+end
+end
+if not Angle then
+Angle, FlightTime = SolveFormulaArc(Distance, Delta.Y, Power, Mode)
+end
 if not Angle then return nil end
 local Direction = Flat.Unit * math.cos(Angle) + Vector3.new(0, math.sin(Angle), 0)
 return Head.Position + Direction * 1000, FlightTime
@@ -25133,6 +25296,30 @@ UDim2.new(1, -16, 0, 54),
 'Silent aim solves purely from your current release position: no movement, velocity, or ping compensation. Backboard mode banks the exact same formula off the board mirror point.'
 )
 
+CreateSectionHeader(LeftGroup, 443, 'Match arc')
+HubUI.Controls.MatchArc = CreateCheckbox(
+LeftGroup, 463, 'Match custom arc angle', CONFIG.MatchArcEnabled == true,
+function(Value)
+CONFIG.MatchArcEnabled = Value == true
+SilentAim.ArcSolveCache = {}
+SilentAim.ArcSolveCacheCount = 0
+SilentAim.ClearActorAim()
+Notify('GOLDEN EAGLE HUB', CONFIG.MatchArcEnabled
+and string.format('Match Arc: aiming the nearest makeable arc to %d degrees and auto-setting its power.',
+math.floor(tonumber(CONFIG.MatchArcAngle) or 62))
+or 'Match Arc off: arc follows the High/Low mode at the current power.')
+end
+)
+HubUI.Controls.MatchArcAngle = CreateNumberInput(
+LeftGroup, 493, 'Desired arc angle (deg)', CONFIG.MatchArcAngle, 5, 88, 0,
+function(Value)
+CONFIG.MatchArcAngle = Value
+SilentAim.ArcSolveCache = {}
+SilentAim.ArcSolveCacheCount = 0
+if CONFIG.MatchArcEnabled == true then SilentAim.ClearActorAim() end
+end
+)
+
 CreateSectionHeader(MiddleGroup, 9, 'Targeting')
 HubUI.Controls.TargetMode = CreateSelector(
 MiddleGroup, 29, 'Goal selection',
@@ -28073,6 +28260,8 @@ CONFIG.AutoBodyAdaptiveSmoothing },
 CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.NoJumpMode, CONFIG.NoJumpEnabled },
 { HubUI.Controls.Backboard, CONFIG.BackboardEnabled == true },
+{ HubUI.Controls.MatchArc, CONFIG.MatchArcEnabled == true },
+{ HubUI.Controls.MatchArcAngle, CONFIG.MatchArcAngle },
 { HubUI.Controls.RangeIndicator, CONFIG.RangeIndicatorEnabled },
 { HubUI.Controls.Trajectory, CONFIG.TrajectoryPreviewEnabled },
 { HubUI.Controls.ArcPreview, CONFIG.ArcPreviewEnabled },
