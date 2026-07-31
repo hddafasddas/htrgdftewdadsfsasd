@@ -9573,6 +9573,153 @@ end
 local DrawingApi = type(GlobalEnv) == 'table' and rawget(GlobalEnv, 'Drawing') or nil
 if DrawingApi == nil then DrawingApi = Drawing end
 
+-- Executor has no usable Drawing library: emulate Line/Circle/Text drawings
+-- with ScreenGui instances so every visual overlay still renders.
+local DrawingApiUsable = false
+if DrawingApi ~= nil then
+local ProbeOk, ProbeNew = pcall(function() return DrawingApi.new end)
+DrawingApiUsable = ProbeOk and ProbeNew ~= nil
+end
+if not DrawingApiUsable then
+local FallbackGui
+local function EnsureFallbackGui()
+if FallbackGui and FallbackGui.Parent then return FallbackGui end
+local Container = HiddenGui()
+if not Container then return nil end
+local Gui = Instance.new('ScreenGui')
+Gui.Name = 'GoldenEagleDrawSurface'
+Gui.IgnoreGuiInset = true
+Gui.ResetOnSpawn = false
+Gui.DisplayOrder = 9996
+Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+Gui.Parent = Container
+FallbackGui = Gui
+return Gui
+end
+
+local function CreateFallbackDrawing(Kind)
+local Gui = EnsureFallbackGui()
+if not Gui then return nil end
+
+local Inst, Stroke
+if Kind == 'Text' then
+Inst = Instance.new('TextLabel')
+Inst.BackgroundTransparency = 1
+Inst.Font = Enum.Font.Code
+Inst.TextSize = 13
+Inst.TextColor3 = Color3.new(1, 1, 1)
+Inst.TextStrokeTransparency = 1
+Inst.AutomaticSize = Enum.AutomaticSize.XY
+Inst.Size = UDim2.fromOffset(0, 0)
+elseif Kind == 'Circle' then
+Inst = Instance.new('Frame')
+Inst.BackgroundTransparency = 1
+Inst.BorderSizePixel = 0
+Inst.AnchorPoint = Vector2.new(0.5, 0.5)
+local Corner = Instance.new('UICorner')
+Corner.CornerRadius = UDim.new(1, 0)
+Corner.Parent = Inst
+Stroke = Instance.new('UIStroke')
+Stroke.Thickness = 1
+Stroke.Color = Color3.new(1, 1, 1)
+Stroke.Parent = Inst
+else
+Inst = Instance.new('Frame')
+Inst.BorderSizePixel = 0
+Inst.AnchorPoint = Vector2.new(0.5, 0.5)
+Inst.BackgroundColor3 = Color3.new(1, 1, 1)
+end
+Inst.Visible = false
+Inst.Parent = Gui
+
+local Props = { Thickness = 1, Transparency = 1, Visible = false }
+
+local function ApplyLine()
+local From, To = Props.From, Props.To
+if typeof(From) ~= 'Vector2' or typeof(To) ~= 'Vector2' then return end
+local Delta = To - From
+local Center = (From + To) * 0.5
+Inst.Position = UDim2.fromOffset(Center.X, Center.Y)
+Inst.Size = UDim2.fromOffset(Delta.Magnitude, math.max(1, Props.Thickness or 1))
+Inst.Rotation = math.deg((math.atan2 or math.atan)(Delta.Y, Delta.X))
+end
+
+local function Remove()
+pcall(function() Inst:Destroy() end)
+end
+
+return setmetatable({}, {
+__index = function(_, Key)
+if Key == 'Remove' or Key == 'Destroy' then return Remove end
+return Props[Key]
+end,
+__newindex = function(_, Key, Value)
+Props[Key] = Value
+pcall(function()
+if Key == 'Visible' then
+Inst.Visible = Value == true
+elseif Key == 'ZIndex' then
+Inst.ZIndex = math.clamp(math.floor(tonumber(Value) or 1), 1, 2000)
+elseif Key == 'Color' then
+if Kind == 'Text' then
+Inst.TextColor3 = Value
+else
+Inst.BackgroundColor3 = Value
+if Stroke then Stroke.Color = Value end
+end
+elseif Key == 'Text' then
+if Kind == 'Text' then Inst.Text = tostring(Value) end
+elseif Key == 'Transparency' then
+local GuiAlpha = 1 - math.clamp(tonumber(Value) or 1, 0, 1)
+if Kind == 'Text' then
+Inst.TextTransparency = GuiAlpha
+elseif Kind == 'Circle' then
+if Stroke then Stroke.Transparency = GuiAlpha end
+Inst.BackgroundTransparency = Props.Filled and GuiAlpha or 1
+else
+Inst.BackgroundTransparency = GuiAlpha
+end
+elseif Key == 'Thickness' then
+if Stroke then
+Stroke.Thickness = math.max(1, tonumber(Value) or 1)
+elseif Kind ~= 'Text' then
+ApplyLine()
+end
+elseif Key == 'From' or Key == 'To' then
+ApplyLine()
+elseif Key == 'Position' then
+if typeof(Value) == 'Vector2' and Kind ~= 'Line' then
+Inst.Position = UDim2.fromOffset(Value.X, Value.Y)
+end
+elseif Key == 'Radius' then
+local Span = math.max(2, (tonumber(Value) or 1) * 2)
+Inst.Size = UDim2.fromOffset(Span, Span)
+elseif Key == 'Filled' then
+if Kind == 'Circle' then
+local GuiAlpha = 1 - math.clamp(tonumber(Props.Transparency) or 1, 0, 1)
+Inst.BackgroundTransparency = Value and GuiAlpha or 1
+end
+elseif Key == 'Size' then
+if Kind == 'Text' then
+Inst.TextSize = math.clamp(tonumber(Value) or 13, 8, 60)
+end
+elseif Key == 'Center' then
+if Kind == 'Text' then
+Inst.AnchorPoint = Vector2.new(Value and 0.5 or 0, 0)
+end
+elseif Key == 'Outline' then
+if Kind == 'Text' then
+Inst.TextStrokeTransparency = Value and 0 or 1
+end
+end
+end)
+end,
+})
+end
+
+DrawingApi = { new = CreateFallbackDrawing }
+end
+
 local Visuals = {
 Initialized = false,
 Disabled = false,
@@ -20163,6 +20310,17 @@ local Theme = {}
 for _, Role in ipairs(ThemeRoleNames) do
 Theme[Role] = HexToColor(InterfaceConfig.Theme[Role], HexToColor(InterfaceDefaults.Theme[Role]))
 end
+-- Preserve visual-only theme roles that the UI theme does not define.
+-- Replacing Visuals.Theme wholesale wiped HighlightFill/White and crashed
+-- the visual overlay with 'Argument 2 missing or nil' on Color3:Lerp.
+Theme.HighlightFill = Theme.HighlightFill or Visuals.Theme.HighlightFill
+or Color3.fromRGB(255, 225, 125)
+Theme.White = Theme.White or Visuals.Theme.White or Color3.fromRGB(255, 255, 255)
+Theme.Muted = Theme.Muted or Visuals.Theme.Muted or Color3.fromRGB(146, 146, 155)
+Theme.Background = Theme.Background or Visuals.Theme.Background or Color3.fromRGB(8, 8, 9)
+Theme.Accent = Theme.Accent or Visuals.Theme.Accent or Color3.fromRGB(212, 175, 55)
+Theme.AccentBright = Theme.AccentBright or Visuals.Theme.AccentBright
+or Color3.fromRGB(255, 226, 122)
 Visuals.Theme = Theme
 if State.Outline then State.Outline.Color = Theme.Accent end
 
@@ -28976,12 +29134,24 @@ end)))
 
 GiveSignal(RunService.RenderStepped:Connect(WYNF_JIT(function()
 if not (CONFIG.RangeIndicatorEnabled or CONFIG.TrajectoryPreviewEnabled
-or CONFIG.ArcPreviewEnabled or CONFIG.RangeScreenTintEnabled) then return end
+or CONFIG.ArcPreviewEnabled or CONFIG.RangeScreenTintEnabled
+or CONFIG.DunkRangeIndicator) then return end
+if Visuals.Disabled then
+-- Never disable visuals permanently: retry after a cooldown so a
+-- transient error (respawn, missing part, map change) self-heals.
+if os.clock() < (Visuals.RetryAt or 0) then return end
+Visuals.Disabled = false
+end
 local Ok, ErrorText = pcall(RenderVisuals)
-if not Ok and not Visuals.Disabled then
+if Ok then
+if Visuals.FailStreak and Visuals.FailStreak ~= 0 then Visuals.FailStreak = 0 end
+elseif not Visuals.Disabled then
+Visuals.FailStreak = (Visuals.FailStreak or 0) + 1
 DestroyVisuals()
 Visuals.Disabled = true
-warn('[GOLDEN EAGLE HUB] Visual overlay disabled: ' .. tostring(ErrorText))
+Visuals.RetryAt = os.clock() + math.min(10, Visuals.FailStreak * 2)
+warn('[GOLDEN EAGLE HUB] Visual overlay error (retrying in '
+.. tostring(math.min(10, Visuals.FailStreak * 2)) .. 's): ' .. tostring(ErrorText))
 end
 end)))
 
