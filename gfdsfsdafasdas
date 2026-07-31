@@ -725,7 +725,6 @@ LegitAimLastFlickProgress = 0,
 LegitAimReactionDelay = 0,
 LegitAimSwaySeed = 0,
 ShotModeRandomSeed = 0,
-ShotModeRandomOffset = nil,
 AutoQueueEnabled = CONFIG.AutoQueue,
 AutoPassEnabled = CONFIG.AutoPass,
 AutoSelfPassEnabled = CONFIG.AutoSelfPass,
@@ -6496,7 +6495,7 @@ State.LocalSpoofs.RestoreGoalEffects()
 if State.LocalGoalEffectSpoofEnabled then pcall(function()
 State.LocalSpoofs.ScoreEffects = State.LocalSpoofs.ScoreEffects or require(ReplicatedStorage.ScoreEffects)
 for Name, Effect in pairs(State.LocalSpoofs.ScoreEffects) do
-if type(Effect) == 'function' and Name ~= 'Level Up' and Name ~= 'Level Down' and not string.find(string.lower(tostring(Name)), 'perfect', 1, true) then
+if type(Effect) == 'function' and Name ~= 'Level Up' and Name ~= 'Level Down' then
 State.LocalSpoofs.GoalOriginals[Name] = State.LocalSpoofs.GoalOriginals[Name] or Effect
 State.LocalSpoofs.GoalHooks[Name] = function(Scorer, Court, Goal, ...)
 if State.Active and State.LocalGoalEffectSpoofEnabled and Scorer == LP then
@@ -11133,9 +11132,22 @@ end
 
 -- Match silent_aim_standalone.lua exactly: current release position only,
 -- fixed current power, and only the flat Low or lobbed High ballistic root.
+-- No movement, velocity, or ping compensation is ever applied here.
 local Mode = CONFIG.SilentMode == 'Low' and 'Low' or 'High'
 local AimPosition = Rim.Position
-if Mode == 'High' then
+local BankShot = false
+if CONFIG.BackboardEnabled == true then
+local BankRadius = Ball and safe_is_a(Ball, 'BasePart')
+and math.max(Ball.Size.X, Ball.Size.Y, Ball.Size.Z) * 0.5 or 1.25
+local BankTarget = State.Backboard.GetMirrorTarget(Rim, ReleaseOrigin, BankRadius)
+if BankTarget then
+AimPosition = BankTarget
+BankShot = true
+elseif not CONFIG.BackboardFallbackToNormal then
+return nil
+end
+end
+if Mode == 'High' and not BankShot then
 AimPosition += Vector3.new(0, CONFIG.FormulaHighAimYOffset, 0)
 end
 local Delta = AimPosition - ReleaseOrigin
@@ -11593,7 +11605,6 @@ if Humanoid.Jump then
 if State.NoJump.Active then return end
 SilentAim.ReleasePredictionDeadline = 0
 State.ShotModeRandomSeed = (tonumber(State.ShotModeRandomSeed) or 0) + 1
-State.ShotModeRandomOffset = nil
 pcall(StartLegitAimTween)
 if State.PassInProgress then
 SilentAim.ClearActorAim()
@@ -24924,7 +24935,6 @@ LeftGroup, 233, 'Arc mode', { 'High', 'Low' },
 (CONFIG.SilentMode == 'Low' and 'Low' or 'High'),
 function(Value)
 CONFIG.SilentMode = Value
-State.ShotModeRandomOffset = nil
 SilentAim.ArcSolveCache = {}
 SilentAim.ArcSolveCacheCount = 0
 SilentAim.ClearActorAim()
@@ -24939,7 +24949,18 @@ LeftGroup, UDim2.fromOffset(8, 263), UDim2.new(1, -16, 0, 42),
 )
 
 CreateSectionHeader(LeftGroup, 303, 'Shot variants')
-CONFIG.BackboardEnabled = false
+HubUI.Controls.Backboard = CreateCheckbox(
+LeftGroup, 323, 'Enable backboard (bank) shots', CONFIG.BackboardEnabled == true,
+function(Value)
+CONFIG.BackboardEnabled = Value == true
+SilentAim.ArcSolveCache = {}
+SilentAim.ArcSolveCacheCount = 0
+SilentAim.ClearActorAim()
+Notify('GOLDEN EAGLE HUB', Value
+and 'Bank shots: aiming off the backboard mirror point.'
+or 'Bank shots disabled: aiming directly at the rim.')
+end
+)
 HubUI.Controls.NoJumpMode = CreateCheckbox(
 LeftGroup, 353, 'Enable No Jump Shot', CONFIG.NoJumpEnabled,
 function(Value)
@@ -24951,7 +24972,7 @@ CreateParagraph(
 LeftGroup,
 UDim2.fromOffset(8, 383),
 UDim2.new(1, -16, 0, 54),
-'Silent aim now mirrors the standalone solver: two fixed choices only, no movement compensation and no automatic power or arc mode changes.'
+'Silent aim solves purely from your current release position: no movement, velocity, or ping compensation. Backboard mode banks the exact same formula off the board mirror point.'
 )
 
 CreateSectionHeader(MiddleGroup, 9, 'Targeting')
@@ -27817,7 +27838,7 @@ GiveSignal(ClearGlobalSearchButton.MouseLeave:Connect(function() Tween(ClearGlob
 
 function HubUI.Sync()
 CONFIG.SilentMode = CONFIG.SilentMode == 'Low' and 'Low' or 'High'
-CONFIG.BackboardEnabled = false
+CONFIG.BackboardEnabled = CONFIG.BackboardEnabled == true
 local SyncValues = {
 { HubUI.Controls.SilentAim, State.RequestedEnabled },
 { HubUI.Controls.AutoPass, State.AutoPassEnabled },
@@ -27892,8 +27913,8 @@ CONFIG.AutoBodyAdaptiveSmoothing },
 { HubUI.Controls.PerfectRelease, CONFIG.PerfectRelease },
 { HubUI.Controls.PerfectReleaseAutoCalibrate,
 CONFIG.PerfectReleaseAutoCalibrate },
-{ nil, false },
 { HubUI.Controls.NoJumpMode, CONFIG.NoJumpEnabled },
+{ HubUI.Controls.Backboard, CONFIG.BackboardEnabled == true },
 { HubUI.Controls.RangeIndicator, CONFIG.RangeIndicatorEnabled },
 { HubUI.Controls.Trajectory, CONFIG.TrajectoryPreviewEnabled },
 { HubUI.Controls.ArcPreview, CONFIG.ArcPreviewEnabled },
