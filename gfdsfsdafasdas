@@ -104,6 +104,7 @@ AimDistanceOffset = 0,
 AimMinimumDistance = 0,
 AimMaximumDistance = 0,
 AimRequireBall = true,
+AimOnlyInMatch = false,
 ArcTableVersion = 2,
 ArcTableFile = 'hoopz_arc_table_v2.lua',
 -- Match Arc: 'any arc' mode. Sweeps every legal power, aims the ballistic
@@ -135,6 +136,8 @@ VisualOnlyWithBall = true,
 
 WalkSpeed = false,
 WalkSpeedValue = 32,
+SpeedPreset = 'Custom',
+FlightDoubleTap = false,
 SpeedProfiles = false,
 OutOfMatchSpeed = 24,
 InfiniteJump = false,
@@ -155,6 +158,9 @@ AntiReachNoStealRange = 10,
 AntiReachTeamSafety = true,
 BallMag = false,
 BallMagRadius = 35,
+SmartReach = false,
+SmartReachDistance = 14,
+BallMagHoldMode = false,
 BallMagSpeed = 85,
 BallColliders = false,
 BallColliderScanInterval = 0.30,
@@ -233,6 +239,9 @@ AutoMixDecisionHold = 0.12,
 AutoMixPostMoveCooldown = 0.24,
 AutoMixComboGap = 0,
 AutoMixDecisionDelay = 0.01,
+AutoMixPredictiveReach = true,
+AutoMixAdaptive = true,
+AutoMixCombo = true,
 
 AutoGetOpen = false,
 AutoGetOpenMode = 'Balanced',
@@ -2209,7 +2218,9 @@ local Now = os.clock()
 local RunReachScan = State.BallAssist.ReachEnabled
 and Now - (State.BallAssist.ReachScanAt or 0) >= 0.075
 if RunReachScan then State.BallAssist.ReachScanAt = Now end
-if not State.BallAssist.MagEnabled and not RunReachScan then return end
+local MagActive = State.BallAssist.MagEnabled
+and (not CONFIG.BallMagHoldMode or State.BallAssist.MagHoldActive == true)
+if not MagActive and not RunReachScan then return end
 
 local HasLocalBall = State.BallAssist.HasLocalBall()
 
@@ -2221,6 +2232,25 @@ if not (HumanoidObject and Root) or HumanoidObject.Health <= 0 then return end
 local ReachRadius = math.clamp(tonumber(State.BallAssist.ReachRadius) or 10, 2, 30)
 local MagRadius = math.clamp(tonumber(State.BallAssist.MagRadius) or 35, 4, 80)
 local MagSpeed = math.clamp(tonumber(State.BallAssist.MagSpeed) or 85, 10, 200)
+State.BallAssist.SmartReachActive = false
+if CONFIG.SmartReach then
+local NearestDefender = math.huge
+for _, OtherPlayer in ipairs(Players:GetPlayers()) do
+if OtherPlayer ~= LP and OtherPlayer.Character then
+local OtherRoot = safe_find(OtherPlayer.Character, 'HumanoidRootPart')
+if OtherRoot then
+local DefenderDistance = (OtherRoot.Position - Root.Position).Magnitude
+if DefenderDistance < NearestDefender then NearestDefender = DefenderDistance end
+end
+end
+end
+if NearestDefender <= (tonumber(CONFIG.SmartReachDistance) or 14) then
+State.BallAssist.SmartReachActive = true
+ReachRadius = math.min(ReachRadius, 8)
+MagRadius = math.min(MagRadius, 12)
+MagSpeed = math.min(MagSpeed, 60)
+end
+end
 local Target = Root.Position + Root.CFrame.LookVector * 1.25 + Vector3.new(0, 0.15, 0)
 
 if RunReachScan then State.BallAssist.StepHeldReach(ReachRadius) end
@@ -2233,7 +2263,7 @@ and (not HasLocalBall or State.BallAssist.IsPracticeBall(Ball)) then
 local Offset = Target - Ball.Position
 local Distance = Offset.Magnitude
 
-if State.BallAssist.MagEnabled and Distance <= MagRadius and Distance > 0.05
+if MagActive and Distance <= MagRadius and Distance > 0.05
 and State.BallAssist.CanDirectMove(Ball) then
 pcall(function()
 local PullVelocity = Offset.Unit * math.min(MagSpeed, math.max(20, Distance * 7))
@@ -2248,7 +2278,7 @@ end
 
 if RunReachScan and Distance <= ReachRadius then
 State.BallAssist.TryTouch(Ball, Root, true)
-elseif State.BallAssist.MagEnabled and Distance <= math.max(4.5, ReachRadius) then
+elseif MagActive and Distance <= math.max(4.5, ReachRadius) then
 State.BallAssist.TryTouch(Ball, Root, true)
 end
 end
@@ -6919,6 +6949,9 @@ if AutoQueue.WasIngame then
 AutoQueue.WasIngame = false
 AutoQueue.LastAttempt = 0
 AutoQueue.BlockedUntil = os.clock() + CONFIG.AutoQueuePostGameDelay
+if CONFIG.AutoQueueRequeue then
+Notify('GOLDEN EAGLE HUB', string.format('Match over: requeueing in %ds. Toggle Auto Queue off to skip.', math.floor(tonumber(CONFIG.AutoQueuePostGameDelay) or 0)))
+end
 if not CONFIG.AutoQueueRequeue then
 State.AutoQueueEnabled = false
 CONFIG.AutoQueue = false
@@ -8611,6 +8644,15 @@ if not State.GhostReplay.Recording then return false end
 State.GhostReplay.CaptureFrame()
 State.GhostReplay.Recording = false
 State.GhostReplay.Status = Reason or (#State.GhostReplay.Frames > 1 and 'RECORDED' or 'NO MOVEMENT CAPTURED')
+if #State.GhostReplay.Frames > 1 then
+State.GhostReplay.Saved = State.GhostReplay.Saved or {}
+table.insert(State.GhostReplay.Saved, 1, {
+Label = os.date('%H:%M:%S') .. '  (' .. tostring(#State.GhostReplay.Frames) .. ' frames)',
+Frames = table.clone(State.GhostReplay.Frames),
+})
+while #State.GhostReplay.Saved > 5 do table.remove(State.GhostReplay.Saved) end
+if HubUI and HubUI.RefreshGhostRecordings then pcall(HubUI.RefreshGhostRecordings) end
+end
 return #State.GhostReplay.Frames > 1
 end
 
@@ -9188,6 +9230,8 @@ else
 TargetCFrame = State.Extras.GetTravelObjectCFrame(Target)
 end
 end
+local ReturnRoot = LP.Character and safe_find(LP.Character, 'HumanoidRootPart')
+if ReturnRoot then State.Extras.LastTravelReturnCFrame = ReturnRoot.CFrame end
 return State.Extras.TeleportCharacter(TargetCFrame, Destination)
 end
 
@@ -9637,6 +9681,11 @@ if State.PerfectRelease.Streak > State.PerfectRelease.BestStreak then
 State.PerfectRelease.BestStreak = State.PerfectRelease.Streak
 end
 State.PerfectRelease.LastResult = 'PERFECT'
+local ArcPick = State.LastAutoPowerPick
+if ArcPick and os.clock() - (ArcPick.At or 0) < 8 then
+State.ArcPowerMemory = State.ArcPowerMemory or {}
+State.ArcPowerMemory[CONFIG.SilentMode == 'Low' and 'Low' or 'High'] = { Power = ArcPick.Power, At = os.clock() }
+end
 if CONFIG.PerfectReleaseAutoCalibrate then
 local Adopted = math.clamp(
 State.PerfectRelease.GetBase() + (Pending.Offset or 0), 0.15, 0.45)
@@ -12231,6 +12280,7 @@ and State.SelectBestAutoPower then
 local BestPower = State.SelectBestAutoPower(AdjustedDistance, Power)
 if BestPower then
 Power = State.PowerBypass.SyncChannels(BestPower)
+State.LastAutoPowerPick = { Power = BestPower, At = os.clock() }
 end
 end
 
@@ -13264,6 +13314,12 @@ PredictedBallSide = '--',
 SafestMove = '--',
 MoveLastUsed = {},
 MoveScores = {},
+MoveCooldownUntil = {},
+MoveConfirmedAt = {},
+DefenderProfiles = {},
+DefenderRead = '--',
+ReachClosing = 0,
+LastSteerRefreshAt = 0,
 CurrentBallClearance = 0,
 PressureSince = 0,
 LastNecessaryReason = 'NONE',
@@ -13350,6 +13406,7 @@ local Move = State.AutoMix.Moves[Name]
 if not Move or not Threat or not Threat.Root then return -math.huge, 0, Hand end
 local Key = State.AutoMix.ResolveKey(Move.Action)
 if not Key then return -math.huge, 0, Hand end
+if (State.AutoMix.MoveCooldownUntil[Name] or 0) > os.clock() then return -math.huge, 0, Hand end
 local Duration = Move.Timeout or 0.42
 local Margin = math.max(1.5, tonumber(CONFIG.AutoMixBallSafetyMargin) or 3)
 local MinimumClearance, EndClearance = math.huge, 0
@@ -13397,6 +13454,15 @@ elseif Defense == 'CUT LEFT' then
 if ExpectedHand == 'R' then Score += 1.1 end
 elseif Defense == 'CUT RIGHT' then
 if ExpectedHand == 'L' then Score += 1.1 end
+end
+if CONFIG.AutoMixAdaptive and Threat.Profile then
+local Profile = Threat.Profile
+if Profile.Reach >= 2 then
+if Name == 'BehindLeft' or Name == 'BehindRight' then Score += 0.9 end
+if Name == 'CrossUp' then Score -= 0.7 end
+end
+if Profile.CutLeft - Profile.CutRight >= 2 and ExpectedHand == 'R' then Score += 0.8 end
+if Profile.CutRight - Profile.CutLeft >= 2 and ExpectedHand == 'L' then Score += 0.8 end
 end
 local LastUsed = State.AutoMix.MoveLastUsed[Name] or 0
 if CONFIG.AutoMixMoveVariety then Score += math.clamp((os.clock() - LastUsed) / 9, 0, 1.4) end
@@ -13580,6 +13646,8 @@ if Name == 'RTrack' then State.AutoMix.CurrentHand = 'R'; return end
 if Name == 'LTrack' then State.AutoMix.CurrentHand = 'L'; return end
 local Info = State.AutoMix.TrackInfo[Name]
 if not Info then return end
+State.AutoMix.MoveConfirmedAt[Info.Move] = os.clock()
+State.AutoMix.MoveCooldownUntil[Info.Move] = 0
 State.AutoMix.Busy = true
 State.AutoMix.LastTrack = Track
 State.AutoMix.LastMove = State.AutoMix.Moves[Info.Move] and State.AutoMix.Moves[Info.Move].Label or Info.Move
@@ -13653,6 +13721,14 @@ end
 
 function State.AutoMix.ScheduleNext()
 local HasQueued = State.AutoMix.Sequence[State.AutoMix.SequenceIndex] ~= nil
+if not HasQueued and CONFIG.AutoMixCombo
+and (State.AutoMix.ThreatLevel == 'PRESSURE' or State.AutoMix.ThreatLevel == 'EMERGENCY')
+and (math.abs(State.AutoMix.DefenseLateralSpeed or 0) >= 6 or (State.AutoMix.ClosingSpeed or 0) >= 8) then
+State.AutoMix.PressureSince = os.clock() - 1
+State.AutoMix.NextAt = os.clock() + 0.05
+State.AutoMix.Status = 'CHAINING COUNTER'
+return
+end
 State.AutoMix.NextAt = os.clock() + (HasQueued and 0
 or math.max(0.08, tonumber(CONFIG.AutoMixPostMoveCooldown) or 0.24))
 end
@@ -13704,13 +13780,22 @@ local Character = LP.Character
 local Ball = Character and safe_find(Character, 'Basketball')
 local BallPart = Ball and (safe_find(Ball, 'Ball') or Ball.PrimaryPart or Ball:FindFirstChildWhichIsA('BasePart'))
 local DefenderCharacter = Threat and Threat.Player and Threat.Player.Character
-if not BallPart or not DefenderCharacter then return math.huge end
-local Minimum = math.huge
+if not BallPart or not DefenderCharacter then return math.huge, 0 end
+local Minimum, LimbClosing = math.huge, 0
 for _, Name in ipairs({ 'LeftHand','RightHand','Left Arm','Right Arm','LeftLowerArm','RightLowerArm' }) do
 local Limb = safe_find(DefenderCharacter, Name)
-if Limb and Limb:IsA('BasePart') then Minimum = math.min(Minimum, (Limb.Position - BallPart.Position).Magnitude) end
+if Limb and Limb:IsA('BasePart') then
+local Offset = Limb.Position - BallPart.Position
+local Distance = Offset.Magnitude
+if Distance < Minimum then
+Minimum = Distance
+if Distance > 0.05 then
+LimbClosing = (Limb.AssemblyLinearVelocity - BallPart.AssemblyLinearVelocity):Dot(-Offset.Unit)
 end
-return Minimum
+end
+end
+end
+return Minimum, LimbClosing
 end
 
 function State.AutoMix.AnalyzeDefense(Root, Hand, Threat)
@@ -13728,11 +13813,13 @@ end
 end
 end
 Threat.DefenderRoots = DefenderRoots
-local ReachDistance = State.AutoMix.GetReachDistance(Threat)
+local ReachDistance, ReachClosing = State.AutoMix.GetReachDistance(Threat)
 local Defense
 if Nearby >= 2 and Threat.Distance <= 8.5 then
 Defense = 'DOUBLE TEAM'
 elseif ReachDistance <= 3.8 and Threat.Distance <= 7.5 then
+Defense = 'REACH'
+elseif CONFIG.AutoMixPredictiveReach and ReachDistance <= 6.5 and ReachClosing >= 7 and Threat.Distance <= 9 then
 Defense = 'REACH'
 elseif Threat.Closing >= 6 then
 Defense = 'HARD CLOSE'
@@ -13750,6 +13837,7 @@ end
 Threat.DefenseType = Defense
 Threat.LateralSpeed = LocalVelocity.X
 Threat.ReachDistance = ReachDistance
+Threat.ReachClosing = ReachClosing
 Threat.NearbyDefenders = Nearby
 if Defense == 'REACH' or Defense == 'DOUBLE TEAM' then
 Threat.Level = 'EMERGENCY'
@@ -13762,7 +13850,33 @@ State.AutoMix.DefenseType = Defense
 State.AutoMix.DefenseSide = Threat.Side
 State.AutoMix.DefenseLateralSpeed = LocalVelocity.X
 State.AutoMix.DefenseReachDistance = ReachDistance
+State.AutoMix.ReachClosing = ReachClosing
 State.AutoMix.NearbyDefenders = Nearby
+if CONFIG.AutoMixAdaptive and Threat.Player then
+local Profile = State.AutoMix.DefenderProfiles[Threat.Player.Name]
+if not Profile then
+Profile = { Reach = 0, HardClose = 0, CutLeft = 0, CutRight = 0, LastDefense = nil, LastSeen = 0 }
+State.AutoMix.DefenderProfiles[Threat.Player.Name] = Profile
+end
+Profile.LastSeen = os.clock()
+if Defense ~= Profile.LastDefense then
+Profile.LastDefense = Defense
+if Defense == 'REACH' then Profile.Reach += 1
+elseif Defense == 'HARD CLOSE' then Profile.HardClose += 1
+elseif Defense == 'CUT LEFT' then Profile.CutLeft += 1
+elseif Defense == 'CUT RIGHT' then Profile.CutRight += 1
+end
+end
+local Read = {}
+if Profile.Reach >= 2 then table.insert(Read, 'REACHY x' .. Profile.Reach) end
+if Profile.HardClose >= 2 then table.insert(Read, 'AGGRO x' .. Profile.HardClose) end
+if Profile.CutLeft - Profile.CutRight >= 2 then table.insert(Read, 'SHADES L')
+elseif Profile.CutRight - Profile.CutLeft >= 2 then table.insert(Read, 'SHADES R') end
+State.AutoMix.DefenderRead = #Read > 0 and table.concat(Read, ' | ') or 'NEUTRAL'
+Threat.Profile = Profile
+else
+State.AutoMix.DefenderRead = '--'
+end
 return Threat
 end
 
@@ -13809,6 +13923,7 @@ return false
 end
 State.AutoMix.Generation += 1
 local Generation = State.AutoMix.Generation
+local PressedAt = os.clock()
 local ExpectedEndHand = State.AutoMix.GetExpectedHand(Name, State.AutoMix.CurrentHand or 'R')
 State.AutoMix.Busy = true
 State.AutoMix.LastMove = Move.Label
@@ -13831,6 +13946,10 @@ task.delay(Move.Timeout or 0.42, function()
 if State.Active and State.AutoMix.Generation == Generation and State.AutoMix.Busy then
 State.AutoMix.Busy = false
 if ExpectedEndHand then State.AutoMix.CurrentHand = ExpectedEndHand end
+if Name ~= 'SwitchHandles' and (State.AutoMix.MoveConfirmedAt[Name] or 0) < PressedAt then
+State.AutoMix.MoveCooldownUntil[Name] = os.clock() + 2.5
+State.AutoMix.Status = 'MOVE DEAD: ' .. tostring(Move.Label)
+end
 State.AutoMix.StopSpin()
 State.AutoMix.ScheduleNext()
 end
@@ -14010,7 +14129,17 @@ State.AutoMix.AntiReachWasEnabled = nil
 end
 State.AutoMix.Sequence = {}
 State.AutoMix.SequenceIndex = 1
+table.clear(State.AutoMix.MoveCooldownUntil)
+table.clear(State.AutoMix.MoveConfirmedAt)
 State.AutoMix.NextAt = os.clock() + 0.15
+if Enabled then
+State.AutoMix.SessionStartedAt = os.clock()
+State.AutoMix.SessionGames = 0
+State.AutoMix.SessionGameTime = 0
+State.AutoMix.SessionGameStartedAt = nil
+State.AutoMix.SessionInGame = LP:GetAttribute('Ingame') == true
+State.AutoMix.SessionSummary = nil
+end
 State.AutoMix.Status = Enabled and 'READY' or 'OFF'
 if HubUI.Sync then HubUI.Sync() end
 end
@@ -14040,6 +14169,21 @@ end
 local Character = LP.Character
 local HumanoidObject = Character and safe_find(Character, 'Humanoid')
 local ThreatDirection = State.AutoMix.DesiredMovement
+if State.AutoMix.Enabled and CONFIG.AutoMixMovement and ThreatDirection
+and Now < State.AutoMix.MovementUntil
+and Now - (State.AutoMix.LastSteerRefreshAt or 0) >= 0.12 then
+State.AutoMix.LastSteerRefreshAt = Now
+local SteerRoot = Character and safe_find(Character, 'HumanoidRootPart')
+local SteerDefender = State.AutoMix.LastDefender
+local SteerDefenderRoot = SteerDefender and GetAutoBodyTargetRig(SteerDefender)
+if SteerRoot and SteerDefenderRoot then
+local Fresh = State.AutoMix.ChooseOpenDirection(SteerRoot, SteerDefenderRoot)
+if Fresh and Fresh.Magnitude > 0.05 then
+State.AutoMix.DesiredMovement = Fresh.Unit
+ThreatDirection = State.AutoMix.DesiredMovement
+end
+end
+end
 local ManualDirection = State.AutoMix.GetManualDirection(HumanoidObject)
 State.AutoMix.ManualDirection = ManualDirection
 local HasManual = ManualDirection.Magnitude > 0.05
@@ -17686,6 +17830,30 @@ if not Ready then Notify('GOLDEN EAGLE HUB', 'Actor hooks unavailable') end
 end)
 end
 
+State.AimMatchDisarm = { Auto = false }
+task.spawn(function()
+task.wait(2)
+while State.Active do
+if CONFIG.AimOnlyInMatch then
+local InMatch = State.Movement and State.Movement.IsInMatch and State.Movement.IsInMatch() == true
+if not InMatch and State.RequestedEnabled then
+State.AimMatchDisarm.Auto = true
+SetSilentAimEnabled(false)
+Notify('GOLDEN EAGLE HUB', 'Silent Aim parked until you enter a match.')
+elseif InMatch and State.AimMatchDisarm.Auto then
+State.AimMatchDisarm.Auto = false
+if not State.RequestedEnabled then
+SetSilentAimEnabled(true)
+Notify('GOLDEN EAGLE HUB', 'Silent Aim re-armed for the match.')
+end
+end
+elseif State.AimMatchDisarm.Auto then
+State.AimMatchDisarm.Auto = false
+end
+task.wait(1)
+end
+end)
+
 State.ArenaSilentAimRecovery = State.ArenaSilentAimRecovery or { Generation = 0 }
 
 function State.ArenaSilentAimRecovery.Queue()
@@ -17713,7 +17881,17 @@ end))
 end
 end
 
+State.ArcPowerMemory = {}
 function State.SelectBestAutoPower(Distance, CurrentPower)
+local ArcMemory = State.ArcPowerMemory[CONFIG.SilentMode == 'Low' and 'Low' or 'High']
+if ArcMemory and ArcMemory.Power and ArcMemory.Power <= 85
+and os.clock() - (ArcMemory.At or 0) < 240 then
+local ArcMin = MinRangeForPower[ArcMemory.Power]
+local ArcMax = MaxRangeForPower[ArcMemory.Power]
+if ArcMin and ArcMax and Distance >= ArcMin and Distance <= ArcMax then
+return ArcMemory.Power
+end
+end
 local BestPower
 for Power, Maximum in pairs(MaxRangeForPower) do
 local Minimum = MinRangeForPower[Power]
@@ -22279,6 +22457,13 @@ ColorSequenceKeypoint.new(1.00, Color3.fromRGB(2, 2, 2)),
 }, StaticGradientLayer)
 
 local function CreateCheckbox(Parent, Y, Label, InitialValue, Callback)
+local OriginalCheckboxCallback = Callback
+Callback = function(...)
+if HubUI and HubUI.NoteRecentChange then
+pcall(HubUI.NoteRecentChange, Label)
+end
+if OriginalCheckboxCallback then return OriginalCheckboxCallback(...) end
+end
 local Button = New('TextButton', {
 Position = UDim2.fromOffset(8, Y),
 Size = UDim2.new(1, -16, 0, 19),
@@ -23700,9 +23885,32 @@ HubUI.Controls.QuickTravelPlayer:RefreshOptions(nil, CONFIG.QuickTravelPlayer)
 State.Extras.TravelStatus = 'DESTINATIONS REFRESHED'
 end,
 }
-CreateSectionHeader(QuickTravelWorldGroup, 135, 'Live status')
+function HubUI.ReturnToPreviousSpot()
+local SavedReturn = State.Extras.LastTravelReturnCFrame
+if not SavedReturn then
+State.Extras.TravelStatus = 'NO PREVIOUS SPOT SAVED'
+return
+end
+local ReturnRoot = LP.Character and safe_find(LP.Character, 'HumanoidRootPart')
+if ReturnRoot then State.Extras.LastTravelReturnCFrame = ReturnRoot.CFrame end
+State.Extras.TeleportCharacter(SavedReturn, 'Previous Spot')
+end
+HubUI.ReturnTravelButton = New('TextButton', {
+Position = UDim2.fromOffset(8, 130), Size = UDim2.new(1, -16, 0, 25),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = 'RETURN TO PREVIOUS SPOT', TextColor3 = Theme.Muted,
+TextSize = 9, ZIndex = 5,
+}, QuickTravelWorldGroup)
+DarkStroke(HubUI.ReturnTravelButton)
+GiveSignal(HubUI.ReturnTravelButton.MouseButton1Click:Connect(HubUI.ReturnToPreviousSpot))
+HubUI.Controls.ReturnTravelAction = {
+SearchRoot = HubUI.ReturnTravelButton, SearchParent = QuickTravelWorldGroup,
+SearchLabel = 'Return to previous spot', Kind = 'Action',
+Trigger = HubUI.ReturnToPreviousSpot,
+}
+CreateSectionHeader(QuickTravelWorldGroup, 161, 'Live status')
 local QuickTravelStatusText = CreateParagraph(
-QuickTravelWorldGroup, UDim2.fromOffset(8, 155), UDim2.new(1, -16, 0, 76),
+QuickTravelWorldGroup, UDim2.fromOffset(8, 181), UDim2.new(1, -16, 0, 76),
 'STATUS  STANDBY\nTARGET  --'
 )
 
@@ -23865,13 +24073,39 @@ HubUI.Controls.GhostTransparency = CreateNumberInput(
 HubUI.GhostPlaybackGroup, 91, 'Transparency', CONFIG.GhostTransparency, 0.05, 0.9, 2,
 function(Value) State.GhostReplay.SetTransparency(Value) end
 )
+State.GhostReplay.Saved = State.GhostReplay.Saved or {}
+State.GhostReplay.SavedOptions = { 'LATEST' }
+HubUI.Controls.GhostRecordingPick = CreateDropdown(
+HubUI.GhostPlaybackGroup, 121, 'Recording', State.GhostReplay.SavedOptions, 'LATEST',
+function(Value)
+for _, Entry in ipairs(State.GhostReplay.Saved) do
+if Entry.Label == Value then
+State.GhostReplay.Frames = table.clone(Entry.Frames)
+State.GhostReplay.Status = 'LOADED ' .. Entry.Label
+return
+end
+end
+end, 150
+)
+function HubUI.RefreshGhostRecordings()
+table.clear(State.GhostReplay.SavedOptions)
+for _, Entry in ipairs(State.GhostReplay.Saved) do
+table.insert(State.GhostReplay.SavedOptions, Entry.Label)
+end
+if #State.GhostReplay.SavedOptions == 0 then
+table.insert(State.GhostReplay.SavedOptions, 'LATEST')
+end
+if HubUI.Controls.GhostRecordingPick and HubUI.Controls.GhostRecordingPick.RefreshOptions then
+HubUI.Controls.GhostRecordingPick:RefreshOptions(nil, State.GhostReplay.SavedOptions[1])
+end
+end
 HubUI.GhostPlayButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 123), Size = UDim2.new(0.5, -12, 0, 29),
+Position = UDim2.fromOffset(8, 153), Size = UDim2.new(0.5, -12, 0, 29),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'PLAY LAST', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, HubUI.GhostPlaybackGroup)
 HubUI.GhostStopButton = New('TextButton', {
-Position = UDim2.new(0.5, 4, 0, 123), Size = UDim2.new(0.5, -12, 0, 29),
+Position = UDim2.new(0.5, 4, 0, 153), Size = UDim2.new(0.5, -12, 0, 29),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'STOP GHOST', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, HubUI.GhostPlaybackGroup)
@@ -23887,9 +24121,9 @@ HubUI.Controls.GhostStopAction = {
 SearchRoot = HubUI.GhostStopButton, SearchParent = HubUI.GhostPlaybackGroup,
 SearchLabel = 'Stop replay ghost', Kind = 'Action', Trigger = State.GhostReplay.StopPlayback,
 }
-CreateSectionHeader(HubUI.GhostPlaybackGroup, 165, 'Ghost status')
+CreateSectionHeader(HubUI.GhostPlaybackGroup, 195, 'Ghost status')
 HubUI.GhostPlaybackStatus = CreateParagraph(
-HubUI.GhostPlaybackGroup, UDim2.fromOffset(8, 185), UDim2.new(1, -16, 0, 136),
+HubUI.GhostPlaybackGroup, UDim2.fromOffset(8, 215), UDim2.new(1, -16, 0, 106),
 'STATUS  READY\nPLAYHEAD  0.0 SEC\nSPEED  1.00X\nLOOP  OFF'
 )
 
@@ -23903,36 +24137,55 @@ MovementCoreGroup, 61, 'In-match speed', State.Movement.WalkSpeedValue, 1, 250, 
 function(Value) State.Movement.SetWalkSpeedValue(Value) end
 )
 
-CreateSectionHeader(MovementCoreGroup, 93, 'Jump')
+HubUI.Controls.SpeedPreset = CreateSelector(
+MovementCoreGroup, 91, 'Speed preset', { 'Custom', 'Legit', 'Boosted', 'Max' },
+(CONFIG.SpeedPreset == 'Legit' or CONFIG.SpeedPreset == 'Boosted' or CONFIG.SpeedPreset == 'Max') and CONFIG.SpeedPreset or 'Custom',
+function(Value)
+CONFIG.SpeedPreset = Value
+local PresetSpeeds = { Legit = 20, Boosted = 34, Max = 60 }
+local PresetSpeed = PresetSpeeds[Value]
+if not PresetSpeed then return end
+State.Movement.SetWalkSpeedValue(PresetSpeed)
+if HubUI.Controls.WalkSpeedValue and HubUI.Controls.WalkSpeedValue.Set then
+HubUI.Controls.WalkSpeedValue:Set(PresetSpeed, false)
+end
+if HubUI.Controls.WalkSpeed and HubUI.Controls.WalkSpeed.Set and not HubUI.Controls.WalkSpeed.Value then
+HubUI.Controls.WalkSpeed:Set(true, true)
+end
+Notify('GOLDEN EAGLE HUB', 'Speed preset: ' .. Value .. ' (' .. PresetSpeed .. ' walkspeed)')
+end,
+118
+)
+CreateSectionHeader(MovementCoreGroup, 123, 'Jump')
 HubUI.Controls.InfiniteJump = CreateCheckbox(
-MovementCoreGroup, 113, 'Infinite Jump', State.Movement.InfiniteJumpEnabled,
+MovementCoreGroup, 143, 'Infinite Jump', State.Movement.InfiniteJumpEnabled,
 function(Value) State.Movement.SetInfiniteJump(Value) end
 )
 HubUI.Controls.JumpPower = CreateCheckbox(
-MovementCoreGroup, 143, 'Jump Power', State.Movement.JumpPowerEnabled,
+MovementCoreGroup, 173, 'Jump Power', State.Movement.JumpPowerEnabled,
 function(Value) State.Movement.SetJumpPower(Value) end
 )
 HubUI.Controls.JumpPowerValue = CreateNumberInput(
-MovementCoreGroup, 173, 'Jump power', State.Movement.JumpPowerValue, 1, 300, 0,
+MovementCoreGroup, 203, 'Jump power', State.Movement.JumpPowerValue, 1, 300, 0,
 function(Value) State.Movement.SetJumpPowerValue(Value) end
 )
 HubUI.Controls.AutoTipOff = CreateCheckbox(
-MovementCoreGroup, 203, 'Auto Tip Off', State.BallAssist.TipOffEnabled,
+MovementCoreGroup, 233, 'Auto Tip Off', State.BallAssist.TipOffEnabled,
 function(Value) State.BallAssist.SetTipOff(Value) end
 )
 
-CreateSectionHeader(MovementCoreGroup, 235, 'Collision')
+CreateSectionHeader(MovementCoreGroup, 265, 'Collision')
 HubUI.Controls.Noclip = CreateCheckbox(
-MovementCoreGroup, 255, 'Noclip', State.Movement.NoclipEnabled,
+MovementCoreGroup, 285, 'Noclip', State.Movement.NoclipEnabled,
 function(Value) State.Movement.SetNoclip(Value) end
 )
 HubUI.Controls.BodyColliders = CreateCheckbox(
-MovementCoreGroup, 285, 'Force body colliders',
+MovementCoreGroup, 315, 'Force body colliders',
 State.Movement.BodyCollidersEnabled,
 function(Value) State.Movement.SetBodyColliders(Value) end
 )
 HubUI.Controls.BodyColliderIncludeSelf = CreateCheckbox(
-MovementCoreGroup, 315, 'Include your own body',
+MovementCoreGroup, 345, 'Include your own body',
 State.Movement.BodyColliderIncludeSelf,
 function(Value) State.Movement.SetBodyColliderIncludeSelf(Value) end
 )
@@ -23951,21 +24204,50 @@ MovementFlightGroup, 91, 'Air Walk', State.Movement.AirWalkEnabled,
 function(Value) State.Movement.SetAirWalk(Value) end
 )
 
-CreateSectionHeader(MovementFlightGroup, 123, 'Speed profile')
+HubUI.Controls.FlightDoubleTap = CreateCheckbox(
+MovementFlightGroup, 121, 'Double-tap jump toggles flight', CONFIG.FlightDoubleTap == true,
+function(Value) CONFIG.FlightDoubleTap = Value == true end
+)
+CreateSectionHeader(MovementFlightGroup, 153, 'Speed profile')
 HubUI.Controls.SpeedProfiles = CreateCheckbox(
-MovementFlightGroup, 143, 'Separate match / lobby speed', CONFIG.SpeedProfiles,
+MovementFlightGroup, 173, 'Separate match / lobby speed', CONFIG.SpeedProfiles,
 function(Value) CONFIG.SpeedProfiles = Value; State.Movement.ApplyWalkSpeed() end
 )
 HubUI.Controls.OutOfMatchSpeed = CreateNumberInput(
-MovementFlightGroup, 173, 'Lobby speed', CONFIG.OutOfMatchSpeed, 1, 250, 0,
+MovementFlightGroup, 203, 'Lobby speed', CONFIG.OutOfMatchSpeed, 1, 250, 0,
 function(Value) CONFIG.OutOfMatchSpeed = Value; State.Movement.ApplyWalkSpeed() end
 )
 
-CreateSectionHeader(MovementFlightGroup, 205, 'Extras')
+CreateSectionHeader(MovementFlightGroup, 235, 'Extras')
 HubUI.Controls.Spinbot = CreateCheckbox(
-MovementFlightGroup, 225, 'Spinbot', State.Extras.SpinbotEnabled,
+MovementFlightGroup, 255, 'Spinbot', State.Extras.SpinbotEnabled,
 function(Value) State.Extras.SetSpinbot(Value) end
 )
+
+State.Movement.LastFlightTapAt = 0
+GiveSignal(UserInputService.InputBegan:Connect(function(Input, GameProcessed)
+if not GameProcessed and CONFIG.FlightDoubleTap and Input.KeyCode == Enum.KeyCode.Space then
+local Now = os.clock()
+if Now - (State.Movement.LastFlightTapAt or 0) <= 0.28 then
+State.Movement.LastFlightTapAt = 0
+local FlightControl = HubUI.Controls.Flight
+if FlightControl and FlightControl.Set then
+FlightControl:Set(not FlightControl.Value, true)
+Notify('GOLDEN EAGLE HUB', FlightControl.Value and 'Flight on (double-tap).' or 'Flight off (double-tap).')
+end
+else
+State.Movement.LastFlightTapAt = Now
+end
+end
+if Input.KeyCode == Enum.KeyCode.LeftAlt then
+State.BallAssist.MagHoldActive = true
+end
+end))
+GiveSignal(UserInputService.InputEnded:Connect(function(Input)
+if Input.KeyCode == Enum.KeyCode.LeftAlt then
+State.BallAssist.MagHoldActive = false
+end
+end))
 
 CreateSectionHeader(BallReachGroup, 11, 'Reach settings')
 HubUI.Controls.BallReach = CreateCheckbox(
@@ -23976,44 +24258,48 @@ HubUI.Controls.BallReachRadius = CreateNumberInput(
 BallReachGroup, 61, 'Reach radius', State.BallAssist.ReachRadius, 2, 30, 0,
 function(Value) State.BallAssist.SetReachRadius(Value) end
 )
-CreateSectionHeader(BallReachGroup, 93, 'Anti Reach')
+HubUI.Controls.SmartReach = CreateCheckbox(
+BallReachGroup, 91, 'Auto-legit near defenders', CONFIG.SmartReach == true,
+function(Value) CONFIG.SmartReach = Value == true end
+)
+CreateSectionHeader(BallReachGroup, 123, 'Anti Reach')
 HubUI.Controls.AntiReach = CreateCheckbox(
-BallReachGroup, 113, 'Anti Reach', State.BallAssist.AntiReachEnabled,
+BallReachGroup, 143, 'Anti Reach', State.BallAssist.AntiReachEnabled,
 function(Value) State.BallAssist.SetAntiReach(Value) end
 )
 HubUI.Controls.AntiReachNoStealKeeper = CreateCheckbox(
-BallReachGroup, 143, 'NoSteal keeper', CONFIG.AntiReachNoStealKeeper,
+BallReachGroup, 173, 'NoSteal keeper', CONFIG.AntiReachNoStealKeeper,
 function(Value) CONFIG.AntiReachNoStealKeeper = Value end
 )
 HubUI.Controls.AntiReachNoStealRange = CreateNumberInput(
-BallReachGroup, 173, 'NoSteal range', CONFIG.AntiReachNoStealRange,
+BallReachGroup, 203, 'NoSteal range', CONFIG.AntiReachNoStealRange,
 3, 40, 0,
 function(Value) CONFIG.AntiReachNoStealRange = Value end
 )
 HubUI.Controls.AntiReachCounterWindow = CreateNumberInput(
-BallReachGroup, 203, 'Counter window', CONFIG.AntiReachCounterWindow,
+BallReachGroup, 233, 'Counter window', CONFIG.AntiReachCounterWindow,
 0.1, 1.5, 2,
 function(Value) CONFIG.AntiReachCounterWindow = Value end
 )
 HubUI.Controls.AntiReachCounterRadius = CreateNumberInput(
-BallReachGroup, 233, 'Counter radius', CONFIG.AntiReachCounterRadius,
+BallReachGroup, 263, 'Counter radius', CONFIG.AntiReachCounterRadius,
 4, 40, 0,
 function(Value) CONFIG.AntiReachCounterRadius = Value end
 )
 HubUI.Controls.AntiReachTeamSafety = CreateCheckbox(
-BallReachGroup, 263, 'Teammate safety', CONFIG.AntiReachTeamSafety,
+BallReachGroup, 293, 'Teammate safety', CONFIG.AntiReachTeamSafety,
 function(Value) CONFIG.AntiReachTeamSafety = Value end
 )
 
-CreateSectionHeader(BallReachGroup, 295, 'Extras')
+CreateSectionHeader(BallReachGroup, 325, 'Extras')
 HubUI.Controls.AnklesReach = CreateCheckbox(
-BallReachGroup, 315, 'Ankles Reach', State.Extras.AnklesReachEnabled,
+BallReachGroup, 345, 'Ankles Reach', State.Extras.AnklesReachEnabled,
 function(Value) State.Extras.SetAnklesReach(Value) end
 )
 
-CreateSectionHeader(BallReachGroup, 347, 'Live status')
+CreateSectionHeader(BallReachGroup, 377, 'Live status')
 HubUI.AntiReachStatusText = CreateParagraph(
-BallReachGroup, UDim2.fromOffset(8, 367), UDim2.new(1, -16, 0, 140),
+BallReachGroup, UDim2.fromOffset(8, 397), UDim2.new(1, -16, 0, 120),
 'STATUS    --\nNOSTEAL   --\nTHIEF     --\nCOUNTERS  0\nRECOVERED 0'
 )
 
@@ -24031,18 +24317,22 @@ BallMagGroup, 91, 'Pull speed', State.BallAssist.MagSpeed, 10, 200, 0,
 function(Value) State.BallAssist.SetMagSpeed(Value) end
 )
 CreateSectionHeader(BallMagGroup, 123, 'Behavior')
-CreateSectionHeader(BallMagGroup, 143, 'Safe colliders')
+HubUI.Controls.BallMagHold = CreateCheckbox(
+BallMagGroup, 143, 'Hold-to-pull (hold Left Alt)', CONFIG.BallMagHoldMode == true,
+function(Value) CONFIG.BallMagHoldMode = Value == true end
+)
+CreateSectionHeader(BallMagGroup, 173, 'Safe colliders')
 HubUI.Controls.BallColliders = CreateCheckbox(
-BallMagGroup, 163, 'Force ball colliders', State.BallAssist.ColliderEnabled,
+BallMagGroup, 193, 'Force ball colliders', State.BallAssist.ColliderEnabled,
 function(Value) State.BallAssist.SetBallColliders(Value) end
 )
 HubUI.Controls.BallColliderScanInterval = CreateNumberInput(
-BallMagGroup, 193, 'Scan interval',
+BallMagGroup, 223, 'Scan interval',
 State.BallAssist.ColliderScanInterval, 0.1, 1, 2,
 function(Value) State.BallAssist.SetColliderScanInterval(Value) end
 )
 HubUI.Controls.BallColliderPossessionGrace = CreateNumberInput(
-BallMagGroup, 223, 'Steal grace',
+BallMagGroup, 253, 'Steal grace',
 State.BallAssist.ColliderPossessionGrace, 0.2, 2, 2,
 function(Value) State.BallAssist.SetColliderPossessionGrace(Value) end
 )
@@ -25449,8 +25739,12 @@ and 'Release timing will tune itself from Perfect Shot feedback.'
 or 'Release timing locked to the manual value.')
 end
 )
+HubUI.Controls.AimOnlyInMatch = CreateCheckbox(
+LeftGroup, 231, 'Auto-arm only in matches', CONFIG.AimOnlyInMatch == true,
+function(Value) CONFIG.AimOnlyInMatch = Value == true end
+)
 HubUI.Controls.SilentMode = CreateSelector(
-LeftGroup, 231, 'Arc mode', { 'High', 'Low' },
+LeftGroup, 261, 'Arc mode', { 'High', 'Low' },
 (CONFIG.SilentMode == 'Low' and 'Low' or 'High'),
 function(Value)
 CONFIG.SilentMode = Value
@@ -25463,9 +25757,9 @@ end,
 true
 )
 
-CreateSectionHeader(LeftGroup, 264, 'Shot variants')
+CreateSectionHeader(LeftGroup, 294, 'Shot variants')
 HubUI.Controls.Backboard = CreateCheckbox(
-LeftGroup, 284, 'Enable backboard (bank) shots', CONFIG.BackboardEnabled == true,
+LeftGroup, 314, 'Enable backboard (bank) shots', CONFIG.BackboardEnabled == true,
 function(Value)
 CONFIG.BackboardEnabled = Value == true
 SilentAim.ArcSolveCache = {}
@@ -25477,16 +25771,16 @@ or 'Bank shots disabled: aiming directly at the rim.')
 end
 )
 HubUI.Controls.NoJumpMode = CreateCheckbox(
-LeftGroup, 314, 'Enable No Jump Shot', CONFIG.NoJumpEnabled,
+LeftGroup, 344, 'Enable No Jump Shot', CONFIG.NoJumpEnabled,
 function(Value)
 CONFIG.NoJumpEnabled = Value == true
 State.NoJump.BindKey(CONFIG.NoJumpShotKey)
 end
 )
 
-CreateSectionHeader(LeftGroup, 346, 'Match arc')
+CreateSectionHeader(LeftGroup, 376, 'Match arc')
 HubUI.Controls.MatchArc = CreateCheckbox(
-LeftGroup, 366, 'Match custom arc angle', CONFIG.MatchArcEnabled == true,
+LeftGroup, 396, 'Match custom arc angle', CONFIG.MatchArcEnabled == true,
 function(Value)
 CONFIG.MatchArcEnabled = Value == true
 SilentAim.ArcSolveCache = {}
@@ -25499,7 +25793,7 @@ or 'Match Arc off: arc follows the High/Low mode at the current power.')
 end
 )
 HubUI.Controls.MatchArcAngle = CreateNumberInput(
-LeftGroup, 396, 'Desired arc angle (deg)', CONFIG.MatchArcAngle, 5, 88, 0,
+LeftGroup, 426, 'Desired arc angle (deg)', CONFIG.MatchArcAngle, 5, 88, 0,
 function(Value)
 CONFIG.MatchArcAngle = Value
 SilentAim.ArcSolveCache = {}
@@ -26011,32 +26305,52 @@ AutoMixControlGroup, 345, 'Allow safe move variety', CONFIG.AutoMixMoveVariety,
 function(Value) CONFIG.AutoMixMoveVariety = Value end
 )
 
+CreateSectionHeader(AutoMixControlGroup, 377, 'Intelligence')
+HubUI.Controls.AutoMixPredictiveReach = CreateCheckbox(
+AutoMixControlGroup, 397, 'Predict incoming swipes', CONFIG.AutoMixPredictiveReach,
+function(Value) CONFIG.AutoMixPredictiveReach = Value end
+)
+HubUI.Controls.AutoMixAdaptive = CreateCheckbox(
+AutoMixControlGroup, 427, 'Learn defender habits', CONFIG.AutoMixAdaptive,
+function(Value)
+CONFIG.AutoMixAdaptive = Value
+if not Value then
+table.clear(State.AutoMix.DefenderProfiles)
+State.AutoMix.DefenderRead = '--'
+end
+end
+)
+HubUI.Controls.AutoMixCombo = CreateCheckbox(
+AutoMixControlGroup, 457, 'Chain counters on commit', CONFIG.AutoMixCombo,
+function(Value) CONFIG.AutoMixCombo = Value end
+)
+
 CreateSectionHeader(AutoMixStrategyGroup, 11, 'Live threat read')
 local AutoMixStatusText = CreateParagraph(
 AutoMixStrategyGroup,
 UDim2.fromOffset(8, 31),
-UDim2.new(1, -16, 0, 146),
+UDim2.new(1, -16, 0, 176),
 'STATUS  OFF\nTHREAT  CLEAR\nPLAN    HOLD\nRISK    0.00\nMOVE    IDLE'
 )
-CreateSectionHeader(AutoMixStrategyGroup, 189, 'Manual movement blend')
+CreateSectionHeader(AutoMixStrategyGroup, 219, 'Manual movement blend')
 HubUI.Controls.AutoMixManualInfluence = CreateNumberInput(
-AutoMixStrategyGroup, 209, 'Manual influence', CONFIG.AutoMixManualInfluence, 0.1, 1, 2,
+AutoMixStrategyGroup, 239, 'Manual influence', CONFIG.AutoMixManualInfluence, 0.1, 1, 2,
 function(Value) CONFIG.AutoMixManualInfluence = Value end
 )
 HubUI.Controls.AutoMixThreatSteerMax = CreateNumberInput(
-AutoMixStrategyGroup, 239, 'Maximum threat steer', CONFIG.AutoMixThreatSteerMax, 0.1, 1, 2,
+AutoMixStrategyGroup, 269, 'Maximum threat steer', CONFIG.AutoMixThreatSteerMax, 0.1, 1, 2,
 function(Value) CONFIG.AutoMixThreatSteerMax = Value end
 )
 HubUI.Controls.AutoMixBallSafetyMargin = CreateNumberInput(
-AutoMixStrategyGroup, 269, 'Defender reach margin', CONFIG.AutoMixBallSafetyMargin, 1.5, 5, 1,
+AutoMixStrategyGroup, 299, 'Defender reach margin', CONFIG.AutoMixBallSafetyMargin, 1.5, 5, 1,
 function(Value) CONFIG.AutoMixBallSafetyMargin = Value end
 )
 HubUI.Controls.AutoMixActionRisk = CreateNumberInput(
-AutoMixStrategyGroup, 299, 'Minimum action risk', CONFIG.AutoMixActionRisk, 0.3, 1.2, 2,
+AutoMixStrategyGroup, 329, 'Minimum action risk', CONFIG.AutoMixActionRisk, 0.3, 1.2, 2,
 function(Value) CONFIG.AutoMixActionRisk = Value end
 )
 HubUI.Controls.AutoMixMinimumClearanceGain = CreateNumberInput(
-AutoMixStrategyGroup, 329, 'Minimum clearance gain', CONFIG.AutoMixMinimumClearanceGain, 0, 3, 1,
+AutoMixStrategyGroup, 359, 'Minimum clearance gain', CONFIG.AutoMixMinimumClearanceGain, 0, 3, 1,
 function(Value) CONFIG.AutoMixMinimumClearanceGain = Value end
 )
 
@@ -26158,8 +26472,22 @@ local StatusHooks = StatusRow(151, 'Actor hooks')
 local StatusAutoPower = StatusRow(176, 'Auto Power')
 HubUI.StatusPing = StatusRow(201, 'Ping / release lead')
 HubUI.StatusOwnership = StatusRow(226, 'Ball physics owner')
+HubUI.StatusPerfect = StatusRow(251, 'Perfect streak')
+CreateSectionHeader(StatusGroup, 376, 'Recent changes')
+HubUI.RecentChangesText = CreateParagraph(
+StatusGroup, UDim2.fromOffset(8, 396), UDim2.new(1, -16, 0, 104),
+'No toggles changed yet.'
+)
+HubUI.RecentChanges = {}
+function HubUI.NoteRecentChange(Label)
+table.insert(HubUI.RecentChanges, 1, string.format('[%s] %s', os.date('%H:%M:%S'), tostring(Label)))
+while #HubUI.RecentChanges > 5 do table.remove(HubUI.RecentChanges) end
+if HubUI.RecentChangesText then
+HubUI.RecentChangesText.Text = table.concat(HubUI.RecentChanges, '\n')
+end
+end
 local RangeText = New('TextLabel', {
-Position = UDim2.fromOffset(8, 257),
+Position = UDim2.fromOffset(8, 282),
 Size = UDim2.new(1, -16, 0, 18),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
@@ -26170,7 +26498,7 @@ TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 5,
 }, StatusGroup)
 local RangeBar = New('Frame', {
-Position = UDim2.fromOffset(8, 282),
+Position = UDim2.fromOffset(8, 307),
 Size = UDim2.new(1, -16, 0, 10),
 BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
@@ -26187,7 +26515,7 @@ ZIndex = 6,
 BindAccent(RangeFill, 'BackgroundColor3')
 
 local RecheckButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 313),
+Position = UDim2.fromOffset(8, 338),
 Size = UDim2.new(1, -16, 0, 28),
 BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
@@ -30175,15 +30503,38 @@ BodyTarget and string.format(
 '%.1f st/s', State.AutoBody.ClosingSpeed or 0) or '--',
 State.AutoBody.HandStatus
 )
+if State.AutoMix.Enabled and State.AutoMix.SessionStartedAt then
+local InGameNow = LP:GetAttribute('Ingame') == true
+if InGameNow and not State.AutoMix.SessionInGame then
+State.AutoMix.SessionGames = (State.AutoMix.SessionGames or 0) + 1
+State.AutoMix.SessionGameStartedAt = os.clock()
+elseif not InGameNow and State.AutoMix.SessionInGame and State.AutoMix.SessionGameStartedAt then
+State.AutoMix.SessionGameTime = (State.AutoMix.SessionGameTime or 0) + (os.clock() - State.AutoMix.SessionGameStartedAt)
+State.AutoMix.SessionGameStartedAt = nil
+end
+State.AutoMix.SessionInGame = InGameNow
+local SessionGames = State.AutoMix.SessionGames or 0
+local SessionTotal = (State.AutoMix.SessionGameTime or 0)
++ (State.AutoMix.SessionGameStartedAt and (os.clock() - State.AutoMix.SessionGameStartedAt) or 0)
+local SessionAverage = SessionGames > 0 and SessionTotal / SessionGames or 0
+State.AutoMix.SessionSummary = string.format(
+'%dG | AVG %d:%02d | UP %dM',
+SessionGames,
+math.floor(SessionAverage / 60), math.floor(SessionAverage % 60),
+math.floor((os.clock() - State.AutoMix.SessionStartedAt) / 60)
+)
+end
 if AutoMixStatusText then
 AutoMixStatusText.Text = string.format(
-'STATUS %s | %s | %s\nDEFENSE %s | LAT %.1f | NEAR %d\nPLAN   %s\nNEED   %s\nBALL   %s | CLEAR %.1f\nRISK   %.2f | CLOSE %.1f\nMOVE   %s | STEER %d%%',
+'STATUS %s | %s | %s\nDEFENSE %s | LAT %.1f | NEAR %d\nREAD   %s | SWIPE %.1f\nPLAN   %s\nNEED   %s\nBALL   %s | CLEAR %.1f\nRISK   %.2f | CLOSE %.1f\nMOVE   %s | STEER %d%%\nSESSION %s',
 State.AutoMix.Status,
 State.AutoMix.ThreatLevel or 'CLEAR',
 State.AutoMix.ShiftLockActive and 'SHIFTLOCK' or 'FREE CAM',
 State.AutoMix.DefenseType or 'NONE',
 State.AutoMix.DefenseLateralSpeed or 0,
 State.AutoMix.NearbyDefenders or 0,
+State.AutoMix.DefenderRead or '--',
+State.AutoMix.ReachClosing or 0,
 State.AutoMix.Plan or 'HOLD',
 State.AutoMix.LastNecessaryReason or 'NONE',
 State.AutoMix.PredictedBallSide or '--',
@@ -30191,7 +30542,8 @@ State.AutoMix.PredictedBallClearance or 0,
 State.AutoMix.RiskScore or 0,
 State.AutoMix.ClosingSpeed or 0,
 State.AutoMix.MovementStatus or 'IDLE',
-State.AutoMix.BlendPercent or 0
+State.AutoMix.BlendPercent or 0,
+State.AutoMix.SessionSummary or '--'
 )
 end
 if HubUI.AntiReachStatusText then
@@ -30276,6 +30628,16 @@ StatusBall.Text = HasBall and 'HELD' or 'NOT HELD'
 StatusHooks.Text = SilentAim.ActorAimReady and 'READY' or 'WAITING'
 StatusAutoPower.Text = CONFIG.AutoPower
 and (BestPower and ('ON  •  ' .. tostring(BestPower)) or 'ON  •  NO BAND') or 'OFF'
+if HubUI.StatusPerfect then
+HubUI.StatusPerfect.Text = string.format(
+'%d  •  BEST %d  •  %d/%d',
+State.PerfectRelease.Streak or 0,
+State.PerfectRelease.BestStreak or 0,
+State.PerfectRelease.Hits or 0,
+State.PerfectRelease.Attempts or 0
+)
+HubUI.StatusPerfect.TextColor3 = (State.PerfectRelease.Streak or 0) > 0 and Theme.Success or Theme.Text
+end
 
 if HubUI.StatusPing then
 local PingReadout = State.PingAdaptive.GetPingReadout()
