@@ -5399,6 +5399,8 @@ end
 State.LocalSpoofs = {
 OriginalELO = LP:GetAttribute('ELO'),
 OriginalToggleRank = LP:GetAttribute('Toggle_Rank'),
+OriginalConfigToggleRank = State.ClientSettings.GetConfig('Toggle_Rank', true),
+ApplyingELO = false,
 RankImageELO = {
 ['Rookie 1']=0, ['Rookie 2']=25, ['Rookie 3']=50,
 ['Veteran 1']=100, ['Veteran 2']=150, ['Veteran 3']=200,
@@ -5444,16 +5446,25 @@ Enabled = Enabled == true
 Value = math.clamp(math.floor(tonumber(Value) or 0), 0, 1000000000)
 State.LocalELOSpoofEnabled, State.LocalELO = Enabled, Value
 CONFIG.LocalELOSpoof, CONFIG.LocalELO = Enabled, Value
+State.LocalSpoofs.ApplyingELO = true
 if Enabled then
+State.ClientSettings.SetConfig('Toggle_Rank', true)
 LP:SetAttribute('Toggle_Rank', true)
-if LP:GetAttribute('ELO') == Value then LP:SetAttribute('ELO', math.max(0, Value - 1)) end
+-- Always pulse ELO so every rank listener refreshes, including listeners that
+-- were recreated when a match started or ended.
+local Pulse = Value >= 1000000000 and Value - 1 or Value + 1
+LP:SetAttribute('ELO', Pulse)
 LP:SetAttribute('ELO', Value)
 else
 LP:SetAttribute('ELO', State.LocalSpoofs.OriginalELO)
 LP:SetAttribute('Toggle_Rank', State.LocalSpoofs.OriginalToggleRank)
+State.ClientSettings.SetConfig('Toggle_Rank', State.LocalSpoofs.OriginalConfigToggleRank)
 end
+State.LocalSpoofs.ApplyingELO = false
 if State.LocalSpoofs.ELOBox then State.LocalSpoofs.ELOBox.Text = tostring(Value) end
-pcall(State.LocalSpoofs.ApplyProfile)
+task.defer(function()
+if State.Active then pcall(State.LocalSpoofs.ApplyProfile) end
+end)
 end
 
 function State.LocalSpoofs.RefreshRank()
@@ -6717,9 +6728,61 @@ end
 
 if LP.Character then State.LocalSpoofs.BindIntroBanners(LP.Character) end
 
+-- The game writes the real ELO back after a match. Keep the local spoof
+-- latched on so users do not have to toggle it off and on again.
+GiveSignal(LP:GetAttributeChangedSignal('ELO'):Connect(function()
+if State.LocalSpoofs.ApplyingELO then return end
+if State.LocalELOSpoofEnabled then
+local ServerELO = LP:GetAttribute('ELO')
+if ServerELO ~= State.LocalELO then
+-- Preserve the newest real value so disabling the spoof restores correctly.
+State.LocalSpoofs.OriginalELO = ServerELO
+end
+task.defer(function()
+if State.Active and State.LocalELOSpoofEnabled
+and LP:GetAttribute('ELO') ~= State.LocalELO then
+State.LocalSpoofs.SetELO(true, State.LocalELO, false)
+end
+end)
+else
+State.LocalSpoofs.OriginalELO = LP:GetAttribute('ELO')
+end
+end))
+
+GiveSignal(LP:GetAttributeChangedSignal('Toggle_Rank'):Connect(function()
+if State.LocalSpoofs.ApplyingELO then return end
+if State.LocalELOSpoofEnabled and LP:GetAttribute('Toggle_Rank') ~= true then
+task.defer(function()
+if State.Active and State.LocalELOSpoofEnabled then
+State.LocalSpoofs.SetELO(true, State.LocalELO, false)
+end
+end)
+elseif not State.LocalELOSpoofEnabled then
+State.LocalSpoofs.OriginalToggleRank = LP:GetAttribute('Toggle_Rank')
+end
+end))
+
+GiveSignal(LP:GetAttributeChangedSignal('Ingame'):Connect(function()
+if not State.LocalELOSpoofEnabled then return end
+-- Match transitions rebuild the in-game rank UI, so reapply after it exists.
+task.delay(0.2, function()
+if State.Active and State.LocalELOSpoofEnabled then
+State.LocalSpoofs.SetELO(true, State.LocalELO, false)
+end
+end)
+end))
+
 task.spawn(function()
 while State.Active do
 if State.LocalCosmeticSpoofEnabled then pcall(State.Cosmetics.ApplyLocalCosmetics) end
+if State.LocalELOSpoofEnabled then
+local ConfigRank = State.ClientSettings.GetConfig('Toggle_Rank', true)
+if LP:GetAttribute('ELO') ~= State.LocalELO
+or LP:GetAttribute('Toggle_Rank') ~= true
+or ConfigRank ~= true then
+pcall(State.LocalSpoofs.SetELO, true, State.LocalELO, false)
+end
+end
 if State.LocalRepImageSpoofEnabled or State.LocalELOSpoofEnabled or State.LocalStatsSpoofEnabled then pcall(State.LocalSpoofs.ApplyProfile) end
 if State.LocalSpoofs.HasFakeDraws then pcall(State.LocalSpoofs.PatchFakeDrawRows) end
 task.wait(1)
