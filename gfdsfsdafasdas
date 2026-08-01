@@ -35,6 +35,7 @@ PerfectReleaseCalibrationFile = 'GoldenEagleHub_Release.json',
 CameraIndependentFallback = false,
 AimMode = 'Legit',
 SilentMode = 'High',
+ClickToShoot = false,
 BackboardEnabled = false,
 NoJumpEnabled = false,
 FormulaVerticalBoost = 55,
@@ -11643,6 +11644,14 @@ BuildSilentAimTarget = WYNF_JIT_MAX(function(Rim, Distance, Power, OriginOverrid
 return GetFormulaTarget(Rim, Power, OriginOverride), nil
 end)
 
+State.ClickShoot = {
+Armed = false,
+Target = nil,
+Status = 'IDLE',
+LastFiredAt = 0,
+Shots = 0,
+}
+
 local function SilentShoot(Rim, YOffset, PreArmedTarget, SolvedTarget)
 if State.silentShootActive then return false end
 if SilentAim.ActorAimReady ~= true then return false end
@@ -12135,6 +12144,26 @@ if JumpArmTarget and SilentAim.ActorAimReady == true then
 SilentAim.FireActorAim(JumpArmTarget)
 end
 
+-- Manual release: never auto-shoot at the peak. The aim target keeps
+-- re-arming every frame while airborne, so the player's own left click is
+-- the release and they own the timing.
+if CONFIG.ClickToShoot then
+State.ClickShoot.Armed = true
+State.ClickShoot.Target = JumpArmTarget
+State.ClickShoot.Status = 'ARMED - LEFT CLICK TO RELEASE'
+SilentAim.ReleasePredictionDeadline = 0
+local Grounded = Humanoid and Humanoid.FloorMaterial ~= Enum.Material.Air
+if (TakeoffAt and Grounded and os.clock() - TakeoffAt > 0.25)
+or os.clock() - StartedAt > 5 then
+State.ClickShoot.Armed = false
+State.ClickShoot.Target = nil
+State.ClickShoot.Status = 'IDLE'
+if JumpArmTarget then SilentAim.ClearActorAim() end
+CheckPeakJump:Disconnect()
+end
+return
+end
+
 local ShouldRelease = false
 local StepTime = math.clamp(
 DeltaTime or (1 / 60), 1 / 240, 1 / 15)
@@ -12169,6 +12198,35 @@ end
 end
 end)
 end
+
+-- Click-to-shoot release. The shot itself is the player's real click; we only
+-- refresh the silent aim solution on that exact frame so it lands where the
+-- solver wants it.
+GiveSignal(UserInputService.InputBegan:Connect(function(Input, GameProcessed)
+if GameProcessed then return end
+if Input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+if not CONFIG.ClickToShoot then return end
+if not (State.Active and State.Enabled and State.RequestedEnabled) then return end
+if not State.ClickShoot.Armed then return end
+if State.PassInProgress or State.silentShootActive then return end
+if State.AutoDunk and State.AutoDunk.InProgress then return end
+State.ClickShoot.Armed = false
+State.ClickShoot.LastFiredAt = os.clock()
+State.ClickShoot.Shots += 1
+State.ClickShoot.Status = 'RELEASED BY CLICK'
+pcall(function()
+local Rim, Distance = FindConfiguredGoal()
+if not Rim then return end
+local Power = State.PowerBypass.GetEffectivePower()
+local AimDistance = State.Backboard.GetConfiguredAimDistance(Rim, Distance)
+local Target = select(1, BuildSilentAimTarget(Rim, AdjustAimDistance(AimDistance), Power))
+if Target then
+SilentAim.FireActorAim(Target)
+State.ClickShoot.Target = Target
+end
+end)
+task.delay(0.25, function() pcall(SilentAim.ClearActorAim) end)
+end))
 
 local HubUI = {
 MenuKey = CONFIG.MenuKey,
@@ -25778,6 +25836,20 @@ State.NoJump.BindKey(CONFIG.NoJumpShotKey)
 end
 )
 
+CreateSectionHeader(LeftGroup, 458, 'Manual release')
+HubUI.Controls.ClickToShoot = CreateCheckbox(
+LeftGroup, 478, 'Click to shoot (manual timing)', CONFIG.ClickToShoot == true,
+function(Value)
+CONFIG.ClickToShoot = Value == true
+State.ClickShoot.Armed = false
+State.ClickShoot.Status = 'IDLE'
+pcall(SilentAim.ClearActorAim)
+Notify('GOLDEN EAGLE HUB', CONFIG.ClickToShoot
+and 'Click to shoot: jump, then LEFT CLICK to release. Silent Aim still guides the ball.'
+or 'Click to shoot off: shots release automatically at the peak again.')
+end
+)
+
 CreateSectionHeader(LeftGroup, 376, 'Match arc')
 HubUI.Controls.MatchArc = CreateCheckbox(
 LeftGroup, 396, 'Match custom arc angle', CONFIG.MatchArcEnabled == true,
@@ -29051,6 +29123,7 @@ AutoPowerPreference = 'Which valid power to prefer. Lowest = flattest arc, Highe
 RequireBall = 'Only arms Silent Aim while you actually hold the basketball, preventing wasted redirects. Recommended: ON.',
 PerfectRelease = 'Times your release for a Perfect Shot rating. Recommended: ON.',
 PerfectReleaseAutoCalibrate = 'Learns from Perfect Shot feedback and nudges the release window automatically. Recommended: ON for your first few games.',
+ClickToShoot = 'Turns off the automatic peak release. Jump, then left click to shoot yourself while Silent Aim still solves the arc. Perfect Release is bypassed because you own the timing.',
 SilentMode = 'High = normal rainbow arc, Low = flat dart at the rim. Low looks suspicious on full jumpshots. Default: High.',
 Desync = 'Measures the gap between your visual position and the server position. Purely informational overlay.',
 DesyncVisualizer = 'Draws two outlines of your character: green is your rendered position; red is the ping-delayed server-position estimate. This is a visual latency aid, not a desync exploit.',
