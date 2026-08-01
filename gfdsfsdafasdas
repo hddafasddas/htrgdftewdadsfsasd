@@ -5496,7 +5496,10 @@ end
 State.LocalSpoofs.ApplyingELO = false
 if State.LocalSpoofs.ELOBox then State.LocalSpoofs.ELOBox.Text = tostring(Value) end
 task.defer(function()
-if State.Active then pcall(State.LocalSpoofs.ApplyProfile) end
+if State.Active then
+pcall(State.LocalSpoofs.ApplyProfile)
+pcall(State.LocalSpoofs.ApplyNativeNameTags)
+end
 end)
 end
 
@@ -5909,8 +5912,10 @@ end
 
 function State.LocalSpoofs.FindLocalNameTagMain(Banner)
 if not (Banner and Banner.Parent) then return nil end
-local Main = Banner.Parent
-if Main.Name ~= 'MainFrame' then Main = Banner:FindFirstAncestor('MainFrame') end
+local Main = (Banner.Name == 'MainFrame' or Banner.Name == 'GameFrame') and Banner or Banner.Parent
+if Main.Name ~= 'MainFrame' and Main.Name ~= 'GameFrame' then
+Main = Banner:FindFirstAncestor('MainFrame') or Banner:FindFirstAncestor('GameFrame')
+end
 if not Main then return nil end
 local NameTag = Main.Parent
 local Adornee = NameTag and NameTag:IsA('BillboardGui') and (NameTag.Adornee or NameTag.Parent)
@@ -5939,6 +5944,17 @@ local Streak = Main:FindFirstChild('Streak', true) or Main:FindFirstChild('Strea
 local Amount = Streak and (Streak:FindFirstChild('AmountLabel', true) or Streak:FindFirstChildWhichIsA('TextLabel', true))
 local RankImage = Main:FindFirstChild('RankImage', true) or Main:FindFirstChild('RankIcon', true)
 local RankLabel = Main:FindFirstChild('RankLabel', true)
+if not RankImage then
+for _, Descendant in ipairs(Main:GetDescendants()) do
+local Name = string.lower(Descendant.Name)
+if Descendant:IsA('ImageLabel') and not string.find(Name, 'streak', 1, true)
+and (string.find(Name, 'rank', 1, true) or string.find(Name, 'rep', 1, true)
+or string.find(Name, 'league', 1, true)) then
+RankImage = Descendant
+break
+end
+end
+end
 State.LocalSpoofs.StatsNativeNameTags[Main] = {
 Record=Record, Streak=Streak, Amount=Amount, RankImage=RankImage, RankLabel=RankLabel,
 }
@@ -5952,6 +5968,17 @@ end
 function State.LocalSpoofs.ApplyNativeNameTags()
 local CollectionService = game:GetService('CollectionService')
 for _, Banner in ipairs(CollectionService:GetTagged('Banners')) do State.LocalSpoofs.RegisterNativeNameTag(Banner) end
+-- The active-match overhead uses HumanoidRootPart.NameTag.GameFrame and is
+-- not consistently tagged as a Banner. Register both native frames directly.
+local Character = LP.Character
+local Root = Character and Character:FindFirstChild('HumanoidRootPart')
+local NameTag = Root and Root:FindFirstChild('NameTag')
+if NameTag then
+local MainFrame = NameTag:FindFirstChild('MainFrame')
+local GameFrame = NameTag:FindFirstChild('GameFrame')
+if MainFrame then State.LocalSpoofs.RegisterNativeNameTag(MainFrame) end
+if GameFrame then State.LocalSpoofs.RegisterNativeNameTag(GameFrame) end
+end
 local W = math.max(0, math.floor(tonumber(State.LocalWins) or 0))
 local L = math.max(0, math.floor(tonumber(State.LocalLosses) or 0))
 local S = math.max(0, math.floor(tonumber(State.LocalStreak) or 0))
@@ -5959,17 +5986,31 @@ local E = State.LocalELOSpoofEnabled and State.LocalELO or (LP:GetAttribute('ELO
 State.LocalSpoofs.Rankings = State.LocalSpoofs.Rankings or require(ReplicatedStorage.Util.Rankings)
 for Main, Fields in pairs(State.LocalSpoofs.StatsNativeNameTags) do
 if Main and Main.Parent then
-if Fields.Record and Fields.Record.Parent then State.LocalSpoofs.SetStatsUI(Fields.Record, 'Text', W .. ' - ' .. L) end
-if Fields.Amount and Fields.Amount.Parent then State.LocalSpoofs.SetStatsUI(Fields.Amount, 'Text', S > 0 and tostring(S) or '') end
-if Fields.Streak and Fields.Streak.Parent and Fields.Streak:IsA('ImageLabel') then
+if State.LocalStatsSpoofEnabled and Fields.Record and Fields.Record.Parent then State.LocalSpoofs.SetStatsUI(Fields.Record, 'Text', W .. ' - ' .. L) end
+if State.LocalStatsSpoofEnabled and Fields.Amount and Fields.Amount.Parent then State.LocalSpoofs.SetStatsUI(Fields.Amount, 'Text', S > 0 and tostring(S) or '') end
+if State.LocalStatsSpoofEnabled and Fields.Streak and Fields.Streak.Parent and Fields.Streak:IsA('ImageLabel') then
 State.LocalSpoofs.SetStatsUI(Fields.Streak, 'Image', S > 1 and (State.LocalSpoofs.Rankings.getStreakImage(S) or '') or '')
 end
-if Fields.RankImage and Fields.RankImage.Parent and Fields.RankImage:IsA('ImageLabel') then
+if (State.LocalELOSpoofEnabled or State.LocalRepImageSpoofEnabled)
+and Fields.RankImage and Fields.RankImage.Parent and Fields.RankImage:IsA('ImageLabel') then
 State.LocalSpoofs.SetStatsUI(Fields.RankImage, 'Image', State.LocalSpoofs.Rankings.getRankImageFromELO(E) or '')
+State.LocalSpoofs.SetStatsUI(Fields.RankImage, 'Visible', true)
+State.LocalSpoofs.SetStatsUI(Fields.RankImage, 'ImageTransparency', 0)
+local Holder = Fields.RankImage.Parent
+while Holder and Holder ~= Main do
+local HolderName = string.lower(Holder.Name)
+if Holder:IsA('GuiObject') and (string.find(HolderName, 'rank', 1, true)
+or string.find(HolderName, 'rep', 1, true) or string.find(HolderName, 'league', 1, true)) then
+State.LocalSpoofs.SetStatsUI(Holder, 'Visible', true)
 end
-if Fields.RankLabel and Fields.RankLabel.Parent and Fields.RankLabel:IsA('TextLabel') then
+Holder = Holder.Parent
+end
+end
+if (State.LocalELOSpoofEnabled or State.LocalRepImageSpoofEnabled)
+and Fields.RankLabel and Fields.RankLabel.Parent and Fields.RankLabel:IsA('TextLabel') then
 local RankName, RankTier = State.LocalSpoofs.Rankings.getRankFromELO(E)
 State.LocalSpoofs.SetStatsUI(Fields.RankLabel, 'Text', tostring(RankName) .. ' ' .. string.rep('I', tonumber(RankTier) or 0))
+State.LocalSpoofs.SetStatsUI(Fields.RankLabel, 'Visible', true)
 end
 end
 end
@@ -6817,6 +6858,7 @@ pcall(State.LocalSpoofs.SetELO, true, State.LocalELO, false)
 end
 end
 if State.LocalRepImageSpoofEnabled or State.LocalELOSpoofEnabled or State.LocalStatsSpoofEnabled then pcall(State.LocalSpoofs.ApplyProfile) end
+if State.LocalRepImageSpoofEnabled or State.LocalELOSpoofEnabled then pcall(State.LocalSpoofs.ApplyNativeNameTags) end
 if State.LocalSpoofs.HasFakeDraws then pcall(State.LocalSpoofs.PatchFakeDrawRows) end
 task.wait(1)
 end
