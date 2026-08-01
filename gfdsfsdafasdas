@@ -3357,35 +3357,56 @@ end
 
 local function GetLocalBallHandle()
 local Now = os.clock()
-local Cached = State.Cosmetics.Runtime.LastBall
-if Cached and Cached.Parent and Now - State.Cosmetics.Runtime.LastBallResolveAt < 0.1 then
-return Cached
-end
 State.Cosmetics.Runtime.LastBallResolveAt = Now
 local Character = LP.Character
 if Character then
-for _, Ball in ipairs(CollectionService:GetTagged('BallHandle')) do
-if Ball:IsA('BasePart') and Ball:IsDescendantOf(Character) then
-State.Cosmetics.Runtime.LastBall = Ball
-return Ball
-end
-end
 local Root = Character:FindFirstChild('HumanoidRootPart')
-if Character:FindFirstChild('Basketball') and Root then
+local Basketball = Character:FindFirstChild('Basketball')
+if Basketball then
+-- Prefer the ball inside our own held tool. The previous nearest-ball scan
+-- could select every nearby player's handle and skin all of them.
+local Held = State.BallAssist.GetCanonicalBallPart(Basketball)
+if Held then
+State.Cosmetics.Runtime.LastBall = Held
+State.Cosmetics.Runtime.LastLocalBallSeenAt = Now
+return Held
+end
+end
+
+-- Never keep spoofing a loose handle after another player has possession.
+for _, Player in ipairs(Players:GetPlayers()) do
+if Player ~= LP and Player.Character and Player.Character:FindFirstChild('Basketball') then
+State.Cosmetics.Runtime.LastBall = nil
+return nil
+end
+end
+
+-- Keep the released local shot skinned briefly while it is in flight. This
+-- path is only armed by actually holding a ball first, so joining near a court
+-- cannot accidentally claim somebody else's ball.
+local LastHeldAt = State.Cosmetics.Runtime.LastLocalBallSeenAt or 0
+if Root and Now - LastHeldAt <= 4 then
+local Cached = State.Cosmetics.Runtime.LastBall
+if Cached and Cached.Parent and not Cached:IsDescendantOf(Character) then
+return Cached
+end
 local Closest, ClosestDistance
 for _, Ball in ipairs(CollectionService:GetTagged('BallHandle')) do
 if Ball:IsA('BasePart') and Ball.Parent then
 local Distance = (Ball.Position - Root.Position).Magnitude
-if Distance <= 12 and (not ClosestDistance or Distance < ClosestDistance) then
+if Distance <= 35 and (not ClosestDistance or Distance < ClosestDistance) then
 Closest, ClosestDistance = Ball, Distance
 end
 end
 end
-if Closest then State.Cosmetics.Runtime.LastBall = Closest; return Closest end
+if Closest then
+State.Cosmetics.Runtime.LastBall = Closest
+return Closest
 end
 end
-local Last = State.Cosmetics.Runtime.LastBall
-return Last and Last.Parent and Last or nil
+end
+State.Cosmetics.Runtime.LastBall = nil
+return nil
 end
 
 local function ForceBallCosmeticsVisible(Ball)
@@ -3455,6 +3476,18 @@ function State.Cosmetics.ApplyLocalCosmetics(ForceBall)
 if not State.LocalCosmeticSpoofEnabled then return end
 local Now = os.clock()
 local Ball = GetLocalBallHandle()
+-- Immediately restore any previously selected handle. This also cleans up
+-- balls that older target detection accidentally treated as local.
+for TrackedBall, Original in pairs(State.Cosmetics.Runtime.BallOriginals) do
+if TrackedBall ~= Ball then
+if TrackedBall and TrackedBall.Parent then
+State.ApplyBallCosmeticCategory(TrackedBall, 'Aura', Original.Aura)
+State.ApplyBallCosmeticCategory(TrackedBall, 'Trail', Original.Trail)
+State.ApplyBallCosmeticCategory(TrackedBall, 'Ball', Original.Ball)
+end
+State.Cosmetics.Runtime.BallOriginals[TrackedBall] = nil
+end
+end
 if Ball and State.Cosmetics.Replicator then
 if not State.Cosmetics.Runtime.BallOriginals[Ball] then
 State.Cosmetics.Runtime.BallOriginals[Ball] = {
