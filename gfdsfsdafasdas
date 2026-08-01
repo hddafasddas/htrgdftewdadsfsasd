@@ -36,6 +36,11 @@ CameraIndependentFallback = false,
 AimMode = 'Legit',
 SilentMode = 'High',
 ClickToShoot = false,
+HumanizeEnabled = false,
+HumanizeAccuracy = 92,
+HumanizeMaxAngle = 25,
+HumanizeErrorRadius = 0.6,
+HumanizeMissSeverity = 1.8,
 BackboardEnabled = false,
 NoJumpEnabled = false,
 FormulaVerticalBoost = 55,
@@ -11639,9 +11644,101 @@ Points.Error = (Points.Landing - Data.Rim.Position).Magnitude
 return Points
 end)
 
+State.Humanize = {
+Status = 'IDLE',
+LastAngle = 0,
+LastSpread = 0,
+Blocked = 0,
+Makes = 0,
+Misses = 0,
+Rng = Random.new(),
+Roll = nil,
+RollAt = 0,
+Tallied = true,
+}
+
+-- One deterministic roll per jump, so the aim point stays fixed for the whole
+-- shot instead of jittering every frame while the solver re-runs.
+-- Roll fresh randomness for a brand new shot attempt.
+function State.Humanize.NewShot()
+local R = State.Humanize.Rng
+if not R then R = Random.new(); State.Humanize.Rng = R end
+State.Humanize.Roll = {
+Angle = R:NextNumber(0, 360),
+Hit = R:NextNumber(),
+Spread = R:NextNumber(),
+Lift = R:NextNumber(),
+}
+State.Humanize.RollAt = os.clock()
+State.Humanize.Tallied = false
+return State.Humanize.Roll
+end
+
+-- Stable for the length of one shot, but never stale forever: any solve more
+-- than 0.45s after the last roll counts as a new attempt. This keeps non-jump
+-- releases (click to shoot, No Jump) from reusing a single verdict forever.
+function State.Humanize.GetShotRoll()
+local Roll = State.Humanize.Roll
+if not Roll or (os.clock() - (State.Humanize.RollAt or 0)) > 0.45 then
+return State.Humanize.NewShot()
+end
+return Roll
+end
+
+function State.Humanize.Apply(Target, Rim)
+if typeof(Target) ~= 'Vector3' then return Target end
+local Camera = workspace.CurrentCamera
+local Accuracy = math.clamp(tonumber(CONFIG.HumanizeAccuracy) or 92, 60, 100)
+local MaxAngle = math.clamp(tonumber(CONFIG.HumanizeMaxAngle) or 25, 1, 180)
+local Radius = math.max(0, tonumber(CONFIG.HumanizeErrorRadius) or 0.6)
+local Severity = math.clamp(tonumber(CONFIG.HumanizeMissSeverity) or 1.8, 1, 4)
+
+-- Legit cone: refuse to assist shots your camera is not actually looking at.
+if Camera and MaxAngle < 180 then
+local Origin = Camera.CFrame.Position
+local ToTarget = Target - Origin
+if ToTarget.Magnitude > 0.05 then
+local Dot = math.clamp(Camera.CFrame.LookVector:Dot(ToTarget.Unit), -1, 1)
+local Angle = math.deg(math.acos(Dot))
+State.Humanize.LastAngle = Angle
+if Angle > MaxAngle then
+State.Humanize.Blocked += 1
+State.Humanize.Status = string.format('NO ASSIST - %.0f deg OFF', Angle)
+return nil
+end
+end
+end
+
+if Radius <= 0 and Accuracy >= 100 then
+State.Humanize.Status = 'PURE (NO ERROR)'
+return Target
+end
+
+local Roll = State.Humanize.GetShotRoll()
+local Missing = (Roll.Hit * 100) >= Accuracy
+local Spread = Missing and (Radius * (Severity + Roll.Spread * 0.5))
+or (Radius * Roll.Spread * 0.45)
+local Theta = math.rad(Roll.Angle)
+State.Humanize.LastSpread = Spread
+if not State.Humanize.Tallied then
+State.Humanize.Tallied = true
+if Missing then State.Humanize.Misses += 1 else State.Humanize.Makes += 1 end
+end
+State.Humanize.Status = Missing and 'HUMAN MISS' or 'HUMAN MAKE'
+return Target + Vector3.new(
+math.cos(Theta) * Spread,
+(Roll.Lift - 0.5) * Spread * 0.5,
+math.sin(Theta) * Spread
+)
+end
+
 local BuildSilentAimTarget
 BuildSilentAimTarget = WYNF_JIT_MAX(function(Rim, Distance, Power, OriginOverride)
-return GetFormulaTarget(Rim, Power, OriginOverride), nil
+local Target = GetFormulaTarget(Rim, Power, OriginOverride)
+if Target and CONFIG.HumanizeEnabled then
+return State.Humanize.Apply(Target, Rim), nil
+end
+return Target, nil
 end)
 
 State.ClickShoot = {
@@ -12047,6 +12144,7 @@ if Humanoid.Jump then
 if State.NoJump.Active then return end
 SilentAim.ReleasePredictionDeadline = 0
 State.ShotModeRandomSeed = (tonumber(State.ShotModeRandomSeed) or 0) + 1
+if CONFIG.HumanizeEnabled then State.Humanize.NewShot() end
 pcall(StartLegitAimTween)
 if State.PassInProgress then
 SilentAim.ClearActorAim()
@@ -20502,6 +20600,9 @@ ActiveHudVisible = false,
 ActiveHudPosition = { X = 14, Y = 220 },
 MobileSupportEnabled = true,
 MobileQuickVisible = true,
+MobileQuickPinnedOnly = false,
+MobileButtonSize = 54,
+MobileButtonFade = 0.35,
 MobileLauncherPosition = { X = -18, Y = 0 },
 MobileQuickPosition = { X = 12, Y = 94 },
 MobileButtonPositions = {},
@@ -20937,6 +21038,9 @@ InterfaceConfig.ActiveHudPosition.X = tonumber(InterfaceConfig.ActiveHudPosition
 InterfaceConfig.ActiveHudPosition.Y = tonumber(InterfaceConfig.ActiveHudPosition.Y) or 220
 InterfaceConfig.MobileSupportEnabled = InterfaceConfig.MobileSupportEnabled ~= false
 InterfaceConfig.MobileQuickVisible = InterfaceConfig.MobileQuickVisible ~= false
+InterfaceConfig.MobileQuickPinnedOnly = InterfaceConfig.MobileQuickPinnedOnly == true
+InterfaceConfig.MobileButtonSize = math.clamp(tonumber(InterfaceConfig.MobileButtonSize) or 54, 34, 82)
+InterfaceConfig.MobileButtonFade = math.clamp(tonumber(InterfaceConfig.MobileButtonFade) or 0.35, 0, 0.9)
 InterfaceConfig.MobileLauncherPosition = type(InterfaceConfig.MobileLauncherPosition) == 'table'
 and InterfaceConfig.MobileLauncherPosition or DeepCopy(InterfaceDefaults.MobileLauncherPosition)
 InterfaceConfig.MobileLauncherPosition.X = tonumber(InterfaceConfig.MobileLauncherPosition.X) or -18
@@ -21685,6 +21789,14 @@ GroupTransparency = 0,
 Visible = true,
 ZIndex = 4,
 }, Content)
+Pages.Humanizer = New('CanvasGroup', {
+Size = UDim2.fromScale(1, 1),
+BackgroundTransparency = 1,
+BorderSizePixel = 0,
+GroupTransparency = 1,
+Visible = false,
+ZIndex = 4,
+}, Content)
 Pages.Pass = New('CanvasGroup', {
 Size = UDim2.fromScale(1, 1),
 BackgroundTransparency = 1,
@@ -21818,6 +21930,7 @@ BorderSizePixel = 0, GroupTransparency = 1, Visible = false, ZIndex = 4,
 HubUI.TabButtons = {}
 local TabDefinitions = {
 { Name = 'Aim', Category = 'GAMEPLAY', Search = 'aim silent aim shooting shot release target goal range trajectory' },
+{ Name = 'Humanizer', Category = 'GAMEPLAY', Search = 'humanizer humanize legit accuracy miss error spread cone angle camera limit shot variants backboard bank no jump match arc click to shoot manual release timing' },
 { Name = 'Pass', Category = 'GAMEPLAY', Search = 'pass passing teammate self pass jump pass' },
 { Name = 'Dunk', Category = 'GAMEPLAY', Search = 'dunk auto dunk animation lane' },
 { Name = 'Offense', Category = 'AUTOMATION', Search = 'offense auto offense backdown drive cutoff pull up shoot chance steal threat lane room strafe custom tuning' },
@@ -21843,6 +21956,7 @@ local TabDefinitions = {
 local TabOrder = {}
 local TabDescriptions = {
 Aim = 'AIM  /  SHOOTING', Pass = 'PASS  /  PLAYMAKING', Dunk = 'DUNK  /  FINISHING',
+Humanizer = 'HUMANIZER  /  LEGIT LIMITS + SHOT VARIANTS',
 Offense = 'OFFENSE  /  AUTO BALL HANDLING',
 GetOpen = 'GET OPEN  /  OFF-BALL',
 Guard = 'GUARD  /  DEFENSE', Body = 'BODY  /  BALL PROTECTION',
@@ -22461,6 +22575,8 @@ local FullWidth = 548
 
 local LeftGroup = CreateGroup('Silent Aim', Pages.Aim, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local MiddleGroup = CreateGroup('Target & Visuals', Pages.Aim, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.HumanizerGroup = CreateGroup('Legit Humanizer', Pages.Humanizer, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.ShotVariantGroup = CreateGroup('Shot Variants & Release', Pages.Humanizer, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local PassGroup = CreateGroup('Passing', Pages.Pass, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
 local DunkGroup = CreateGroup('Auto Dunk', Pages.Dunk, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
 local GetOpenGroup = CreateGroup('Auto Get Open', Pages.GetOpen, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
@@ -25815,9 +25931,9 @@ end,
 true
 )
 
-CreateSectionHeader(LeftGroup, 294, 'Shot variants')
+CreateSectionHeader(HubUI.ShotVariantGroup, 11, 'Shot variants')
 HubUI.Controls.Backboard = CreateCheckbox(
-LeftGroup, 314, 'Enable backboard (bank) shots', CONFIG.BackboardEnabled == true,
+HubUI.ShotVariantGroup, 31, 'Enable backboard (bank) shots', CONFIG.BackboardEnabled == true,
 function(Value)
 CONFIG.BackboardEnabled = Value == true
 SilentAim.ArcSolveCache = {}
@@ -25829,16 +25945,16 @@ or 'Bank shots disabled: aiming directly at the rim.')
 end
 )
 HubUI.Controls.NoJumpMode = CreateCheckbox(
-LeftGroup, 344, 'Enable No Jump Shot', CONFIG.NoJumpEnabled,
+HubUI.ShotVariantGroup, 61, 'Enable No Jump Shot', CONFIG.NoJumpEnabled,
 function(Value)
 CONFIG.NoJumpEnabled = Value == true
 State.NoJump.BindKey(CONFIG.NoJumpShotKey)
 end
 )
 
-CreateSectionHeader(LeftGroup, 458, 'Manual release')
+CreateSectionHeader(HubUI.ShotVariantGroup, 175, 'Manual release')
 HubUI.Controls.ClickToShoot = CreateCheckbox(
-LeftGroup, 478, 'Click to shoot (manual timing)', CONFIG.ClickToShoot == true,
+HubUI.ShotVariantGroup, 195, 'Click to shoot (manual timing)', CONFIG.ClickToShoot == true,
 function(Value)
 CONFIG.ClickToShoot = Value == true
 State.ClickShoot.Armed = false
@@ -25850,9 +25966,9 @@ or 'Click to shoot off: shots release automatically at the peak again.')
 end
 )
 
-CreateSectionHeader(LeftGroup, 376, 'Match arc')
+CreateSectionHeader(HubUI.ShotVariantGroup, 93, 'Match arc')
 HubUI.Controls.MatchArc = CreateCheckbox(
-LeftGroup, 396, 'Match custom arc angle', CONFIG.MatchArcEnabled == true,
+HubUI.ShotVariantGroup, 113, 'Match custom arc angle', CONFIG.MatchArcEnabled == true,
 function(Value)
 CONFIG.MatchArcEnabled = Value == true
 SilentAim.ArcSolveCache = {}
@@ -25865,13 +25981,133 @@ or 'Match Arc off: arc follows the High/Low mode at the current power.')
 end
 )
 HubUI.Controls.MatchArcAngle = CreateNumberInput(
-LeftGroup, 426, 'Desired arc angle (deg)', CONFIG.MatchArcAngle, 5, 88, 0,
+HubUI.ShotVariantGroup, 143, 'Desired arc angle (deg)', CONFIG.MatchArcAngle, 5, 88, 0,
 function(Value)
 CONFIG.MatchArcAngle = Value
 SilentAim.ArcSolveCache = {}
 SilentAim.ArcSolveCacheCount = 0
 if CONFIG.MatchArcEnabled == true then SilentAim.ClearActorAim() end
 end
+)
+
+CreateParagraph(
+HubUI.ShotVariantGroup,
+UDim2.fromOffset(8, 233),
+UDim2.new(1, -16, 0, 86),
+'Bank shots and No Jump are shot variants.\n'
+.. 'Match Arc forces a chosen arc angle.\n'
+.. 'Click to shoot disables the auto peak\n'
+.. 'release so you time it yourself.'
+)
+
+CreateSectionHeader(HubUI.HumanizerGroup, 11, 'Humanization')
+HubUI.Controls.HumanizeEnabled = CreateCheckbox(
+HubUI.HumanizerGroup, 31, 'Enable humanizer', CONFIG.HumanizeEnabled == true,
+function(Value)
+CONFIG.HumanizeEnabled = Value == true
+State.Humanize.Status = 'IDLE'
+State.Humanize.NewShot()
+SilentAim.ArcSolveCache = {}
+SilentAim.ArcSolveCacheCount = 0
+pcall(SilentAim.ClearActorAim)
+Notify('GOLDEN EAGLE HUB', CONFIG.HumanizeEnabled
+and 'Humanizer on: shots now miss on purpose and only assist inside the cone.'
+or 'Humanizer off: full-accuracy silent aim at any angle.')
+end
+)
+HubUI.Controls.HumanizeAccuracy = CreateNumberInput(
+HubUI.HumanizerGroup, 61, 'Make rate % (100 = never miss)', CONFIG.HumanizeAccuracy, 60, 100, 0,
+function(Value)
+CONFIG.HumanizeAccuracy = Value
+State.Humanize.NewShot()
+end
+)
+HubUI.Controls.HumanizeMaxAngle = CreateNumberInput(
+HubUI.HumanizerGroup, 91, 'Max redirect (deg)', CONFIG.HumanizeMaxAngle, 1, 90, 0,
+function(Value) CONFIG.HumanizeMaxAngle = Value end
+)
+HubUI.Controls.HumanizeErrorRadius = CreateNumberInput(
+HubUI.HumanizerGroup, 121, 'Error spread (studs)', CONFIG.HumanizeErrorRadius, 0, 3, 1,
+function(Value)
+CONFIG.HumanizeErrorRadius = Value
+State.Humanize.NewShot()
+end
+)
+HubUI.Controls.HumanizeMissSeverity = CreateNumberInput(
+HubUI.HumanizerGroup, 151, 'Miss severity', CONFIG.HumanizeMissSeverity, 1, 4, 1,
+function(Value)
+CONFIG.HumanizeMissSeverity = Value
+State.Humanize.NewShot()
+end
+)
+
+CreateSectionHeader(HubUI.HumanizerGroup, 183, 'Live humanizer')
+HubUI.HumanizeStatusText = CreateParagraph(
+HubUI.HumanizerGroup,
+UDim2.fromOffset(8, 203),
+UDim2.new(1, -16, 0, 92),
+'STATUS   OFF\nCAM ANGLE --\nSPREAD   --\nMAKES    0 | MISSES 0\nBLOCKED  0'
+)
+
+CreateSectionHeader(InterfaceLayoutGroup, 340, 'Mobile action buttons')
+HubUI.Controls.MobileQuickVisible = CreateCheckbox(
+InterfaceLayoutGroup, 360, 'Show on-screen buttons', InterfaceConfig.MobileQuickVisible ~= false,
+function(Value)
+InterfaceConfig.MobileQuickVisible = Value == true
+SaveInterfaceConfig()
+if HubUI.KeybindManager and HubUI.KeybindManager.RefreshMobileQuick then
+HubUI.KeybindManager:RefreshMobileQuick(true)
+end
+Notify('GOLDEN EAGLE HUB', Value
+and 'On-screen buttons shown.'
+or 'On-screen buttons hidden. Use the GE launcher to open the menu.')
+end
+)
+HubUI.Controls.MobileQuickPinnedOnly = CreateCheckbox(
+InterfaceLayoutGroup, 390, 'Only pinned buttons', InterfaceConfig.MobileQuickPinnedOnly == true,
+function(Value)
+InterfaceConfig.MobileQuickPinnedOnly = Value == true
+SaveInterfaceConfig()
+if HubUI.KeybindManager and HubUI.KeybindManager.RefreshMobileQuick then
+HubUI.KeybindManager:RefreshMobileQuick(true)
+end
+Notify('GOLDEN EAGLE HUB', Value
+and 'Only keybinds pinned with RUN on the Keybinds tab get a button.'
+or 'Every bound keybind gets a button.')
+end
+)
+HubUI.Controls.MobileButtonSize = CreateNumberInput(
+InterfaceLayoutGroup, 420, 'Button size', InterfaceConfig.MobileButtonSize, 34, 82, 0,
+function(Value)
+InterfaceConfig.MobileButtonSize = Value
+SaveInterfaceConfig()
+if HubUI.KeybindManager and HubUI.KeybindManager.RefreshMobileQuick then
+HubUI.KeybindManager:RefreshMobileQuick(true)
+end
+end
+)
+HubUI.Controls.MobileButtonFade = CreateNumberInput(
+InterfaceLayoutGroup, 450, 'Button fade', InterfaceConfig.MobileButtonFade, 0, 0.9, 2,
+function(Value)
+InterfaceConfig.MobileButtonFade = Value
+SaveInterfaceConfig()
+if HubUI.KeybindManager and HubUI.KeybindManager.RefreshMobileQuick then
+HubUI.KeybindManager:RefreshMobileQuick(true)
+end
+end
+)
+
+CreateSectionHeader(HubUI.HumanizerGroup, 307, 'How it works')
+CreateParagraph(
+HubUI.HumanizerGroup,
+UDim2.fromOffset(8, 327),
+UDim2.new(1, -16, 0, 130),
+'Accuracy is the make rate the aim will\n'
+.. 'converge to. Missed shots are pushed\n'
+.. 'off the rim by spread x severity.\n\n'
+.. 'Max redirect refuses assistance when\n'
+.. 'the rim is outside that cone from your\n'
+.. 'camera, so off-screen snaps never fire.'
 )
 
 CreateSectionHeader(MiddleGroup, 9, 'Targeting')
@@ -28187,9 +28423,17 @@ table.clear(ActiveDrags)
 table.clear(ActiveHolds)
 
 local Assigned = {}
+if InterfaceConfig.MobileQuickVisible ~= false then
 for _, Entry in ipairs(self.Ordered) do
-if Entry.Key or Entry.Mode == 'Always' or Entry.MobileQuick then
+local Eligible
+if InterfaceConfig.MobileQuickPinnedOnly then
+Eligible = Entry.MobileQuick == true
+else
+Eligible = (Entry.Key ~= nil) or Entry.Mode == 'Always' or Entry.MobileQuick == true
+end
+if Eligible then
 table.insert(Assigned, Entry)
+end
 end
 end
 table.sort(Assigned, function(A, B)
@@ -28199,10 +28443,18 @@ end)
 
 for Index, Entry in ipairs(Assigned) do
 local Saved = InterfaceConfig.MobileButtonPositions[Entry.Id]
-local Column = (Index - 1) % 4
-local Row = math.floor((Index - 1) / 4)
-local DefaultX = 42 + Column * 70
-local DefaultY = 96 + Row * 70
+local ButtonSize = math.clamp(tonumber(InterfaceConfig.MobileButtonSize) or 54, 34, 82)
+local ButtonFade = math.clamp(tonumber(InterfaceConfig.MobileButtonFade) or 0.35, 0, 0.9)
+local Pitch = ButtonSize + 8
+local PerColumn = 4
+local ViewCamera = Workspace.CurrentCamera
+if ViewCamera then
+PerColumn = math.clamp(math.floor((ViewCamera.ViewportSize.Y - 150) / Pitch), 2, 7)
+end
+local Column = math.floor((Index - 1) / PerColumn)
+local Row = (Index - 1) % PerColumn
+local DefaultX = math.floor(ButtonSize * 0.5) + 12 + Column * Pitch
+local DefaultY = 100 + Row * Pitch
 local Button = New('TextButton', {
 Name = 'MobileBind_' .. tostring(Entry.Id),
 AnchorPoint = Vector2.new(0.5, 0.5),
@@ -28210,20 +28462,20 @@ Position = UDim2.fromOffset(
 type(Saved) == 'table' and tonumber(Saved.X) or DefaultX,
 type(Saved) == 'table' and tonumber(Saved.Y) or DefaultY
 ),
-Size = UDim2.fromOffset(60, 60),
+Size = UDim2.fromOffset(ButtonSize, ButtonSize),
 BackgroundColor3 = Theme.Panel,
-BackgroundTransparency = 0.06,
+BackgroundTransparency = ButtonFade,
 BorderSizePixel = 0,
 AutoButtonColor = false,
-Font = Enum.Font.Code,
+Font = Enum.Font.GothamMedium,
 Text = MobileBindName(Entry),
 TextColor3 = Theme.Text,
-TextSize = 8,
+TextSize = math.clamp(math.floor(ButtonSize * 0.17), 7, 12),
 TextWrapped = true,
 Active = true,
 ZIndex = 425,
 }, ScreenGui)
-New('UICorner', { CornerRadius = UDim.new(1, 0) }, Button)
+New('UICorner', { CornerRadius = UDim.new(0, math.floor(ButtonSize * 0.3)) }, Button)
 AccentStroke(Button, 1.35, 0.10)
 local Scale = New('UIScale', { Scale = 1 }, Button)
 MobileButtons[Entry.Id] = { Button = Button, Scale = Scale }
@@ -28878,6 +29130,10 @@ CONFIG.AutoBodyHandRevertDeadzone },
 { HubUI.Controls.AutoMixBallSafetyMargin, CONFIG.AutoMixBallSafetyMargin },
 { HubUI.Controls.AutoMixActionRisk, CONFIG.AutoMixActionRisk },
 { HubUI.Controls.AutoMixMinimumClearanceGain, CONFIG.AutoMixMinimumClearanceGain },
+{ HubUI.Controls.HumanizeAccuracy, CONFIG.HumanizeAccuracy },
+{ HubUI.Controls.HumanizeMaxAngle, CONFIG.HumanizeMaxAngle },
+{ HubUI.Controls.HumanizeErrorRadius, CONFIG.HumanizeErrorRadius },
+{ HubUI.Controls.HumanizeMissSeverity, CONFIG.HumanizeMissSeverity },
 }
 for _, Data in ipairs(NumberValues) do
 if Data[1] and Data[1].Value ~= Data[2] then Data[1]:Set(Data[2], false) end
@@ -29123,6 +29379,11 @@ AutoPowerPreference = 'Which valid power to prefer. Lowest = flattest arc, Highe
 RequireBall = 'Only arms Silent Aim while you actually hold the basketball, preventing wasted redirects. Recommended: ON.',
 PerfectRelease = 'Times your release for a Perfect Shot rating. Recommended: ON.',
 PerfectReleaseAutoCalibrate = 'Learns from Perfect Shot feedback and nudges the release window automatically. Recommended: ON for your first few games.',
+HumanizeEnabled = 'Caps the aimbot so it behaves like a very good human: deliberate misses at your chosen accuracy and no assistance outside the camera cone. Recommended: ON in public lobbies.',
+HumanizeAccuracy = 'The make rate the humanizer converges to. 100 = never miss on purpose. Recommended: 85-93.',
+HumanizeMaxAngle = 'Maximum degrees the aim may be redirected away from where your camera actually points. Shots outside this cone get no assistance at all. Recommended: 20-30.',
+HumanizeErrorRadius = 'How many studs of natural scatter to add around the solved aim point. Recommended: 0.5-1.0.',
+HumanizeMissSeverity = 'How far intentional misses are pushed off target, as a multiple of the error spread. Higher looks more like a genuine brick. Recommended: 1.5-2.0.',
 ClickToShoot = 'Turns off the automatic peak release. Jump, then left click to shoot yourself while Silent Aim still solves the arc. Perfect Release is bypassed because you own the timing.',
 SilentMode = 'High = normal rainbow arc, Low = flat dart at the rim. Low looks suspicious on full jumpshots. Default: High.',
 Desync = 'Measures the gap between your visual position and the server position. Purely informational overlay.',
@@ -30617,6 +30878,17 @@ State.AutoMix.ClosingSpeed or 0,
 State.AutoMix.MovementStatus or 'IDLE',
 State.AutoMix.BlendPercent or 0,
 State.AutoMix.SessionSummary or '--'
+)
+end
+if HubUI.HumanizeStatusText then
+HubUI.HumanizeStatusText.Text = string.format(
+'STATUS   %s\nCAM ANGLE %s\nSPREAD   %.2f\nMAKES    %d | MISSES %d\nBLOCKED  %d',
+CONFIG.HumanizeEnabled and (State.Humanize.Status or 'IDLE') or 'OFF',
+State.Humanize.LastAngle > 0 and string.format('%.0f deg', State.Humanize.LastAngle) or '--',
+State.Humanize.LastSpread or 0,
+State.Humanize.Makes or 0,
+State.Humanize.Misses or 0,
+State.Humanize.Blocked or 0
 )
 end
 if HubUI.AntiReachStatusText then
