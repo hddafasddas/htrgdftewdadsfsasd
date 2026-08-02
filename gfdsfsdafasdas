@@ -488,6 +488,7 @@ LocalGoals = 0,
 LocalAttempts = 0,
 LocalStreak = 0,
 LocalHighestStreak = 0,
+LocalOverall = 100,
 LocalDonation = 0,
 LocalClanSpoof = false,
 LocalClanName = '',
@@ -854,6 +855,7 @@ LocalGoals = CONFIG.LocalGoals,
 LocalAttempts = CONFIG.LocalAttempts,
 LocalStreak = CONFIG.LocalStreak,
 LocalHighestStreak = CONFIG.LocalHighestStreak,
+LocalOverall = CONFIG.LocalOverall,
 LocalDonation = CONFIG.LocalDonation,
 LocalClanSpoofEnabled = CONFIG.LocalClanSpoof,
 LocalClanName = CONFIG.LocalClanName,
@@ -3373,14 +3375,6 @@ return Held
 end
 end
 
--- Never keep spoofing a loose handle after another player has possession.
-for _, Player in ipairs(Players:GetPlayers()) do
-if Player ~= LP and Player.Character and Player.Character:FindFirstChild('Basketball') then
-State.Cosmetics.Runtime.LastBall = nil
-return nil
-end
-end
-
 -- Keep the released local shot skinned briefly while it is in flight. This
 -- path is only armed by actually holding a ball first, so joining near a court
 -- cannot accidentally claim somebody else's ball.
@@ -3388,14 +3382,30 @@ local LastHeldAt = State.Cosmetics.Runtime.LastLocalBallSeenAt or 0
 if Root and Now - LastHeldAt <= 4 then
 local Cached = State.Cosmetics.Runtime.LastBall
 if Cached and Cached.Parent and not Cached:IsDescendantOf(Character) then
-return Cached
+local OwnedByOther = false
+for _, Player in ipairs(Players:GetPlayers()) do
+if Player ~= LP and Player.Character and Cached:IsDescendantOf(Player.Character) then
+OwnedByOther = true
+break
+end
+end
+if not OwnedByOther then return Cached end
 end
 local Closest, ClosestDistance
 for _, Ball in ipairs(CollectionService:GetTagged('BallHandle')) do
 if Ball:IsA('BasePart') and Ball.Parent then
+local OwnedByOther = false
+for _, Player in ipairs(Players:GetPlayers()) do
+if Player ~= LP and Player.Character and Ball:IsDescendantOf(Player.Character) then
+OwnedByOther = true
+break
+end
+end
+if not OwnedByOther then
 local Distance = (Ball.Position - Root.Position).Magnitude
 if Distance <= 35 and (not ClosestDistance or Distance < ClosestDistance) then
 Closest, ClosestDistance = Ball, Distance
+end
 end
 end
 end
@@ -4557,7 +4567,12 @@ State.BallStudio.StripGameSkin(Ball)
 State.BallStudio.TakenOver[Ball] = true
 State.BallStudio.HideStock(Ball, true)
 local Proxy = State.BallStudio.EnsureProxy(Ball)
-if not Proxy then return end
+if not Proxy then
+-- Never leave the real ball hidden if a replacement visual could not be made.
+State.BallStudio.HideStock(Ball, false)
+State.BallStudio.RestoreGameSkin(Ball)
+return
+end
 local Stamp = tostring(Catalog) .. '|' .. tostring(Model or '') .. '|' .. tostring(Skin or '') .. '|'
 .. tostring(Texture or '') .. '|' .. tostring(Scale) .. '|'
 .. tostring(Tint and Tint:ToHex() or 'none')
@@ -5560,6 +5575,34 @@ State.LocalSpoofs.SetStatsUI(Amount, 'TextColor3', Color3.new(1, 1, 1))
 end
 end
 
+function State.LocalSpoofs.ApplyOverallVisual(Main, Value)
+if not (Main and Main.Parent) then return end
+local Overall = Main:FindFirstChild('Overall', true)
+if not Overall then return end
+local O = math.clamp(math.floor(tonumber(Value) or 0), 0, 100)
+local Angle = O * 3.6
+local LeftClip = Overall:FindFirstChild('LeftClip')
+local RightClip = Overall:FindFirstChild('RightClip')
+local Left = LeftClip and LeftClip:FindFirstChild('Left')
+local Right = RightClip and RightClip:FindFirstChild('Right')
+local LeftGradient = Left and Left:FindFirstChildOfClass('UIGradient')
+local RightGradient = Right and Right:FindFirstChildOfClass('UIGradient')
+if Angle < 180 then
+if RightGradient then State.LocalSpoofs.SetStatsUI(RightGradient, 'Rotation', Angle) end
+if LeftGradient then State.LocalSpoofs.SetStatsUI(LeftGradient, 'Rotation', 0) end
+else
+if RightGradient then State.LocalSpoofs.SetStatsUI(RightGradient, 'Rotation', 180) end
+if LeftGradient then State.LocalSpoofs.SetStatsUI(LeftGradient, 'Rotation', Angle - 180) end
+end
+local Color = Color3.fromHSV(O / 360, 1, 0.8)
+if Left and Left:IsA('ImageLabel') then State.LocalSpoofs.SetStatsUI(Left, 'ImageColor3', Color) end
+if Right and Right:IsA('ImageLabel') then State.LocalSpoofs.SetStatsUI(Right, 'ImageColor3', Color) end
+local Frame = Overall:FindFirstChild('Frame')
+local Label = Frame and Frame:FindFirstChild('TextLabel')
+if Label then State.LocalSpoofs.SetStatsUI(Label, 'Text', tostring(O)) end
+State.LocalSpoofs.SetStatsUI(Overall, 'Visible', true)
+end
+
 function State.LocalSpoofs.RestoreStatsUI()
 for Object, Properties in pairs(State.LocalSpoofs.StatsOriginals) do
 if Object and Object.Parent then
@@ -6113,6 +6156,7 @@ if SideStreak then State.LocalSpoofs.ApplyStreakVisual(SideStreak, S) end
 end
 for Main in pairs(State.LocalSpoofs.StatsIntroCards) do
 if Main and Main.Parent then
+State.LocalSpoofs.ApplyOverallVisual(Main, State.LocalOverall)
 local Record = Main:FindFirstChild('RecordLabel')
 local Streak = Main:FindFirstChild('Streak')
 local Amount = Streak and Streak:FindFirstChild('AmountLabel')
@@ -6328,6 +6372,7 @@ if not (Main and Main:FindFirstChild('RankImage') and Main:FindFirstChild('Strea
 if not State.LocalSpoofs.IsLocalBanner(Main, Object) then return end
 State.LocalSpoofs.StatsIntroCards[Main] = true
 State.LocalSpoofs.SetStatsUI(Object, 'Text', Object.Text)
+State.LocalSpoofs.ApplyOverallVisual(Main, State.LocalOverall)
 local Streak = Main:FindFirstChild('Streak')
 local Amount = Streak and Streak:FindFirstChild('AmountLabel')
 if Amount then State.LocalSpoofs.SetStatsUI(Amount, 'Text', Amount.Text) end
@@ -11862,12 +11907,11 @@ State.Humanize.Tallied = false
 return State.Humanize.Roll
 end
 
--- Stable for the length of one shot, but never stale forever: any solve more
--- than 0.45s after the last roll counts as a new attempt. This keeps non-jump
--- releases (click to shoot, No Jump) from reusing a single verdict forever.
+-- Stable for the full jump/release. The old 0.45-second timeout rerolled while
+-- airborne, so the final release often lost the intended make/miss result.
 function State.Humanize.GetShotRoll()
 local Roll = State.Humanize.Roll
-if not Roll or (os.clock() - (State.Humanize.RollAt or 0)) > 0.45 then
+if not Roll or (os.clock() - (State.Humanize.RollAt or 0)) > 3 then
 return State.Humanize.NewShot()
 end
 return Roll
@@ -11904,8 +11948,19 @@ end
 
 local Roll = State.Humanize.GetShotRoll()
 local Missing = (Roll.Hit * 100) >= Accuracy
-local Spread = Missing and (Radius * (Severity + Roll.Spread * 0.5))
-or (Radius * Roll.Spread * 0.45)
+local Spread
+if Missing then
+-- The previous default miss spread was only about one stud, which still went
+-- through the hoop and made the humanizer appear broken. Push intentional
+-- misses beyond the rim while retaining randomized direction and severity.
+local RimRadius = 2.25
+if Rim and Rim:IsA('BasePart') then
+RimRadius = math.clamp(math.max(Rim.Size.X, Rim.Size.Z) * 0.5, 2, 4)
+end
+Spread = RimRadius + 0.9 + Radius * (Severity + Roll.Spread * 0.75)
+else
+Spread = Radius * Roll.Spread * 0.45
+end
 local Theta = math.rad(Roll.Angle)
 State.Humanize.LastSpread = Spread
 if not State.Humanize.Tallied then
@@ -11976,6 +12031,19 @@ VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
 VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
 end)
 
+-- Silent release swaps the held tool for a loose BallHandle in the same frame.
+-- Refresh after that swap so Ball Studio moves the visual instead of leaving
+-- the old handle hidden with no proxy on the shot.
+if CONFIG.BallStudioEnabled or State.LocalCosmeticSpoofEnabled then
+for _, Delay in ipairs({ 0.03, 0.12 }) do
+task.delay(Delay, function()
+if not State.Active then return end
+if State.LocalCosmeticSpoofEnabled then pcall(State.Cosmetics.ApplyLocalCosmetics, true) end
+if CONFIG.BallStudioEnabled then pcall(State.BallStudio.Refresh) end
+end)
+end
+end
+
 if SavedCameraCFrame then
 pcall(function()
 Camera.CFrame = SavedCameraCFrame
@@ -11984,6 +12052,15 @@ end)
 end
 
 task.delay(0.25, SilentAim.ClearActorAim)
+if CONFIG.HumanizeEnabled then
+local UsedRoll = State.Humanize.Roll
+task.delay(0.35, function()
+if State.Humanize.Roll == UsedRoll then
+State.Humanize.Roll = nil
+State.Humanize.Tallied = true
+end
+end)
+end
 State.silentShootActive = false
 return ClickOk
 end
@@ -25168,6 +25245,7 @@ local Fields = {
 { 'LocalStreak', 'LocalStreak', 'Streak', 88, 302 }, { 'LocalHighestStreak', 'LocalHighestStreak', 'Best streak', 168, 302 },
 { 'LocalDonation', 'LocalDonation', 'Donated', 8, 325 },
 { 'LocalShields', 'LocalShields', 'Shields', 88, 325 }, { 'LocalShieldEXP', 'LocalShieldEXP', 'Shield XP', 168, 325 },
+{ 'LocalOverall', 'LocalOverall', 'Overall', 8, 348, 100 },
 }
 State.LocalSpoofs.StatBoxes = {}
 for _, Data in ipairs(Fields) do
@@ -25189,6 +25267,7 @@ State.LocalSpoofs.StatBoxes[Data[1]] = Box
 State.LocalSpoofs.StatBoxPrefixes[Data[1]] = Data[3]
 GiveSignal(Box.FocusLost:Connect(function()
 local Value = math.max(0, math.floor(tonumber(string.match(Box.Text, '%-?%d+')) or 0))
+if Data[6] then Value = math.min(Value, Data[6]) end
 State[Data[1]] = Value
 CONFIG[Data[2]] = Value
 Box.Text = Data[3] .. ': ' .. tostring(Value)
@@ -25196,15 +25275,15 @@ if State.LocalStatsSpoofEnabled then pcall(State.LocalSpoofs.ApplyProfile) end
 end))
 end
 local AddFake = New('TextButton', {
-Position=UDim2.fromOffset(8,348), Size=UDim2.fromOffset(119,16), BackgroundColor3=Theme.Surface,
+Position=UDim2.fromOffset(88,348), Size=UDim2.fromOffset(77,16), BackgroundColor3=Theme.Surface,
 BorderSizePixel=0, AutoButtonColor=false, Font=Enum.Font.Code, Text='Custom fake match',
-TextColor3=Theme.Text, TextSize=9, ZIndex=6,
+TextColor3=Theme.Text, TextSize=7, ZIndex=6,
 }, CosmeticSpoofsGroup)
 AccentStroke(AddFake,1,0.2)
 local ClearFake = New('TextButton', {
-Position=UDim2.fromOffset(130,348), Size=UDim2.fromOffset(119,16), BackgroundColor3=Theme.Surface,
+Position=UDim2.fromOffset(168,348), Size=UDim2.fromOffset(81,16), BackgroundColor3=Theme.Surface,
 BorderSizePixel=0, AutoButtonColor=false, Font=Enum.Font.Code, Text='Leaderboard style',
-TextColor3=Theme.Text, TextSize=9, ZIndex=6,
+TextColor3=Theme.Text, TextSize=7, ZIndex=6,
 }, CosmeticSpoofsGroup)
 AccentStroke(ClearFake,1,0.2)
 CreateSectionHeader(CosmeticSpoofsGroup, 372, 'Clan & achievements')
@@ -27246,6 +27325,7 @@ LocalGoals = State.LocalGoals,
 LocalAttempts = State.LocalAttempts,
 LocalStreak = State.LocalStreak,
 LocalHighestStreak = State.LocalHighestStreak,
+LocalOverall = State.LocalOverall,
 LocalDonation = State.LocalDonation,
 LocalClanName = State.LocalClanName,
 LocalClanTagText = State.LocalClanTagText,
@@ -27333,9 +27413,10 @@ CONFIG.LocalELO = State.LocalELO
 ELOBox.Text = tostring(State.LocalELO)
 if State.LocalELOSpoofEnabled then State.LocalSpoofs.SetELO(true, State.LocalELO, false) end
 end
-for _, Key in ipairs({ 'LocalWins', 'LocalLosses', 'LocalShields', 'LocalShieldEXP', 'LocalGoals', 'LocalAttempts', 'LocalStreak', 'LocalHighestStreak', 'LocalDonation' }) do
+for _, Key in ipairs({ 'LocalWins', 'LocalLosses', 'LocalShields', 'LocalShieldEXP', 'LocalGoals', 'LocalAttempts', 'LocalStreak', 'LocalHighestStreak', 'LocalOverall', 'LocalDonation' }) do
 if Data[Key] ~= nil then
 local Value = math.max(0, math.floor(tonumber(Data[Key]) or 0))
+if Key == 'LocalOverall' then Value = math.min(Value, 100) end
 State[Key] = Value
 CONFIG[Key] = Value
 local Box = State.LocalSpoofs.StatBoxes and State.LocalSpoofs.StatBoxes[Key]
