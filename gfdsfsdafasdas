@@ -5532,15 +5532,15 @@ CONFIG.LocalRepImageSpoof, CONFIG.LocalRepImage = Enabled, State.LocalRepImage
 pcall(function()
 State.LocalSpoofs.Rankings = State.LocalSpoofs.Rankings or require(ReplicatedStorage.Util.Rankings)
 State.LocalSpoofs.OriginalRankImage = State.LocalSpoofs.OriginalRankImage or State.LocalSpoofs.Rankings.getRankImageFromELO
-if Enabled then
-State.LocalSpoofs.RankImageHook = State.LocalSpoofs.RankImageHook or function()
-return State.LocalSpoofs.OriginalRankImage(State.LocalSpoofs.RankImageELO[State.LocalRepImage] or 0)
-end
-State.LocalSpoofs.Rankings.getRankImageFromELO = State.LocalSpoofs.RankImageHook
-elseif State.LocalSpoofs.Rankings.getRankImageFromELO == State.LocalSpoofs.RankImageHook then
+-- Never replace the shared Rankings function: every player's UI calls this
+-- same module, which made the selected REP image appear on everyone.
+if State.LocalSpoofs.RankImageHook
+and State.LocalSpoofs.Rankings.getRankImageFromELO == State.LocalSpoofs.RankImageHook then
 State.LocalSpoofs.Rankings.getRankImageFromELO = State.LocalSpoofs.OriginalRankImage
 end
-State.LocalSpoofs.RefreshRank(); State.LocalSpoofs.ApplyProfile()
+State.LocalSpoofs.RankImageHook = nil
+State.LocalSpoofs.ApplyProfile()
+State.LocalSpoofs.ApplyNativeNameTags()
 end)
 end
 
@@ -6048,7 +6048,9 @@ end
 local W = math.max(0, math.floor(tonumber(State.LocalWins) or 0))
 local L = math.max(0, math.floor(tonumber(State.LocalLosses) or 0))
 local S = math.max(0, math.floor(tonumber(State.LocalStreak) or 0))
-local E = State.LocalELOSpoofEnabled and State.LocalELO or (LP:GetAttribute('ELO') or 0)
+local E = State.LocalELOSpoofEnabled and State.LocalELO
+or (State.LocalRepImageSpoofEnabled and (State.LocalSpoofs.RankImageELO[State.LocalRepImage] or 0))
+or (LP:GetAttribute('ELO') or 0)
 State.LocalSpoofs.Rankings = State.LocalSpoofs.Rankings or require(ReplicatedStorage.Util.Rankings)
 for Main, Fields in pairs(State.LocalSpoofs.StatsNativeNameTags) do
 if Main and Main.Parent then
@@ -6059,7 +6061,10 @@ State.LocalSpoofs.ApplyStreakVisual(Fields.Streak, S)
 end
 if (State.LocalELOSpoofEnabled or State.LocalRepImageSpoofEnabled)
 and Fields.RankImage and Fields.RankImage.Parent and Fields.RankImage:IsA('ImageLabel') then
-State.LocalSpoofs.SetStatsUI(Fields.RankImage, 'Image', State.LocalSpoofs.Rankings.getRankImageFromELO(E) or '')
+local RepImage = State.LocalSpoofs.OriginalRankImage
+and State.LocalSpoofs.OriginalRankImage(E)
+or State.LocalSpoofs.Rankings.getRankImageFromELO(E)
+State.LocalSpoofs.SetStatsUI(Fields.RankImage, 'Image', RepImage or '')
 State.LocalSpoofs.SetStatsUI(Fields.RankImage, 'Visible', true)
 State.LocalSpoofs.SetStatsUI(Fields.RankImage, 'ImageTransparency', 0)
 local Holder = Fields.RankImage.Parent
@@ -6166,7 +6171,9 @@ State.LocalSpoofs.Rankings = State.LocalSpoofs.Rankings or require(ReplicatedSto
 if Streak and Streak:IsA('ImageLabel') then
 State.LocalSpoofs.ApplyStreakVisual(Streak, S)
 end
-local E = State.LocalELOSpoofEnabled and State.LocalELO or (LP:GetAttribute('ELO') or 0)
+local E = State.LocalELOSpoofEnabled and State.LocalELO
+or (State.LocalRepImageSpoofEnabled and (State.LocalSpoofs.RankImageELO[State.LocalRepImage] or 0))
+or (LP:GetAttribute('ELO') or 0)
 local RankImage = Main:FindFirstChild('RankImage')
 if RankImage and RankImage:IsA('ImageLabel') then
 local Image = State.LocalSpoofs.OriginalRankImage and State.LocalSpoofs.OriginalRankImage(E)
@@ -6567,9 +6574,12 @@ local U = Object:FindFirstChild('UserName')
 local ResetButton = Object:FindFirstChild('ResetButton')
 local IsStatsProfile = U and U:IsA('TextLabel') and Object:FindFirstChild('StatsFrame')
 and Object.Parent and Object.Parent:FindFirstChild('PercentageFrame')
+local AliasText = tostring(State.LocalAlias or '')
+local IsAliasProfile = State.LocalAliasEnabled
+and (U.Text == AliasText or U.Text == ('@' .. AliasText))
 local IsLocalProfile = IsStatsProfile and ((ResetButton and ResetButton.Visible)
-or U.Text == ('@'..LP.Name) or State.LocalAliasEnabled)
-if IsStatsProfile and (IsLocalProfile or Object.Parent.Visible) then
+or U.Text == ('@'..LP.Name) or U.Text == LP.Name or IsAliasProfile)
+if IsLocalProfile then
 State.LocalSpoofs.StatsProfileFrame = Object
 local Icon = Object:FindFirstChild('RankIcon')
 if Icon and RankSpoofActive then
@@ -11954,24 +11964,30 @@ local Missing = (Roll.Hit * 100) >= Accuracy
 State.Humanize.CurrentMissing = Missing
 local Spread
 if Missing then
--- The previous default miss spread was only about one stud, which still went
--- through the hoop and made the humanizer appear broken. Push intentional
--- misses beyond the rim while retaining randomized direction and severity.
-local RimRadius = 2.25
-if Rim and Rim:IsA('BasePart') then
-RimRadius = math.clamp(math.max(Rim.Size.X, Rim.Size.Z) * 0.5, 2, 4)
-end
-Spread = RimRadius + 0.9 + Radius * (Severity + Roll.Spread * 0.75)
+-- Miss horizontally to the left or right of the goal. Keep the offset within
+-- the native shot cone so the click still fires, but outside the hoop opening.
+Spread = math.clamp(3.5 + Radius * Severity * 0.55 + Roll.Spread * 0.6, 3.5, 5)
 else
 Spread = Radius * Roll.Spread * 0.45
 end
-local Theta = math.rad(Roll.Angle)
 State.Humanize.LastSpread = Spread
 if not State.Humanize.Tallied then
 State.Humanize.Tallied = true
 if Missing then State.Humanize.Misses += 1 else State.Humanize.Makes += 1 end
 end
 State.Humanize.Status = Missing and 'HUMAN MISS' or 'HUMAN MAKE'
+if Missing then
+local Character = LP.Character
+local Root = Character and Character:FindFirstChild('HumanoidRootPart')
+local Origin = Root and Root.Position or (workspace.CurrentCamera and workspace.CurrentCamera.CFrame.Position)
+local Forward = Origin and Vector3.new(Target.X-Origin.X, 0, Target.Z-Origin.Z) or Vector3.new(0, 0, -1)
+if Forward.Magnitude < 0.001 then Forward = Vector3.new(0, 0, -1) else Forward = Forward.Unit end
+local Right = Vector3.new(-Forward.Z, 0, Forward.X)
+local Side = Roll.Angle < 180 and -1 or 1
+State.Humanize.Status = string.format('HUMAN MISS | %s %.1f STUDS', Side < 0 and 'LEFT' or 'RIGHT', Spread)
+return Target + Right * (Side * Spread)
+end
+local Theta = math.rad(Roll.Angle)
 return Target + Vector3.new(
 math.cos(Theta) * Spread,
 (Roll.Lift - 0.5) * Spread * 0.5,
@@ -12007,14 +12023,7 @@ local HRP = safe_find(Character, 'HumanoidRootPart')
 if not HRP then return false end
 local TargetWorld = typeof(SolvedTarget) == 'Vector3'
 and SolvedTarget or Rim.Position + Vector3.new(0, YOffset, 0)
-local HumanMiss = CONFIG.HumanizeEnabled and State.Humanize.CurrentMissing == true
 local ActivationTarget = TargetWorld
-if HumanMiss then
--- Aim at the valid solved shot for mouse-down so the native handler accepts
--- and starts the release. The miss offset is applied on mouse-up below.
-local Power = State.PowerBypass.GetEffectivePower()
-ActivationTarget = GetFormulaTarget(Rim, Power) or Rim.Position
-end
 local WasPreArmed = typeof(PreArmedTarget) == 'Vector3'
 and (PreArmedTarget - ActivationTarget).Magnitude < 0.001
 
@@ -12040,19 +12049,6 @@ end
 end
 
 VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
-if HumanMiss then
--- Hoopz validates the aim when the press begins but reads the release vector
--- on mouse-up. Switching here makes the shot fire normally and still miss.
-RunService.RenderStepped:Wait()
-SilentAim.FireActorAim(TargetWorld)
-if CONFIG.CameraIndependentFallback then
-local Head = safe_find(Character, 'Head')
-if Head then
-Camera.CFrame = CFrame.new(Head.Position, TargetWorld)
-Camera.Focus = CFrame.new(TargetWorld)
-end
-end
-end
 VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
 end)
 
