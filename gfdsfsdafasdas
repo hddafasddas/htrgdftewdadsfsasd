@@ -20744,6 +20744,7 @@ MobileButtonFade = 0.35,
 MobileLauncherPosition = { X = -18, Y = 0 },
 MobileQuickPosition = { X = 12, Y = 94 },
 MobileButtonPositions = {},
+MobileButtonHidden = {},
 Keybinds = {},
 HiddenTabs = {},
 TabOrder = {},
@@ -21189,6 +21190,8 @@ InterfaceConfig.MobileQuickPosition.X = tonumber(InterfaceConfig.MobileQuickPosi
 InterfaceConfig.MobileQuickPosition.Y = tonumber(InterfaceConfig.MobileQuickPosition.Y) or 94
 InterfaceConfig.MobileButtonPositions = type(InterfaceConfig.MobileButtonPositions) == 'table'
 and InterfaceConfig.MobileButtonPositions or {}
+InterfaceConfig.MobileButtonHidden = type(InterfaceConfig.MobileButtonHidden) == 'table'
+and InterfaceConfig.MobileButtonHidden or {}
 InterfaceConfig.Keybinds = type(InterfaceConfig.Keybinds) == 'table' and InterfaceConfig.Keybinds or {}
 for Role, DefaultHex in pairs(InterfaceDefaults.Theme) do
 InterfaceConfig.Theme[Role] = NormalizeHex(InterfaceConfig.Theme[Role], DefaultHex)
@@ -27649,9 +27652,21 @@ end
 function KeybindManager:SetMobileQuick(Entry, Value)
 if not Entry then return end
 Entry.MobileQuick = Value == true
+if Entry.MobileQuick then InterfaceConfig.MobileButtonHidden[Entry.Id] = nil end
 self:RefreshEntry(Entry)
 if self.RefreshMobileQuick then self:RefreshMobileQuick() end
 self:Store(Entry)
+end
+
+function KeybindManager:DeleteMobileQuick(Entry)
+if not Entry then return end
+InterfaceConfig.MobileButtonHidden[Entry.Id] = true
+InterfaceConfig.MobileButtonPositions[Entry.Id] = nil
+self:ScheduleSave()
+task.defer(function()
+if State.Active and self.RefreshMobileQuick then self:RefreshMobileQuick(true) end
+end)
+Notify('GOLDEN EAGLE HUB', Entry.Label .. ' button removed. Pin it again in Keybinds to restore it.')
 end
 
 local CaptureOverlay = New('CanvasGroup', {
@@ -28509,6 +28524,7 @@ end))
 local MobileButtons = {}
 local ActiveDrags = {}
 local ActiveHolds = {}
+local DeleteInputs = {}
 
 local function MobileBindName(Entry)
 local Slot = tostring(Entry.Id):match('^PassTarget(%d+)$')
@@ -28559,6 +28575,7 @@ end
 table.clear(MobileButtons)
 table.clear(ActiveDrags)
 table.clear(ActiveHolds)
+table.clear(DeleteInputs)
 
 local Assigned = {}
 if InterfaceConfig.MobileQuickVisible ~= false then
@@ -28569,6 +28586,7 @@ Eligible = Entry.MobileQuick == true
 else
 Eligible = (Entry.Key ~= nil) or Entry.Mode == 'Always' or Entry.MobileQuick == true
 end
+if InterfaceConfig.MobileButtonHidden[Entry.Id] == true then Eligible = false end
 if Eligible then
 table.insert(Assigned, Entry)
 end
@@ -28616,12 +28634,41 @@ ZIndex = 425,
 New('UICorner', { CornerRadius = UDim.new(0, math.floor(ButtonSize * 0.3)) }, Button)
 AccentStroke(Button, 1.35, 0.10)
 local Scale = New('UIScale', { Scale = 1 }, Button)
-MobileButtons[Entry.Id] = { Button = Button, Scale = Scale }
+local DeleteSize = math.clamp(math.floor(ButtonSize * 0.27), 14, 20)
+local DeleteButton = New('TextButton', {
+Name = 'Delete',
+AnchorPoint = Vector2.new(1, 0),
+Position = UDim2.new(1, -3, 0, 3),
+Size = UDim2.fromOffset(DeleteSize, DeleteSize),
+BackgroundColor3 = Theme.Bad,
+BackgroundTransparency = 0.08,
+BorderSizePixel = 0,
+AutoButtonColor = false,
+Font = Enum.Font.GothamBold,
+Text = '×',
+TextColor3 = Color3.new(1, 1, 1),
+TextSize = math.max(10, DeleteSize - 3),
+ZIndex = 427,
+}, Button)
+New('UICorner', { CornerRadius = UDim.new(1, 0) }, DeleteButton)
+DarkStroke(DeleteButton)
+MobileButtons[Entry.Id] = { Button = Button, Scale = Scale, DeleteButton = DeleteButton }
+
+GiveSignal(DeleteButton.InputBegan:Connect(function(Input)
+if Input.UserInputType ~= Enum.UserInputType.Touch
+and Input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+local DeleteKey = Input.UserInputType == Enum.UserInputType.MouseButton1 and 'Mouse' or Input
+DeleteInputs[DeleteKey] = true
+end))
+GiveSignal(DeleteButton.Activated:Connect(function()
+self:DeleteMobileQuick(Entry)
+end))
 
 GiveSignal(Button.InputBegan:Connect(function(Input)
 if Input.UserInputType ~= Enum.UserInputType.Touch
 and Input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
 local DragKey = Input.UserInputType == Enum.UserInputType.MouseButton1 and 'Mouse' or Input
+if DeleteInputs[DragKey] then return end
 ActiveDrags[DragKey] = {
 Entry = Entry,
 Button = Button,
@@ -28665,6 +28712,12 @@ end))
 
 GiveSignal(UserInputService.InputEnded:Connect(function(Input)
 local DragKey = Input.UserInputType == Enum.UserInputType.MouseButton1 and 'Mouse' or Input
+if DeleteInputs[DragKey] then
+DeleteInputs[DragKey] = nil
+ActiveDrags[DragKey] = nil
+ActiveHolds[DragKey] = nil
+return
+end
 local Drag = ActiveDrags[DragKey]
 if not Drag then return end
 ActiveDrags[DragKey] = nil
@@ -28739,6 +28792,8 @@ KeybindManager:SetOverlayVisible(InterfaceConfig.KeybindMenuVisible, false)
 
 GiveSignal(ResetKeybindsButton.MouseButton1Click:Connect(function()
 InterfaceConfig.Keybinds = {}
+InterfaceConfig.MobileButtonHidden = {}
+InterfaceConfig.MobileButtonPositions = {}
 for _, Entry in ipairs(KeybindManager.Ordered) do
 Entry.Key = nil
 Entry.Mode = DefaultModeFor(Entry.Kind)
