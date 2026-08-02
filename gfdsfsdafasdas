@@ -5537,6 +5537,35 @@ if Saved[Property] == nil then Saved[Property] = Object[Property] end
 Object[Property] = Value
 end
 
+function State.LocalSpoofs.ApplyStreakVisual(Streak, Value)
+if not (Streak and Streak.Parent and Streak:IsA('ImageLabel')) then return end
+local S = math.max(0, math.floor(tonumber(Value) or 0))
+State.LocalSpoofs.Rankings = State.LocalSpoofs.Rankings or require(ReplicatedStorage.Util.Rankings)
+local Image = S > 1 and (State.LocalSpoofs.Rankings.getStreakImage(S) or '') or ''
+State.LocalSpoofs.SetStatsUI(Streak, 'Image', Image)
+State.LocalSpoofs.SetStatsUI(Streak, 'Visible', S > 1)
+State.LocalSpoofs.SetStatsUI(Streak, 'ImageTransparency', 0)
+-- Streak images already contain their tier colors; keep them untinted.
+State.LocalSpoofs.SetStatsUI(Streak, 'ImageColor3', Color3.new(1, 1, 1))
+local Amount = Streak:FindFirstChild('AmountLabel', true)
+or Streak:FindFirstChildWhichIsA('TextLabel', true)
+if Amount then
+State.LocalSpoofs.SetStatsUI(Amount, 'Text', S > 0 and tostring(S) or '')
+State.LocalSpoofs.SetStatsUI(Amount, 'Visible', S > 1)
+if type(State.LocalSpoofs.Rankings.getStreakColor) == 'function' then
+local Ok, StreakColor = pcall(State.LocalSpoofs.Rankings.getStreakColor, S)
+if Ok and typeof(StreakColor) == 'Color3' then
+local Gradient = Amount:FindFirstChildOfClass('UIGradient')
+if Gradient then
+State.LocalSpoofs.SetStatsUI(Gradient, 'Color', ColorSequence.new(StreakColor))
+else
+State.LocalSpoofs.SetStatsUI(Amount, 'TextColor3', StreakColor)
+end
+end
+end
+end
+end
+
 function State.LocalSpoofs.RestoreStatsUI()
 for Object, Properties in pairs(State.LocalSpoofs.StatsOriginals) do
 if Object and Object.Parent then
@@ -5989,7 +6018,7 @@ if Main and Main.Parent then
 if State.LocalStatsSpoofEnabled and Fields.Record and Fields.Record.Parent then State.LocalSpoofs.SetStatsUI(Fields.Record, 'Text', W .. ' - ' .. L) end
 if State.LocalStatsSpoofEnabled and Fields.Amount and Fields.Amount.Parent then State.LocalSpoofs.SetStatsUI(Fields.Amount, 'Text', S > 0 and tostring(S) or '') end
 if State.LocalStatsSpoofEnabled and Fields.Streak and Fields.Streak.Parent and Fields.Streak:IsA('ImageLabel') then
-State.LocalSpoofs.SetStatsUI(Fields.Streak, 'Image', S > 1 and (State.LocalSpoofs.Rankings.getStreakImage(S) or '') or '')
+State.LocalSpoofs.ApplyStreakVisual(Fields.Streak, S)
 end
 if (State.LocalELOSpoofEnabled or State.LocalRepImageSpoofEnabled)
 and Fields.RankImage and Fields.RankImage.Parent and Fields.RankImage:IsA('ImageLabel') then
@@ -6086,8 +6115,7 @@ LockCard(Percent:FindFirstChild('Shooting'), SP, "Goals: <font color='rgb(0,255,
 LockCard(Percent:FindFirstChild('Streak'), STP, "Highest: <font color='rgb(225,0,255)'>" .. H .. "</font>")
 end
 local SideStreak = Object:FindFirstChild('Streak')
-local Amount = SideStreak and SideStreak:FindFirstChild('AmountLabel')
-if Amount then State.LocalSpoofs.SetStatsUI(Amount, 'Text', tostring(S)) end
+if SideStreak then State.LocalSpoofs.ApplyStreakVisual(SideStreak, S) end
 end
 for Main in pairs(State.LocalSpoofs.StatsIntroCards) do
 if Main and Main.Parent then
@@ -6098,8 +6126,7 @@ if Record then State.LocalSpoofs.SetStatsUI(Record, 'Text', W .. ' - ' .. L) end
 if Amount then State.LocalSpoofs.SetStatsUI(Amount, 'Text', S > 0 and tostring(S) or '') end
 State.LocalSpoofs.Rankings = State.LocalSpoofs.Rankings or require(ReplicatedStorage.Util.Rankings)
 if Streak and Streak:IsA('ImageLabel') then
-local StreakImage = S > 1 and State.LocalSpoofs.Rankings.getStreakImage(S) or ''
-State.LocalSpoofs.SetStatsUI(Streak, 'Image', StreakImage or '')
+State.LocalSpoofs.ApplyStreakVisual(Streak, S)
 end
 local E = State.LocalELOSpoofEnabled and State.LocalELO or (LP:GetAttribute('ELO') or 0)
 local RankImage = Main:FindFirstChild('RankImage')
@@ -6587,7 +6614,7 @@ local F = StreakFrame:FindFirstChild('Frame'); local PV = F and F:FindFirstChild
 end
 end
 local SideStreak = Object:FindFirstChild('Streak')
-if SideStreak and SideStreak:FindFirstChild('AmountLabel') then State.LocalSpoofs.SetStatsUI(SideStreak.AmountLabel, 'Text', tostring(Streak)) end
+if SideStreak then State.LocalSpoofs.ApplyStreakVisual(SideStreak, Streak) end
 local ShieldFrame = Object:FindFirstChild('ShieldFrame')
 if ShieldFrame then
 local Description = ShieldFrame:FindFirstChild('DescriptionLabel')
