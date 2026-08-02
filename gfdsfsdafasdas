@@ -6491,7 +6491,10 @@ local Image = State.LocalSpoofs.OriginalRankImage and State.LocalSpoofs.Original
 local Name, Tier = State.LocalSpoofs.Rankings.getRankFromELO(E)
 local Color = State.LocalSpoofs.Rankings.getRankColorFromELO(E)
 local Minimum, Maximum = State.LocalSpoofs.Rankings.getRankMinMaxFromELO(E)
-Minimum, Maximum = Minimum or 0, Maximum or Minimum
+Minimum = tonumber(Minimum) or 0
+local HasMaximum = type(Maximum) == 'number'
+Maximum = HasMaximum and Maximum or Minimum
+local RankSpoofActive = State.LocalELOSpoofEnabled or State.LocalRepImageSpoofEnabled
 for _, Object in ipairs(LP.PlayerGui:GetDescendants()) do
 if Object.Name == 'ProfileFrame' then
 local U = Object:FindFirstChild('UserName')
@@ -6503,17 +6506,43 @@ or U.Text == ('@'..LP.Name) or State.LocalAliasEnabled)
 if IsStatsProfile and (IsLocalProfile or Object.Parent.Visible) then
 State.LocalSpoofs.StatsProfileFrame = Object
 local Icon = Object:FindFirstChild('RankIcon')
-if Icon and State.LocalRepImageSpoofEnabled then
-Icon.Image = Image
-local T = Icon:FindFirstChild('TierLabel'); if T then T.Text=string.rep('I',Tier) end
-if T and T:FindFirstChild('UIGradient') then T.UIGradient.Color=Color end
+if Icon and RankSpoofActive then
+State.LocalSpoofs.SetStatsUI(Icon, 'Image', Image)
+local T = Icon:FindFirstChild('TierLabel')
+if T then State.LocalSpoofs.SetStatsUI(T, 'Text', string.rep('I',Tier)) end
+if T and T:FindFirstChild('UIGradient') then State.LocalSpoofs.SetStatsUI(T.UIGradient, 'Color', Color) end
+local AvatarFrame = Object:FindFirstChild('AvatarFrame')
+local AvatarStroke = AvatarFrame and AvatarFrame:FindFirstChildOfClass('UIStroke')
+local AvatarGradient = AvatarStroke and AvatarStroke:FindFirstChildOfClass('UIGradient')
+if AvatarGradient then State.LocalSpoofs.SetStatsUI(AvatarGradient, 'Color', Color) end
 end
 local Stats=Object:FindFirstChild('StatsFrame'); local EF=Stats and Stats:FindFirstChild('ELO'); local V=EF and EF:FindFirstChild('ValueLabel')
 if V and State.LocalELOSpoofEnabled then V.Text=tostring(E):reverse():gsub('%d%d%d','%1,'):reverse():gsub('^,','') end
 local R=Object:FindFirstChild('RepFrame')
-if R then
-if R:FindFirstChild('CurrentRank') then R.CurrentRank.Text=Name..' '..string.rep('I',Tier) end
-local P=R:FindFirstChild('ProgressLabel'); if P then P.Text=(E-Minimum)..'/'..(Maximum-Minimum) end
+if R and RankSpoofActive then
+local CurrentRank = R:FindFirstChild('CurrentRank')
+if CurrentRank then
+State.LocalSpoofs.SetStatsUI(CurrentRank, 'Text', Name..' '..string.rep('I',Tier))
+local CurrentGradient = CurrentRank:FindFirstChildOfClass('UIGradient')
+if CurrentGradient then State.LocalSpoofs.SetStatsUI(CurrentGradient, 'Color', Color) end
+end
+local P=R:FindFirstChild('ProgressLabel')
+if P then
+State.LocalSpoofs.SetStatsUI(P, 'Text', HasMaximum and ((E-Minimum)..'/'..(Maximum-Minimum)) or 'MAX')
+local ProgressGradient = P:FindFirstChildOfClass('UIGradient')
+if ProgressGradient then State.LocalSpoofs.SetStatsUI(ProgressGradient, 'Color', Color) end
+end
+local Fill = R:FindFirstChild('Frame')
+if Fill then
+local Ratio = HasMaximum and math.clamp((E-Minimum) / math.max(1, Maximum-Minimum), 0, 1) or 1
+State.LocalSpoofs.SetStatsUI(Fill, 'Size', UDim2.fromScale(Ratio, 1))
+local Bar = Fill:FindFirstChild('Bar')
+if Bar then
+State.LocalSpoofs.SetStatsUI(Bar, 'Size', UDim2.fromScale(Ratio > 0 and 1 / Ratio or 1, 1))
+local BarGradient = Bar:FindFirstChildOfClass('UIGradient')
+if BarGradient then State.LocalSpoofs.SetStatsUI(BarGradient, 'Color', Color) end
+end
+end
 end
 if State.LocalStatsSpoofEnabled then
 local Wins = math.max(0, math.floor(tonumber(State.LocalWins) or 0))
