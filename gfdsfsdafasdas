@@ -5552,17 +5552,11 @@ or Streak:FindFirstChildWhichIsA('TextLabel', true)
 if Amount then
 State.LocalSpoofs.SetStatsUI(Amount, 'Text', S > 0 and tostring(S) or '')
 State.LocalSpoofs.SetStatsUI(Amount, 'Visible', S > 1)
-if type(State.LocalSpoofs.Rankings.getStreakColor) == 'function' then
-local Ok, StreakColor = pcall(State.LocalSpoofs.Rankings.getStreakColor, S)
-if Ok and typeof(StreakColor) == 'Color3' then
 local Gradient = Amount:FindFirstChildOfClass('UIGradient')
 if Gradient then
-State.LocalSpoofs.SetStatsUI(Gradient, 'Color', ColorSequence.new(StreakColor))
-else
-State.LocalSpoofs.SetStatsUI(Amount, 'TextColor3', StreakColor)
+State.LocalSpoofs.SetStatsUI(Gradient, 'Color', ColorSequence.new(Color3.new(1, 1, 1)))
 end
-end
-end
+State.LocalSpoofs.SetStatsUI(Amount, 'TextColor3', Color3.new(1, 1, 1))
 end
 end
 
