@@ -11888,6 +11888,7 @@ Rng = Random.new(),
 Roll = nil,
 RollAt = 0,
 Tallied = true,
+CurrentMissing = false,
 }
 
 -- One deterministic roll per jump, so the aim point stays fixed for the whole
@@ -11904,6 +11905,7 @@ Lift = R:NextNumber(),
 }
 State.Humanize.RollAt = os.clock()
 State.Humanize.Tallied = false
+State.Humanize.CurrentMissing = false
 return State.Humanize.Roll
 end
 
@@ -11920,7 +11922,7 @@ end
 function State.Humanize.Apply(Target, Rim)
 if typeof(Target) ~= 'Vector3' then return Target end
 local Camera = workspace.CurrentCamera
-local Accuracy = math.clamp(tonumber(CONFIG.HumanizeAccuracy) or 92, 60, 100)
+local Accuracy = math.clamp(tonumber(CONFIG.HumanizeAccuracy) or 92, 0, 100)
 local MaxAngle = math.clamp(tonumber(CONFIG.HumanizeMaxAngle) or 25, 1, 180)
 local Radius = math.max(0, tonumber(CONFIG.HumanizeErrorRadius) or 0.6)
 local Severity = math.clamp(tonumber(CONFIG.HumanizeMissSeverity) or 1.8, 1, 4)
@@ -11943,11 +11945,13 @@ end
 
 if Radius <= 0 and Accuracy >= 100 then
 State.Humanize.Status = 'PURE (NO ERROR)'
+State.Humanize.CurrentMissing = false
 return Target
 end
 
 local Roll = State.Humanize.GetShotRoll()
 local Missing = (Roll.Hit * 100) >= Accuracy
+State.Humanize.CurrentMissing = Missing
 local Spread
 if Missing then
 -- The previous default miss spread was only about one stud, which still went
@@ -12003,18 +12007,26 @@ local HRP = safe_find(Character, 'HumanoidRootPart')
 if not HRP then return false end
 local TargetWorld = typeof(SolvedTarget) == 'Vector3'
 and SolvedTarget or Rim.Position + Vector3.new(0, YOffset, 0)
+local HumanMiss = CONFIG.HumanizeEnabled and State.Humanize.CurrentMissing == true
+local ActivationTarget = TargetWorld
+if HumanMiss then
+-- Aim at the valid solved shot for mouse-down so the native handler accepts
+-- and starts the release. The miss offset is applied on mouse-up below.
+local Power = State.PowerBypass.GetEffectivePower()
+ActivationTarget = GetFormulaTarget(Rim, Power) or Rim.Position
+end
 local WasPreArmed = typeof(PreArmedTarget) == 'Vector3'
-and (PreArmedTarget - TargetWorld).Magnitude < 0.001
+and (PreArmedTarget - ActivationTarget).Magnitude < 0.001
 
 State.silentShootActive = true
 
 local cx, cy = GetFullscreenCenterX(), Camera.ViewportSize.Y / 2
 local SavedCameraCFrame, SavedCameraFocus
 local ClickOk = pcall(function()
-SilentAim.FireActorAim(TargetWorld)
+SilentAim.FireActorAim(ActivationTarget)
 if not WasPreArmed then
 RunService.RenderStepped:Wait()
-SilentAim.FireActorAim(TargetWorld)
+SilentAim.FireActorAim(ActivationTarget)
 end
 
 if CONFIG.CameraIndependentFallback then
@@ -12022,12 +12034,25 @@ local Head = safe_find(Character, 'Head')
 if Head then
 SavedCameraCFrame = Camera.CFrame
 SavedCameraFocus = Camera.Focus
-Camera.CFrame = CFrame.new(Head.Position, TargetWorld)
-Camera.Focus = CFrame.new(TargetWorld)
+Camera.CFrame = CFrame.new(Head.Position, ActivationTarget)
+Camera.Focus = CFrame.new(ActivationTarget)
 end
 end
 
 VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+if HumanMiss then
+-- Hoopz validates the aim when the press begins but reads the release vector
+-- on mouse-up. Switching here makes the shot fire normally and still miss.
+RunService.RenderStepped:Wait()
+SilentAim.FireActorAim(TargetWorld)
+if CONFIG.CameraIndependentFallback then
+local Head = safe_find(Character, 'Head')
+if Head then
+Camera.CFrame = CFrame.new(Head.Position, TargetWorld)
+Camera.Focus = CFrame.new(TargetWorld)
+end
+end
+end
 VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
 end)
 
@@ -26286,7 +26311,7 @@ or 'Humanizer off: full-accuracy silent aim at any angle.')
 end
 )
 HubUI.Controls.HumanizeAccuracy = CreateNumberInput(
-HubUI.HumanizerGroup, 61, 'Make rate % (100 = never miss)', CONFIG.HumanizeAccuracy, 60, 100, 0,
+HubUI.HumanizerGroup, 61, 'Make rate % (0 = always miss)', CONFIG.HumanizeAccuracy, 0, 100, 0,
 function(Value)
 CONFIG.HumanizeAccuracy = Value
 State.Humanize.NewShot()
