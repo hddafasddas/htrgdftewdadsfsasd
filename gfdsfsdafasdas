@@ -188,6 +188,8 @@ AutoGuardThreshold = 50,
 AutoGuardPrediction = 0.6,
 AutoGuardAdaptiveOnBallDistance = 14,
 AutoGuardAdaptiveIntentSlack = 3,
+AutoGuardNoJump = false,
+AutoGuardBallCheckOnly = false,
 AutoDefense = false,
 AutoDefenseNoclip = true,
 
@@ -733,25 +735,25 @@ end
 
 local safe_get_attribute
 safe_get_attribute = WYNF_INLINE(function(instance, attribute)
-if instance == nil then return nil end
+if typeof(instance) ~= 'Instance' then return nil end
 return cloneref(instance):GetAttribute(attribute)
 end)
 
 local safe_set_attribute
 safe_set_attribute = WYNF_INLINE(function(instance, attribute, value)
-if instance == nil then return nil end
+if typeof(instance) ~= 'Instance' then return nil end
 return cloneref(instance):SetAttribute(attribute, value)
 end)
 
 local safe_find
 safe_find = WYNF_INLINE(function(parent, name)
-if parent == nil then return nil end
+if typeof(parent) ~= 'Instance' then return nil end
 return cloneref(parent):FindFirstChild(name)
 end)
 
 local safe_is_a
 safe_is_a = WYNF_INLINE(function(instance, className)
-if instance == nil then return false end
+if typeof(instance) ~= 'Instance' then return false end
 return cloneref(instance):IsA(className)
 end)
 
@@ -766,6 +768,8 @@ AutoGuardEffectiveMode = CONFIG.AutoGuardMode,
 AutoGuardAdaptiveState = 'WAITING',
 AutoGuardStyle = CONFIG.AutoGuardStyle,
 AutoGuardTarget = nil,
+AutoGuardNoJump = CONFIG.AutoGuardNoJump,
+AutoGuardBallCheckOnly = CONFIG.AutoGuardBallCheckOnly,
 AutoHeadRide = {
 Enabled = CONFIG.AutoHeadRide,
 Target = nil,
@@ -6701,6 +6705,93 @@ local Item = Folder and Folder:FindFirstChild(ItemName)
 return Item and Item:IsA('StringValue') and Item.Value or ItemName
 end
 
+function State.LocalSpoofs.ExtractGoalEffectSource(ItemName)
+ItemName = tostring(ItemName or '')
+if ItemName == '' or ItemName == 'None' or ItemName == 'Custom Lua' then
+return nil, nil, 'Select an actual game goal effect first.'
+end
+local Root = ReplicatedStorage:FindFirstChild('ScoreEffects')
+if not (Root and Root:IsA('ModuleScript')) then
+return nil, nil, 'The game ScoreEffects module was not found.'
+end
+local Syn = type(GlobalEnv.syn) == 'table' and GlobalEnv.syn or nil
+local Decompiler = type(GlobalEnv.decompile) == 'function' and GlobalEnv.decompile
+or (type(decompile) == 'function' and decompile)
+or (Syn and type(Syn.decompile) == 'function' and Syn.decompile)
+if type(Decompiler) ~= 'function' then
+return nil, nil, 'This executor does not provide decompile().'
+end
+local Resolved = tostring(State.LocalSpoofs.ResolveEffect(ItemName) or ItemName)
+local function Clean(Value)
+return string.lower(tostring(Value or ''):gsub('[^%w]', ''))
+end
+local function TryDecompile(Target)
+if Target == nil then return nil end
+local Ok, Source = pcall(Decompiler, Target)
+if Ok and type(Source) == 'string' and #Source > 16 then return Source end
+return nil
+end
+
+-- Never decompile the live table function first: goal-effect spoofing wraps
+-- those functions, so that returns the generic ownership hook instead of the
+-- effect. Resolve the actual child ModuleScript under ScoreEffects/Assets.
+local WantedA, WantedB = Clean(Resolved), Clean(ItemName:gsub('^Effect_', ''))
+local Assets = Root:FindFirstChild('Assets')
+local Best = Assets and Assets:FindFirstChild(Resolved, true)
+if not (Best and Best:IsA('ModuleScript')) then
+Best = Root:FindFirstChild(Resolved, true)
+end
+if not (Best and Best:IsA('ModuleScript')) then Best = nil end
+for _, Descendant in ipairs(Root:GetDescendants()) do
+if Descendant:IsA('ModuleScript') then
+local Candidate = Clean(Descendant.Name)
+if Candidate == WantedA or Candidate == WantedB then
+local IsAsset = Assets and Descendant:IsDescendantOf(Assets)
+if not Best or IsAsset or tostring(Descendant.Name) == Resolved then Best = Descendant end
+if IsAsset and tostring(Descendant.Name) == Resolved then break end
+end
+end
+end
+local Source
+if Best then
+Source = TryDecompile(Best)
+if Source then
+State.LocalSpoofs.LastExtractedGoalModule = Best
+State.LocalSpoofs.LastExtractedGoalName = Resolved
+return '-- GEH_EXTRACTED_EFFECT: '..Resolved..'\n'..Source, Best:GetFullName()
+end
+end
+
+-- Direct/legacy effects are stored inside the main module. Returning that raw
+-- source still lets the user search for the selected table entry and edit it.
+Source = TryDecompile(Root)
+if Source then
+State.LocalSpoofs.LastExtractedGoalModule = Root
+State.LocalSpoofs.LastExtractedGoalName = Resolved
+return '-- GEH_EXTRACTED_EFFECT: '..Resolved..'\n'..Source, Root:GetFullName() .. ' / find: ' .. Resolved
+end
+return nil, nil, 'The executor could not decompile this effect.'
+end
+
+function State.LocalSpoofs.ResolveExtractedGoalModule(Source)
+local Name = tostring(Source or ''):match('%-%-%s*GEH_EXTRACTED_EFFECT:%s*([^\r\n]+)')
+if not Name then return nil, nil end
+Name = Name:match('^%s*(.-)%s*$') or Name
+if State.LocalSpoofs.LastExtractedGoalName == Name
+and State.LocalSpoofs.LastExtractedGoalModule
+and State.LocalSpoofs.LastExtractedGoalModule.Parent then
+return State.LocalSpoofs.LastExtractedGoalModule, Name
+end
+local Root = ReplicatedStorage:FindFirstChild('ScoreEffects')
+local Assets = Root and Root:FindFirstChild('Assets')
+local Module = Assets and Assets:FindFirstChild(Name, true)
+if not (Module and Module:IsA('ModuleScript')) then
+Module = Root and Root:FindFirstChild(Name, true)
+end
+if Module and Module:IsA('ModuleScript') then return Module, Name end
+return Root, Name
+end
+
 function State.LocalSpoofs.RestoreGoalEffects()
 if not State.LocalSpoofs.ScoreEffects then return end
 for Name, Original in pairs(State.LocalSpoofs.GoalOriginals) do
@@ -6733,6 +6824,7 @@ end
 function State.LocalSpoofs.CompileCustomGoalEffect(Source)
 Source = tostring(Source or '')
 if type(loadstring) ~= 'function' then return nil, 'loadstring is unavailable in this environment.' end
+local SourceModule = State.LocalSpoofs.ResolveExtractedGoalModule(Source)
 local Wrapped = "return function(Context)\n"
 .. "local Scorer, Court, Goal = Context.Scorer, Context.Court, Context.Goal\n"
 .. "local TweenService, Debris, Lighting, Workspace = Context.TweenService, Context.Debris, Context.Lighting, Context.Workspace\n"
@@ -6741,13 +6833,16 @@ local Chunk, CompileError = loadstring(Wrapped, 'GEH_CustomGoalEffect')
 if not Chunk then return nil, tostring(CompileError) end
 if type(setfenv) == 'function' then
 local SafeEnvironment = {
+game = game, workspace = workspace, script = SourceModule, require = require,
 Instance = Instance, Enum = Enum, Color3 = Color3, Vector2 = Vector2, Vector3 = Vector3,
 CFrame = CFrame, UDim = UDim, UDim2 = UDim2, Rect = Rect,
+Ray = Ray, Random = Random, BrickColor = BrickColor, Region3 = Region3,
 NumberRange = NumberRange, NumberSequence = NumberSequence, NumberSequenceKeypoint = NumberSequenceKeypoint,
 ColorSequence = ColorSequence, ColorSequenceKeypoint = ColorSequenceKeypoint,
 TweenInfo = TweenInfo, RaycastParams = RaycastParams, OverlapParams = OverlapParams,
 math = math, string = string, table = table, task = task, coroutine = coroutine, utf8 = utf8,
 pairs = pairs, ipairs = ipairs, next = next, select = select, unpack = unpack,
+wait = task.wait, tick = tick, time = time, warn = warn, print = print,
 tonumber = tonumber, tostring = tostring, type = type, typeof = typeof,
 assert = assert, error = error, pcall = pcall, xpcall = xpcall,
 }
@@ -6787,6 +6882,56 @@ warn('[GOLDEN EAGLE HUB] Custom goal effect runtime error: '..tostring(Result))
 Notify('CUSTOM GOAL EFFECT', 'Runtime error: '..tostring(Result))
 return nil
 end
+local SourceModule, ExtractedName = State.LocalSpoofs.ResolveExtractedGoalModule(Source)
+if ExtractedName then
+local RunOk, RunResult
+if type(Result) == 'table' and type(Result.Execute) == 'function' then
+local VfxDirectory = SourceModule and SourceModule:FindFirstChild(ExtractedName)
+if not VfxDirectory then
+local ScoreRoot = ReplicatedStorage:FindFirstChild('ScoreEffects')
+local Assets = ScoreRoot and ScoreRoot:FindFirstChild('Assets')
+local Container = Assets and Assets:FindFirstChild(ExtractedName, true)
+if Container then
+VfxDirectory = Container:IsA('ModuleScript') and Container:FindFirstChild(ExtractedName) or Container
+end
+end
+if not VfxDirectory then
+local Message = 'Could not find the extracted effect assets for '..tostring(ExtractedName)..'.'
+warn('[GOLDEN EAGLE HUB] '..Message)
+Notify('CUSTOM GOAL EFFECT', Message)
+return nil
+end
+local StartingCFrame
+if Goal and Goal:IsA('BasePart') then StartingCFrame = Goal.CFrame
+elseif Goal and Goal:IsA('Model') then StartingCFrame = Goal:GetPivot() end
+if not StartingCFrame then
+local Character = Scorer and Scorer.Character
+local Root = Character and Character:FindFirstChild('HumanoidRootPart')
+StartingCFrame = Root and Root.CFrame or CFrame.new()
+end
+RunOk, RunResult = pcall(Result.Execute, {
+CourtInstance = Court,
+StartingCFrame = StartingCFrame,
+vfxDirectory = VfxDirectory,
+}, Goal)
+elseif type(Result) == 'function' then
+local Packed = { Scorer, Court, Goal }
+local Extra = Context.Arguments
+for Index = 1, (Extra.n or #Extra) do Packed[#Packed + 1] = Extra[Index] end
+RunOk, RunResult = pcall(Result, Packed)
+elseif type(Result) == 'table' and type(Result[ExtractedName]) == 'function' then
+RunOk, RunResult = pcall(Result[ExtractedName], Scorer, Court, Goal,
+table.unpack(Context.Arguments, 1, Context.Arguments.n))
+else
+RunOk, RunResult = false, 'Extracted source did not return Execute, a function, or the named effect.'
+end
+if not RunOk then
+warn('[GOLDEN EAGLE HUB] Extracted goal effect runtime error: '..tostring(RunResult))
+Notify('CUSTOM GOAL EFFECT', 'Extracted runtime error: '..tostring(RunResult))
+return nil
+end
+return RunResult
+end
 return Result
 end
 
@@ -6794,8 +6939,8 @@ end
 -- Delay local requests briefly so that callback can be identified, then only
 -- release it after the player's court score actually increases.
 function State.LocalSpoofs.ReadGoalEffectScore(Court, Goal)
-local ResolvedCourt = Court
-if not ResolvedCourt and Goal then
+local ResolvedCourt = typeof(Court) == 'Instance' and Court or nil
+if not ResolvedCourt and typeof(Goal) == 'Instance' then
 local Node = Goal
 for _ = 1, 8 do
 if not Node then break end
@@ -14847,6 +14992,9 @@ end
 return State.AutoGuardAdaptive.ChooseDefensiveAssignment(BallHandler)
 end
 
+if CONFIG.AutoGuardBallCheckOnly then
+return nil, 'WAITING | NO BALL', 'Off-Ball Player'
+end
 return State.AutoGuardAdaptive.ChooseDefensiveAssignment(nil)
 end
 
@@ -14865,6 +15013,9 @@ end
 end
 end
 local OpponentBallHandler = State.AutoGuardAdaptive.GetOpponentDribbler()
+if CONFIG.AutoGuardBallCheckOnly and not OpponentBallHandler then
+return nil, 'WAITING | NO BALL', 'Off-Ball Player'
+end
 return State.AutoGuardAdaptive.ChooseDefensiveAssignment(OpponentBallHandler)
 end
 
@@ -15086,7 +15237,8 @@ TargetState == Enum.HumanoidStateType.Jumping
 or (TargetState == Enum.HumanoidStateType.Freefall
 and TargetRoot.AssemblyLinearVelocity.Y > 0)
 ) or false
-if TargetIsJumping and not TargetWasJumping
+if not CONFIG.AutoGuardNoJump
+and TargetIsJumping and not TargetWasJumping
 and LocalHumanoid.FloorMaterial ~= Enum.Material.Air then
 LocalHumanoid.Jump = true
 end
@@ -20857,21 +21009,22 @@ local HttpService = game:GetService('HttpService')
 local InterfaceFile = 'GoldenEagleHub_Interface.json'
 local InterfaceDefaults = {
 Version = 5,
-ThemePreset = 'Golden Eagle',
+ThemePreset = 'Dear ImGui Dark',
 Theme = {
-Background = '#0D0D0D',
-Panel = '#151515',
-Surface = '#1B1B1B',
-SurfaceHover = '#24211A',
-Border = '#3B3B3B',
-Text = '#F0F0F0',
-Muted = '#A7A7A7',
-Off = '#242424',
-Bad = '#E45A62',
-Success = '#63C58A',
-Warning = '#D9B64B',
-Accent = '#D4AF37',
-AccentBright = '#FFE27A',
+-- Dear ImGui StyleColorsDark mapped to opaque Roblox colors.
+Background = '#0F0F0F', -- WindowBg (0.06, 0.06, 0.06)
+Panel = '#141414',      -- PopupBg (0.08, 0.08, 0.08)
+Surface = '#1D2F4A',    -- FrameBg composited over WindowBg
+SurfaceHover = '#2A5E9D',
+Border = '#6E6E80',     -- Border RGB; stroke transparency supplies alpha
+Text = '#FFFFFF',
+Muted = '#808080',
+Off = '#181818',
+Bad = '#FF4A4A',
+Success = '#3ECC73',
+Warning = '#FFD34E',
+Accent = '#4296FA',     -- official (0.26, 0.59, 0.98)
+AccentBright = '#54A3FF',
 },
 Scale = 1,
 WindowTransparency = 0,
@@ -20898,7 +21051,32 @@ HiddenTabs = {},
 TabOrder = {},
 }
 local ThemePresets = {
-Linoria = InterfaceDefaults.Theme,
+['Dear ImGui Dark'] = InterfaceDefaults.Theme,
+['ImGui Classic'] = {
+Background = '#0A0A14', Panel = '#12121F', Surface = '#3A3A6B', SurfaceHover = '#5050A0',
+Border = '#5C5C8A', Text = '#E6E6F0', Muted = '#9A9AB4', Off = '#1B1B2C', Bad = '#FF5C5C',
+Success = '#5CD68F', Warning = '#E6C34D', Accent = '#7A7ABF', AccentBright = '#ADADE6',
+},
+['ImGui Light'] = {
+Background = '#F0F0F0', Panel = '#E4E4E4', Surface = '#C8DCF5', SurfaceHover = '#A8C8F0',
+Border = '#9A9A9A', Text = '#101010', Muted = '#5A5A5A', Off = '#D4D4D4', Bad = '#C22B2B',
+Success = '#1E8A4C', Warning = '#A56A00', Accent = '#2E7BE0', AccentBright = '#6BA8F5',
+},
+['Terminal Green'] = {
+Background = '#000000', Panel = '#050A05', Surface = '#0C2410', SurfaceHover = '#14401C',
+Border = '#1E7A2E', Text = '#B9FFC4', Muted = '#4C9B5C', Off = '#081208', Bad = '#FF5555',
+Success = '#00FF66', Warning = '#D7FF3D', Accent = '#00FF66', AccentBright = '#9CFFC0',
+},
+['Terminal Amber'] = {
+Background = '#000000', Panel = '#0A0700', Surface = '#2A1C00', SurfaceHover = '#4A3100',
+Border = '#8A6100', Text = '#FFD48A', Muted = '#A87B2E', Off = '#140E00', Bad = '#FF5C3D',
+Success = '#9BE04A', Warning = '#FFC533', Accent = '#FFB000', AccentBright = '#FFDD88',
+},
+Linoria = {
+Background = '#0D0D0D', Panel = '#151515', Surface = '#1B1B1B', SurfaceHover = '#24211A',
+Border = '#3B3B3B', Text = '#F0F0F0', Muted = '#A7A7A7', Off = '#242424', Bad = '#E45A62',
+Success = '#63C58A', Warning = '#D9B64B', Accent = '#D4AF37', AccentBright = '#FFE27A',
+},
 ['Golden Eagle'] = {
 Background = '#141414', Panel = '#1C1C1C', Surface = '#202020', SurfaceHover = '#282828',
 Border = '#323232', Text = '#F1F1F1', Muted = '#A09CA0', Off = '#252525', Bad = '#FF4152',
@@ -21494,12 +21672,9 @@ if type(Control) == 'table' and type(Control.RefreshTheme) == 'function' then
 pcall(Control.RefreshTheme, Control)
 end
 end
-for Name, Data in pairs(HubUI.TabButtons or {}) do
+for _, Data in pairs(HubUI.TabButtons or {}) do
 if Data.Button and Data.Button.Parent then
-local Selected = Name == HubUI.ActiveTab
-Data.Button.BackgroundColor3 = Selected and Theme.Panel or Theme.Background
-Data.Button.TextColor3 = Selected and Theme.Accent or Theme.Muted
-if Data.Marker then Data.Marker.BackgroundTransparency = Selected and 0 or 1 end
+if Data.RefreshRow then Data.RefreshRow() end
 if Data.Divider then Data.Divider.BackgroundColor3 = Theme.Border end
 end
 end
@@ -21771,7 +21946,7 @@ local Main = New('CanvasGroup', {
 Name = 'Window',
 AnchorPoint = Vector2.new(0.5, 0.5),
 Position = PreferredWindowPosition,
-Size = UDim2.fromOffset(580, 620),
+Size = UDim2.fromOffset(760, 620),
 BackgroundColor3 = Theme.Background,
 BorderSizePixel = 0,
 Active = true,
@@ -21781,14 +21956,14 @@ ZIndex = 2,
 }, ScreenGui)
 local MainBorder = New('UIStroke', {
 __SkipThemeBinding = true,
-Color = Color3.new(1, 1, 1),
+Color = Theme.Border,
 Thickness = 1,
 Transparency = 0,
 ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 LineJoinMode = Enum.LineJoinMode.Miter,
 }, Main)
 local MainFlameGradient = New('UIGradient', {
-Enabled = true,
+Enabled = false,
 Color = ColorSequence.new({
 ColorSequenceKeypoint.new(0.00, Color3.fromRGB(0, 0, 0)),
 ColorSequenceKeypoint.new(0.16, Color3.fromRGB(0, 0, 0)),
@@ -21804,8 +21979,14 @@ Rotation = 0,
 Offset = Vector2.zero,
 }, MainBorder)
 function HubUI.RefreshSpecialThemeSurfaces()
-if MainBorder and MainBorder.Parent then MainBorder.Color = Color3.new(1, 1, 1) end
-if IntroStroke and IntroStroke.Parent then IntroStroke.Color = Color3.new(1, 1, 1) end
+if MainBorder and MainBorder.Parent then MainBorder.Color = Theme.Border end
+if HubUI.Topbar and HubUI.Topbar.Parent then
+HubUI.Topbar.BackgroundColor3 = Theme.Surface:Lerp(Theme.SurfaceHover, 0.5)
+end
+if HubUI.StaticBackdrop and HubUI.StaticBackdrop.Parent then
+HubUI.StaticBackdrop.BackgroundColor3 = Theme.Background
+end
+if IntroStroke and IntroStroke.Parent then IntroStroke.Color = Theme.Accent end
 local DarkAccent = Theme.Accent:Lerp(Theme.Background, 0.70)
 if MainFlameGradient and MainFlameGradient.Parent then
 MainFlameGradient.Color = ColorSequence.new({
@@ -21833,11 +22014,7 @@ ColorSequenceKeypoint.new(1.00, Theme.Accent),
 })
 end
 if HubUI.TitleGradient and HubUI.TitleGradient.Parent then
-HubUI.TitleGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Theme.Accent),
-ColorSequenceKeypoint.new(0.48, Theme.AccentBright),
-ColorSequenceKeypoint.new(1.00, Theme.Accent),
-})
+HubUI.TitleGradient.Color = ColorSequence.new(Color3.new(1, 1, 1))
 end
 if HubUI.EagleIcon and HubUI.EagleIcon.Parent then
 HubUI.EagleIcon.ImageColor3 = Theme.Accent
@@ -21874,11 +22051,14 @@ local MainScale = New('UIScale', { Scale = 1 }, Main)
 
 local Topbar = New('Frame', {
 Size = UDim2.new(1, 0, 0, 27),
-BackgroundColor3 = Theme.Panel,
+-- Derived TitleBgActive: recomputed by RefreshSpecialThemeSurfaces per theme.
+BackgroundColor3 = Theme.Surface:Lerp(Theme.SurfaceHover, 0.5),
+__SkipThemeBinding = true,
 BorderSizePixel = 0,
 Active = true,
 ZIndex = 3,
 }, Main)
+HubUI.Topbar = Topbar
 New('Frame', {
 Position = UDim2.new(0, 0, 1, -1),
 Size = UDim2.new(1, 0, 0, 1),
@@ -21887,8 +22067,8 @@ BorderSizePixel = 0,
 ZIndex = 4,
 }, Topbar)
 local EagleIcon = New('ImageLabel', {
-Position = UDim2.fromOffset(8, 4),
-Size = UDim2.fromOffset(18, 18),
+Position = UDim2.fromOffset(0, 0),
+Size = UDim2.fromOffset(0, 0),
 BackgroundTransparency = 1,
 -- This original eagle asset is publicly loadable; the later replacement did not render reliably.
 Image = 'rbxassetid://100996548484098',
@@ -21899,29 +22079,26 @@ ZIndex = 5,
 }, Topbar)
 HubUI.EagleIcon = EagleIcon
 local HubTitle = New('TextLabel', {
-Position = UDim2.fromOffset(31, 0),
-Size = UDim2.fromOffset(94, 27),
+Position = UDim2.fromOffset(7, 0),
+Size = UDim2.fromOffset(250, 27),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = 'GOLDEN EAGLE HUB',
+Text = 'Golden Eagle Hub',
 TextColor3 = Color3.new(1, 1, 1),
 __SkipThemeBinding = true,
-TextSize = 11,
+TextSize = 10,
 TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 5,
 }, Topbar)
 HubUI.TitleGradient = New('UIGradient', {
-Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Theme.Accent),
-ColorSequenceKeypoint.new(0.48, Theme.AccentBright),
-ColorSequenceKeypoint.new(1.00, Theme.Accent),
-}),
+__SkipThemeBinding = true,
+Color = ColorSequence.new(Color3.new(1, 1, 1)),
 Rotation = 0,
 }, HubTitle)
 HubUI.RefreshSpecialThemeSurfaces()
 New('TextLabel', {
-Position = UDim2.fromOffset(129, 0),
-Size = UDim2.fromOffset(12, 27),
+Position = UDim2.fromOffset(0, 0),
+Size = UDim2.fromOffset(0, 0),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = '|',
@@ -21930,8 +22107,8 @@ TextSize = 10,
 ZIndex = 5,
 }, Topbar)
 New('TextLabel', {
-Position = UDim2.fromOffset(144, 0),
-Size = UDim2.fromOffset(74, 27),
+Position = UDim2.fromOffset(0, 0),
+Size = UDim2.fromOffset(0, 0),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = 'UNIVERSAL',
@@ -21947,13 +22124,13 @@ BackgroundTransparency = 1, Font = Enum.Font.Code, Text = 'AIM',
 TextColor3 = Theme.Muted, TextSize = 9, Visible = false, ZIndex = 4,
 }, Topbar)
 local GlobalSearchBox = New('TextBox', {
-Position = UDim2.fromOffset(218, 3),
-Size = UDim2.fromOffset(322, 21),
+Position = UDim2.fromOffset(409, 3),
+Size = UDim2.fromOffset(312, 21),
 BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
 ClearTextOnFocus = false,
 Font = Enum.Font.Code,
-PlaceholderText = 'Search settings...  [CTRL+F]',
+PlaceholderText = '> search settings   [CTRL+F]',
 PlaceholderColor3 = Theme.Muted,
 Text = '', TextColor3 = Theme.Text, TextSize = 10,
 TextXAlignment = Enum.TextXAlignment.Left,
@@ -21963,13 +22140,13 @@ New('UIPadding', { PaddingLeft = UDim.new(0, 7), PaddingRight = UDim.new(0, 24) 
 local GlobalSearchStroke = DarkStroke(GlobalSearchBox)
 GlobalSearchStroke.Transparency = 0.15
 local ClearGlobalSearchButton = New('TextButton', {
-Position = UDim2.fromOffset(518, 4), Size = UDim2.fromOffset(18, 18),
+Position = UDim2.fromOffset(696, 4), Size = UDim2.fromOffset(18, 18),
 BackgroundTransparency = 1, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'x', TextColor3 = Theme.Muted,
 TextSize = 11, Visible = false, ZIndex = 33,
 }, Topbar)
 local GlobalSearchResults = New('CanvasGroup', {
-Position = UDim2.fromOffset(218, 31), Size = UDim2.fromOffset(322, 238),
+Position = UDim2.fromOffset(409, 31), Size = UDim2.fromOffset(312, 238),
 BackgroundColor3 = Theme.Background, BorderSizePixel = 0,
 Visible = false, GroupTransparency = 1, ClipsDescendants = true, ZIndex = 30,
 }, Main)
@@ -22002,7 +22179,7 @@ local CloseButton = New('TextButton', {
 AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -5, 0, 4),
 Size = UDim2.fromOffset(25, 18), BackgroundTransparency = 1,
 BorderSizePixel = 0, AutoButtonColor = false, Font = Enum.Font.Code,
-Text = '[X]', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 6,
+Text = 'x', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 6,
 }, Topbar)
 HubUI.UnloadButton = New('TextButton', {
 Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(0, 0),
@@ -22011,11 +22188,168 @@ Font = Enum.Font.Code, Text = '', TextColor3 = Theme.Bad,
 TextSize = 10, Visible = false, ZIndex = 5,
 }, Topbar)
 
+-- Stock Dear ImGui menu bar with functional dropdown menus.
+-- Everything is block-scoped to protect this large Luau function's register budget.
+do
+local MenuBar = New('Frame', {
+Position = UDim2.fromOffset(0, 27), Size = UDim2.new(1, 0, 0, 21),
+BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, ZIndex = 90,
+}, Main)
+New('Frame', {
+Position = UDim2.new(0, 0, 1, -1), Size = UDim2.new(1, 0, 0, 1),
+BackgroundColor3 = Theme.Border, BackgroundTransparency = 0.50,
+BorderSizePixel = 0, ZIndex = 91,
+}, MenuBar)
+
+local function MenuStatus(Message, IsError)
+local Status = HubUI.TerminalStatus
+if Status and Status.Parent then
+Status.Text = tostring(Message)
+Status.TextColor3 = IsError and Theme.Bad or Theme.Muted
+end
+end
+local function OpenTab(Name)
+if HubUI.SwitchTab then HubUI.SwitchTab(Name) end
+end
+local MenuDefinitions = {
+{
+Name = 'File', Items = {
+{ 'Save interface', function() SaveInterfaceConfig(); MenuStatus('[file] interface saved') end },
+{ 'Reset Dear ImGui theme', function()
+InterfaceConfig.ThemePreset = 'Dear ImGui Dark'
+HubUI.ApplyTheme(ThemePresets['Dear ImGui Dark'], true)
+MenuStatus('[file] Dear ImGui theme restored')
+end },
+{ 'Hide window', function() Main.Visible = false end },
+}},
+{
+Name = 'Edit', Items = {
+{ 'Find settings...', function() GlobalSearchBox:CaptureFocus() end },
+{ 'Clear search', function() GlobalSearchBox.Text = ''; GlobalSearchBox:ReleaseFocus() end },
+{ 'Reset tab layout', function()
+if HubUI.ResetTabLayout then HubUI.ResetTabLayout() end
+MenuStatus('[edit] tab layout reset')
+end },
+}},
+{
+Name = 'View', Items = {
+{ 'Aim', function() OpenTab('Aim') end },
+{ 'Interface', function() OpenTab('Interface') end },
+{ 'Keybinds', function() OpenTab('Keybinds') end },
+{ 'Diagnostics', function() OpenTab('Status') end },
+}},
+{
+Name = 'Window', Items = {
+{ 'Center window', function()
+Main.Position = UDim2.fromScale(0.5, 0.5)
+GlobalEnv.__GOLDEN_EAGLE_UI_POSITION = nil
+MenuStatus('[window] centered')
+end },
+{ 'Scale 100%', function()
+InterfaceConfig.Scale = 1
+MainScale.Scale = 1
+SaveInterfaceConfig()
+MenuStatus('[window] scale 100%')
+end },
+{ 'Toggle position lock', function()
+InterfaceConfig.LockWindow = not InterfaceConfig.LockWindow
+SaveInterfaceConfig()
+MenuStatus(InterfaceConfig.LockWindow and '[window] position locked' or '[window] position unlocked')
+end },
+}},
+{
+Name = 'Tools', Items = {
+{ 'Match spectator', function() OpenTab('Watch') end },
+{ 'Quick travel', function() OpenTab('QuickTravel') end },
+{ 'Utilities', function() OpenTab('Utilities') end },
+{ 'Replay / ghost', function() OpenTab('Replay') end },
+}},
+{
+Name = 'Help', Items = {
+{ 'Terminal commands', function()
+MenuStatus('goto <tab> | find <text> | theme <name> | close')
+if HubUI.TerminalInput then HubUI.TerminalInput:CaptureFocus() end
+end },
+{ 'About', function() MenuStatus('Golden Eagle Hub  |  Dear ImGui UI v6') end },
+}},
+}
+
+local MenuX = 5
+local function CloseMenus()
+if HubUI.OpenMenuPopup and HubUI.OpenMenuPopup.Parent then HubUI.OpenMenuPopup.Visible = false end
+if HubUI.OpenMenuButton and HubUI.OpenMenuButton.Parent then
+HubUI.OpenMenuButton.BackgroundTransparency = 1
+end
+HubUI.OpenMenuPopup = nil
+HubUI.OpenMenuButton = nil
+end
+HubUI.CloseMenus = CloseMenus
+
+for _, Definition in ipairs(MenuDefinitions) do
+local MenuDefinition = Definition
+local MenuWidth = math.ceil(#MenuDefinition.Name * 6.1) + 13
+local MenuButton = New('TextButton', {
+Position = UDim2.fromOffset(MenuX, 1), Size = UDim2.fromOffset(MenuWidth, 19),
+BackgroundColor3 = Theme.SurfaceHover, BackgroundTransparency = 1,
+BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = MenuDefinition.Name, TextColor3 = Theme.Text, TextSize = 10,
+ZIndex = 92,
+}, MenuBar)
+local PopupHeight = #MenuDefinition.Items * 21 + 6
+local Popup = New('Frame', {
+Position = UDim2.fromOffset(MenuX, 48), Size = UDim2.fromOffset(158, PopupHeight),
+BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, Visible = false, ZIndex = 120,
+}, Main)
+DarkStroke(Popup)
+for ItemIndex, Item in ipairs(MenuDefinition.Items) do
+local MenuItem = Item
+local ItemButton = New('TextButton', {
+Position = UDim2.fromOffset(3, 3 + (ItemIndex - 1) * 21),
+Size = UDim2.new(1, -6, 0, 20),
+BackgroundColor3 = Theme.SurfaceHover, BackgroundTransparency = 1,
+BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = '  ' .. MenuItem[1], TextColor3 = Theme.Text,
+TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 121,
+}, Popup)
+GiveSignal(ItemButton.MouseEnter:Connect(function()
+ItemButton.BackgroundTransparency = 0
+end))
+GiveSignal(ItemButton.MouseLeave:Connect(function()
+ItemButton.BackgroundTransparency = 1
+end))
+GiveSignal(ItemButton.MouseButton1Click:Connect(function()
+CloseMenus()
+local Success, ErrorMessage = pcall(MenuItem[2])
+if not Success then MenuStatus('[menu error] ' .. tostring(ErrorMessage), true) end
+end))
+end
+local function OpenThisMenu()
+if HubUI.OpenMenuPopup == Popup then CloseMenus(); return end
+CloseMenus()
+Popup.Visible = true
+MenuButton.BackgroundTransparency = 0
+HubUI.OpenMenuPopup = Popup
+HubUI.OpenMenuButton = MenuButton
+end
+GiveSignal(MenuButton.MouseButton1Click:Connect(OpenThisMenu))
+GiveSignal(MenuButton.MouseEnter:Connect(function()
+if HubUI.OpenMenuPopup and HubUI.OpenMenuPopup ~= Popup then OpenThisMenu()
+elseif not HubUI.OpenMenuPopup then MenuButton.BackgroundTransparency = 0 end
+end))
+GiveSignal(MenuButton.MouseLeave:Connect(function()
+if HubUI.OpenMenuButton ~= MenuButton then MenuButton.BackgroundTransparency = 1 end
+end))
+MenuX += MenuWidth
+end
+GiveSignal(UserInputService.InputBegan:Connect(function(Input, Processed)
+if not Processed and Input.KeyCode == Enum.KeyCode.Escape then CloseMenus() end
+end))
+end
+
 local Sidebar = New('Frame', {
-Position = UDim2.fromOffset(0, 27),
--- 32 = 30px tab + 1px top/bottom breathing room so tabs never clip.
-Size = UDim2.new(1, 0, 0, 32),
-BackgroundColor3 = Theme.Background,
+Position = UDim2.fromOffset(0, 48),
+Size = UDim2.new(0, 170, 1, -69),
+BackgroundColor3 = Theme.Panel,
 BorderSizePixel = 0,
 ClipsDescendants = true,
 ZIndex = 3,
@@ -22039,19 +22373,19 @@ Font = Enum.Font.Code, Text = '', TextColor3 = Theme.Muted,
 TextSize = 9, Visible = false, ZIndex = 6,
 }, Sidebar)
 local NavList = New('ScrollingFrame', {
-Position = UDim2.fromOffset(1, 0),
-Size = UDim2.new(1, -2, 1, -1),
+Position = UDim2.fromOffset(0, 0),
+Size = UDim2.new(1, 0, 1, 0),
 BackgroundTransparency = 1,
 BorderSizePixel = 0,
 CanvasSize = UDim2.fromOffset(0, 0),
-AutomaticCanvasSize = Enum.AutomaticSize.X,
+AutomaticCanvasSize = Enum.AutomaticSize.Y,
 ScrollBarThickness = 2,
 ScrollBarImageColor3 = Theme.Accent,
-ScrollingDirection = Enum.ScrollingDirection.X,
+ScrollingDirection = Enum.ScrollingDirection.Y,
 ZIndex = 4,
 }, Sidebar)
 local NavLayout = New('UIListLayout', {
-FillDirection = Enum.FillDirection.Horizontal,
+FillDirection = Enum.FillDirection.Vertical,
 HorizontalAlignment = Enum.HorizontalAlignment.Left,
 SortOrder = Enum.SortOrder.LayoutOrder,
 Padding = UDim.new(0, 0),
@@ -22060,14 +22394,47 @@ Padding = UDim.new(0, 0),
 local Content = New('Frame', {
 -- Follows the taller sidebar (27 + 32 + 7 gutter) and keeps the
 -- original 8px bottom margin.
-Position = UDim2.fromOffset(8, 66),
-Size = UDim2.new(1, -16, 1, -74),
-BackgroundColor3 = Theme.Panel,
+Position = UDim2.fromOffset(178, 48),
+Size = UDim2.new(1, -186, 1, -69),
+BackgroundColor3 = Theme.Background,
 BorderSizePixel = 0,
 ClipsDescendants = true,
 ZIndex = 3,
 }, Main)
 DarkStroke(Content)
+
+-- A real command line: keyboard-driven navigation and search, not decoration.
+-- References needed later are kept on HubUI; build-only locals die at this
+-- block boundary instead of occupying registers for the rest of the builder.
+do
+local TerminalBar = New('Frame', {
+Position = UDim2.new(0, 0, 1, -21), Size = UDim2.new(1, 0, 0, 21),
+BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, ZIndex = 12,
+}, Main)
+New('Frame', {
+Position = UDim2.fromOffset(0, 0), Size = UDim2.new(1, 0, 0, 1),
+BackgroundColor3 = Theme.Border, BackgroundTransparency = 0.45,
+BorderSizePixel = 0, ZIndex = 13,
+}, TerminalBar)
+local TerminalStatus = New('TextLabel', {
+Position = UDim2.fromOffset(6, 1), Size = UDim2.fromOffset(170, 19),
+BackgroundTransparency = 1, Font = Enum.Font.Code,
+Text = '[ready]  Dear ImGui Dark', TextColor3 = Theme.Muted, TextSize = 9,
+TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 14,
+}, TerminalBar)
+local TerminalInput = New('TextBox', {
+Position = UDim2.fromOffset(178, 2), Size = UDim2.new(1, -184, 0, 17),
+BackgroundColor3 = Theme.Background, BorderSizePixel = 0, ClearTextOnFocus = false,
+Font = Enum.Font.Code, PlaceholderText = '> command  (help)', PlaceholderColor3 = Theme.Muted,
+Text = '', TextColor3 = Theme.Text, TextSize = 9,
+TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 14,
+}, TerminalBar)
+New('UIPadding', { PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5) }, TerminalInput)
+local TerminalStroke = DarkStroke(TerminalInput)
+HubUI.TerminalStatus = TerminalStatus
+HubUI.TerminalInput = TerminalInput
+HubUI.TerminalStroke = TerminalStroke
+end
 
 local Pages = {}
 Pages.Aim = New('CanvasGroup', {
@@ -22260,12 +22627,7 @@ QuickTravel = 'QUICK TRAVEL  /  DESTINATIONS + PLAYERS',
 Utilities = 'UTILITIES  /  AUTOMATION + SAFETY', Replay = 'REPLAY  /  RECORDING + GHOST', Status = 'STATUS  /  DIAGNOSTICS',
 }
 
--- Tabs are presented strictly A-Z by their visible label. Category labels
--- are invisible zero-size placeholders, so a global sort adds no clutter.
-table.sort(TabDefinitions, function(Left, Right)
-return string.lower(Left.DisplayName or Left.Name)
-< string.lower(Right.DisplayName or Right.Name)
-end)
+-- Dear ImGui tree navigation preserves functional category order.
 local DefaultTabOrder = {}
 for _, Definition in ipairs(TabDefinitions) do table.insert(DefaultTabOrder, Definition.Name) end
 local DefinitionByName = {}
@@ -22299,9 +22661,12 @@ local LayoutOrder = 0
 local function CreateNavCategory(Name)
 local Label = New('TextLabel', {
 Name = 'Category_' .. Name,
-Size = UDim2.fromOffset(0, 0),
-BackgroundTransparency = 1,
-Text = '', Visible = false,
+Size = UDim2.new(1, 0, 0, 20),
+BackgroundColor3 = Theme.Background,
+BackgroundTransparency = 0,
+Font = Enum.Font.Code,
+Text = '  v  ' .. string.upper(Name), TextColor3 = Theme.Muted,
+TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left, Visible = true,
 LayoutOrder = LayoutOrder,
 ZIndex = 4,
 }, NavList)
@@ -22322,24 +22687,24 @@ if not (Button and Button.Parent and Button.Visible) then return end
 task.wait()
 if not (Button.Parent and NavList.Parent) then return end
 
-local CurrentX = NavList.CanvasPosition.X
-local NavLeft = NavList.AbsolutePosition.X
-local NavRight = NavLeft + NavList.AbsoluteSize.X
-local ButtonLeft = Button.AbsolutePosition.X
-local ButtonRight = ButtonLeft + Button.AbsoluteSize.X
-local TargetX = CurrentX
+local CurrentY = NavList.CanvasPosition.Y
+local NavTop = NavList.AbsolutePosition.Y
+local NavBottom = NavTop + NavList.AbsoluteSize.Y
+local ButtonTop = Button.AbsolutePosition.Y
+local ButtonBottom = ButtonTop + Button.AbsoluteSize.Y
+local TargetY = CurrentY
 
 if AlignToStart then
-TargetX = CurrentX + (ButtonLeft - NavLeft)
-elseif ButtonLeft < NavLeft then
-TargetX = CurrentX - (NavLeft - ButtonLeft)
-elseif ButtonRight > NavRight then
-TargetX = CurrentX + (ButtonRight - NavRight)
+TargetY = CurrentY + (ButtonTop - NavTop) - 20
+elseif ButtonTop < NavTop then
+TargetY = CurrentY - (NavTop - ButtonTop)
+elseif ButtonBottom > NavBottom then
+TargetY = CurrentY + (ButtonBottom - NavBottom)
 end
 
-local MaximumX = math.max(0, NavLayout.AbsoluteContentSize.X - NavList.AbsoluteSize.X)
-TargetX = math.clamp(math.floor(TargetX + 0.5), 0, MaximumX)
-Tween(NavList, 0.26, { CanvasPosition = Vector2.new(TargetX, 0) }, Enum.EasingStyle.Sine)
+local MaximumY = math.max(0, NavLayout.AbsoluteContentSize.Y - NavList.AbsoluteSize.Y)
+TargetY = math.clamp(math.floor(TargetY + 0.5), 0, MaximumY)
+Tween(NavList, 0.12, { CanvasPosition = Vector2.new(0, TargetY) }, Enum.EasingStyle.Sine)
 end)
 end
 HubUI.EnsureTabVisible = EnsureTabVisible
@@ -22351,27 +22716,27 @@ local DisplayName = Definition.DisplayName or Name
 local InitiallySelected = Name == HubUI.ActiveTab
 -- Width follows the real advance of Code at 11px (~6.6px per glyph)
 -- plus symmetric padding, so longer labels stop clipping.
-local Width = math.max(58, math.ceil(#DisplayName * 6.6) + 22)
+local Width = 170
 local Button = New('TextButton', {
 Name = 'Tab_' .. Name,
-Size = UDim2.fromOffset(Width, 30),
-BackgroundColor3 = InitiallySelected and Theme.Panel or Theme.Background,
+Size = UDim2.fromOffset(Width, 22),
+BackgroundColor3 = InitiallySelected and Theme.Surface or Theme.Panel,
 BackgroundTransparency = 0,
 BorderSizePixel = 0,
 AutoButtonColor = false,
 Font = Enum.Font.Code,
-Text = DisplayName,
-TextColor3 = InitiallySelected and Theme.Accent or Theme.Muted,
+Text = '      ' .. DisplayName,
+TextColor3 = InitiallySelected and Theme.Text or Theme.Muted,
 TextSize = 11,
-TextXAlignment = Enum.TextXAlignment.Center,
+TextXAlignment = Enum.TextXAlignment.Left,
 LayoutOrder = LayoutOrder,
 ZIndex = 4,
 Selectable = true,
 SelectionOrder = LayoutOrder,
 }, NavList)
 local Marker = New('Frame', {
-Position = UDim2.new(0, 0, 1, -2),
-Size = UDim2.new(1, 0, 0, 2),
+Position = UDim2.new(0, 0, 0, 0),
+Size = UDim2.new(0, 3, 1, 0),
 BackgroundColor3 = Theme.Accent,
 BorderSizePixel = 0,
 BackgroundTransparency = InitiallySelected and 0 or 1,
@@ -22394,30 +22759,74 @@ SearchText = string.lower(DisplayName .. ' ' .. Definition.Search),
 Category = Definition.Category, SearchAnimationSerial = 0, Hovered = false,
 }
 HubUI.TabButtons[Name] = Data
+-- One authoritative painter per row. Hover, tab switches, search restore,
+-- and theme changes all call this instead of racing separate color writers.
+local function RefreshRow()
+local Selected = HubUI.ActiveTab == Name
+if Selected then
+Button.BackgroundColor3 = Theme.SurfaceHover
+Button.TextColor3 = Theme.Text
+elseif Data.Hovered then
+Button.BackgroundColor3 = Theme.Surface
+Button.TextColor3 = Theme.Text
+else
+Button.BackgroundColor3 = Theme.Panel
+Button.TextColor3 = Theme.Muted
+end
+Button.BackgroundTransparency = 0
+Marker.BackgroundColor3 = Theme.Accent
+Marker.BackgroundTransparency = Selected and 0 or 1
+Marker.Size = UDim2.new(0, 3, 1, 0)
+Marker.Position = UDim2.fromOffset(0, 0)
+end
+Data.RefreshRow = RefreshRow
 GiveSignal(Button.MouseButton1Click:Connect(function() SwitchTab(Name) end))
-GiveSignal(Button.MouseEnter:Connect(function()
-if HubUI.ActiveTab ~= Name then
-Data.Hovered = true
-Tween(Button, 0.16, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Theme.AccentBright }, Enum.EasingStyle.Sine)
-Tween(Marker, 0.16, {
-BackgroundTransparency = 0.08,
-Size = UDim2.new(1, 0, 0, 3),
-Position = UDim2.new(0, 0, 1, -3),
-}, Enum.EasingStyle.Sine)
+end
+
+-- TextButton MouseEnter/MouseLeave can arrive out of order while a ScrollingFrame
+-- is moving, leaving two rows in competing hover states. Derive hover directly
+-- from the mouse position instead, so there is exactly one stable hover target.
+local function UpdateNavigationHover(MousePosition)
+local HoveredData = nil
+if NavList and NavList.Parent and MousePosition then
+local ListPosition = NavList.AbsolutePosition
+local ListSize = NavList.AbsoluteSize
+local IsInsideList = MousePosition.X >= ListPosition.X and MousePosition.X < ListPosition.X + ListSize.X
+and MousePosition.Y >= ListPosition.Y and MousePosition.Y < ListPosition.Y + ListSize.Y
+if IsInsideList then
+for _, Candidate in pairs(HubUI.TabButtons) do
+local CandidateButton = Candidate.Button
+if CandidateButton and CandidateButton.Parent and CandidateButton.Visible and CandidateButton.AbsoluteSize.Y > 0 then
+local Position = CandidateButton.AbsolutePosition
+local Size = CandidateButton.AbsoluteSize
+if MousePosition.X >= Position.X and MousePosition.X < Position.X + Size.X
+and MousePosition.Y >= Position.Y and MousePosition.Y < Position.Y + Size.Y then
+HoveredData = Candidate
+break
+end
+end
+end
+end
+end
+for _, Candidate in pairs(HubUI.TabButtons) do
+local IsHovered = Candidate == HoveredData
+if Candidate.Hovered ~= IsHovered then
+Candidate.Hovered = IsHovered
+if Candidate.RefreshRow then Candidate.RefreshRow() end
+end
+end
+end
+HubUI.UpdateNavigationHover = UpdateNavigationHover
+GiveSignal(UserInputService.InputChanged:Connect(function(Input)
+if Input.UserInputType == Enum.UserInputType.MouseMovement then
+UpdateNavigationHover(Vector2.new(Input.Position.X, Input.Position.Y))
 end
 end))
-GiveSignal(Button.MouseLeave:Connect(function()
-if HubUI.ActiveTab ~= Name then
-Data.Hovered = false
-Tween(Button, 0.18, { BackgroundColor3 = Theme.Background, TextColor3 = Theme.Muted }, Enum.EasingStyle.Sine)
-Tween(Marker, 0.16, {
-BackgroundTransparency = 1,
-Size = UDim2.new(1, 0, 0, 2),
-Position = UDim2.new(0, 0, 1, -2),
-}, Enum.EasingStyle.Sine)
-end
+GiveSignal(NavList:GetPropertyChangedSignal('CanvasPosition'):Connect(function()
+task.defer(function()
+if NavList and NavList.Parent then UpdateNavigationHover(UserInputService:GetMouseLocation()) end
+end)
 end))
-end
 
 local PageLabelSerial = 0
 SwitchTab = function(Name)
@@ -22434,7 +22843,7 @@ local PreviousPage = Pages[PreviousName]
 local NextPage = Pages[Name]
 HubUI.ActiveTab = Name
 GlobalEnv.__GOLDEN_EAGLE_UI_TAB = Name
-EnsureTabVisible(Name, true)
+EnsureTabVisible(Name)
 
 PageLabelSerial += 1
 local ThisLabelSerial = PageLabelSerial
@@ -22455,36 +22864,20 @@ end)
 local NextWasVisible = NextPage.Visible
 NextPage.Visible = true
 if not NextWasVisible then
-NextPage.Position = UDim2.fromOffset(10, 0)
-NextPage.GroupTransparency = 1
+NextPage.Position = UDim2.fromOffset(0, 0)
+NextPage.GroupTransparency = 0
 end
 NextPage.Rotation = 0
-Tween(NextPage, 0.28, {
-Position = UDim2.fromOffset(0, 0),
-GroupTransparency = 0,
-Rotation = 0,
-}, Enum.EasingStyle.Sine)
+NextPage.Position = UDim2.fromOffset(0, 0)
+NextPage.GroupTransparency = 0
 if PreviousPage then
-Tween(PreviousPage, 0.22, {
-Position = UDim2.fromOffset(-8, 0),
-GroupTransparency = 1,
-Rotation = 0,
-}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+PreviousPage.Visible = false
+PreviousPage.Position = UDim2.fromOffset(0, 0)
+PreviousPage.GroupTransparency = 1
 end
 
-for TabName, TabData in pairs(HubUI.TabButtons) do
-local Selected = TabName == Name
-local Hovered = TabData.Hovered == true and not Selected
-Tween(TabData.Button, 0.22, {
-BackgroundColor3 = Selected and Theme.Panel or (Hovered and Theme.SurfaceHover or Theme.Background),
-BackgroundTransparency = 0,
-TextColor3 = Selected and Theme.Accent or (Hovered and Theme.AccentBright or Theme.Muted),
-}, Enum.EasingStyle.Sine)
-Tween(TabData.Marker, 0.22, {
-BackgroundTransparency = Selected and 0 or (Hovered and 0.08 or 1),
-Size = UDim2.new(1, 0, 0, Hovered and 3 or 2),
-Position = UDim2.new(0, 0, 1, Hovered and -3 or -2),
-}, Enum.EasingStyle.Sine)
+for _, TabData in pairs(HubUI.TabButtons) do
+if TabData.RefreshRow then TabData.RefreshRow() end
 end
 
 task.delay(InterfaceConfig.ReducedMotion and 0.003 or 0.29 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
@@ -22503,12 +22896,63 @@ SearchBox:ReleaseFocus()
 end
 HubUI.SwitchTab = SwitchTab
 
+do
+local TerminalStatus = HubUI.TerminalStatus
+local TerminalInput = HubUI.TerminalInput
+local TerminalStroke = HubUI.TerminalStroke
+local function SetTerminalStatus(Message, Good)
+TerminalStatus.Text = tostring(Message)
+TerminalStatus.TextColor3 = Good == false and Theme.Bad or Theme.Muted
+end
+GiveSignal(TerminalInput.Focused:Connect(function()
+Tween(TerminalStroke, 0.05, { Color = Theme.Accent, Transparency = 0 })
+end))
+GiveSignal(TerminalInput.FocusLost:Connect(function(EnterPressed)
+Tween(TerminalStroke, 0.05, { Color = Theme.Border, Transparency = 0 })
+if not EnterPressed then return end
+local Raw = tostring(TerminalInput.Text or '')
+TerminalInput.Text = ''
+local Command, Arguments = Raw:match('^%s*(%S+)%s*(.-)%s*$')
+Command = string.lower(Command or '')
+if Command == '' then return end
+if Command == 'help' then
+SetTerminalStatus('goto <tab> | find <text> | theme <name> | close', true)
+elseif Command == 'goto' or Command == 'tab' then
+local Wanted = string.lower(Arguments)
+local Match
+for _, Definition in ipairs(TabDefinitions) do
+if string.lower(Definition.Name) == Wanted or string.lower(Definition.DisplayName or '') == Wanted then Match = Definition.Name break end
+end
+if Match then SwitchTab(Match); SetTerminalStatus('[tab] ' .. Match, true)
+else SetTerminalStatus('[error] unknown tab: ' .. Arguments, false) end
+elseif Command == 'find' or Command == 'search' then
+GlobalSearchBox.Text = Arguments
+GlobalSearchBox:CaptureFocus()
+SetTerminalStatus('[find] ' .. Arguments, true)
+elseif Command == 'theme' then
+local Wanted = string.lower(Arguments)
+local PresetName
+for Name in pairs(ThemePresets) do if string.lower(Name) == Wanted then PresetName = Name break end end
+if PresetName then
+InterfaceConfig.ThemePreset = PresetName
+HubUI.ApplyTheme(ThemePresets[PresetName], true)
+SetTerminalStatus('[theme] ' .. PresetName, true)
+else SetTerminalStatus('[error] unknown theme', false) end
+elseif Command == 'clear' then
+SetTerminalStatus('[ready]  Dear ImGui', true)
+elseif Command == 'close' or Command == 'hide' then
+Main.Visible = false
+else
+SetTerminalStatus('[error] unknown command: ' .. Command, false)
+end
+end))
+end
+
 local CurrentCategory
 for _, Definition in ipairs(TabDefinitions) do
 if Definition.Category ~= CurrentCategory then
 CurrentCategory = Definition.Category
--- A-Z ordering interleaves categories, so only build each
--- placeholder label once.
+-- Build one tree header for each functional category.
 if not CategoryLabels[CurrentCategory] then
 CreateNavCategory(CurrentCategory)
 end
@@ -22520,9 +22964,9 @@ local FirstSearchMatch
 local NavigationSearchSerial = 0
 local CategorySearchSerials = {}
 local function SetCategorySearchVisible(Category, Label, Visible, DelayIndex)
-Label.Visible = false
-Label.Size = UDim2.fromOffset(0, 0)
-return
+Label.Visible = Visible == true
+Label.Size = Visible and UDim2.new(1, 0, 0, 20) or UDim2.fromOffset(0, 0)
+Label.TextTransparency = 0
 end
 local function SetCategorySearchVisibleLegacy(Category, Label, Visible, DelayIndex)
 CategorySearchSerials[Category] = (CategorySearchSerials[Category] or 0) + 1
@@ -22559,26 +23003,22 @@ local Selected = HubUI.ActiveTab == Button.Name:gsub('^Tab_', '')
 if Visible then
 if not Button.Visible then
 Button.Visible = true
-Button.Size = UDim2.new(1, -4, 0, 0)
+Button.Size = UDim2.fromOffset(170, 0)
 Button.TextTransparency = 1
 Button.BackgroundTransparency = 1
 end
 task.delay((InterfaceConfig.ReducedMotion and 0 or math.min(DelayIndex, 7) * 0.014) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
 if Data.SearchAnimationSerial ~= Serial or not Button.Parent then return end
 Tween(Button, 0.18, {
-Size = UDim2.fromOffset(Data.BaseWidth or 68, 28),
+Size = UDim2.fromOffset(170, 22),
 TextTransparency = 0,
 BackgroundTransparency = 0,
 }, Enum.EasingStyle.Quart)
-Tween(Data.Marker, 0.16, {
-BackgroundTransparency = Selected and 0 or 1,
-Size = UDim2.new(1, 0, 0, 2),
-Position = UDim2.new(0, 0, 1, -2),
-}, Enum.EasingStyle.Quint)
+if Data.RefreshRow then Data.RefreshRow() end
 end)
 elseif Button.Visible then
 Tween(Button, 0.11, {
-Size = UDim2.new(1, -4, 0, 0),
+Size = UDim2.fromOffset(170, 0),
 TextTransparency = 1,
 BackgroundTransparency = 1,
 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
@@ -22751,15 +23191,18 @@ HubUI.CycleTab = CycleTab
 
 HubUI.TextGradients = HubUI.TextGradients or {}
 local function ApplyThemedTextGradient(TextObject, Midpoint)
+-- Dear ImGui / terminal styling: text is flat, never a shimmering gradient.
+-- A neutral white gradient is still attached so any existing refresh code that
+-- touches these objects keeps working, but the label's own TextColor3 wins.
 local Gradient = New('UIGradient', {
-Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Theme.Accent),
-ColorSequenceKeypoint.new(0.50, Midpoint or Theme.AccentBright),
-ColorSequenceKeypoint.new(1.00, Theme.Accent),
-}),
+__SkipThemeBinding = true,
+Color = ColorSequence.new(Color3.new(1, 1, 1)),
 Rotation = 0,
 }, TextObject)
-table.insert(HubUI.TextGradients, Gradient)
+local FlatColor = Midpoint or Theme.Text
+pcall(function() TextObject.TextColor3 = FlatColor end)
+local Role = ResolveThemeRole(FlatColor) or 'Text'
+table.insert(HubUI.ThemeBindings, { Object = TextObject, Property = 'TextColor3', Role = Role })
 return Gradient
 end
 
@@ -22776,6 +23219,7 @@ BorderSizePixel = 0,
 ZIndex = 4,
 }, Parent)
 local PanelGradient = New('UIGradient', {
+Enabled = false,
 Color = ColorSequence.new({
 ColorSequenceKeypoint.new(0.00, Theme.Panel),
 ColorSequenceKeypoint.new(0.45, Theme.Panel:Lerp(Theme.Accent, 0.26)),
@@ -22789,32 +23233,39 @@ table.insert(HubUI.GroupGradients, PanelGradient)
 local GroupStroke = DarkStroke(Group)
 GroupStroke.Transparency = 0
 
-local TitleWidth = math.max(58, #Name * 6 + 12)
+-- ImGui collapsing-header style: a full width header bar with a hard 1px rule.
 local TitleBack = New('Frame', {
-Position = UDim2.fromOffset(7, -1),
-Size = UDim2.fromOffset(TitleWidth, 12),
-BackgroundColor3 = Theme.Panel,
-BackgroundTransparency = 0.10,
+Position = UDim2.fromOffset(0, 0),
+Size = UDim2.new(1, 0, 0, 14),
+BackgroundColor3 = Theme.Surface,
+BackgroundTransparency = 0,
 BorderSizePixel = 0,
 ZIndex = 7,
 }, Group)
+New('Frame', {
+Position = UDim2.new(0, 0, 1, 0),
+Size = UDim2.new(1, 0, 0, 1),
+BackgroundColor3 = Theme.Border,
+BorderSizePixel = 0,
+ZIndex = 8,
+}, TitleBack)
 local Title = New('TextLabel', {
-Position = UDim2.fromOffset(4, -1),
-Size = UDim2.new(1, -8, 1, 0),
+Position = UDim2.fromOffset(5, 0),
+Size = UDim2.new(1, -10, 1, 0),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = Name,
+Text = '[-] ' .. string.upper(Name),
 TextColor3 = Color3.new(1, 1, 1),
 __SkipThemeBinding = true,
 TextSize = 10,
 TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 8,
 }, TitleBack)
-ApplyThemedTextGradient(Title)
+ApplyThemedTextGradient(Title, Theme.Text)
 local Body = New('Frame', {
 Name = 'Content',
-Position = UDim2.fromOffset(0, 10),
-Size = UDim2.new(1, 0, 1, -10),
+Position = UDim2.fromOffset(0, 15),
+Size = UDim2.new(1, 0, 1, -15),
 BackgroundTransparency = 1,
 BorderSizePixel = 0,
 ClipsDescendants = true,
@@ -22831,19 +23282,20 @@ return Body
 end
 
 local function CreateSectionHeader(Parent, Y, Text)
+local HeaderText = string.upper(tostring(Text))
 local Label = New('TextLabel', {
 Position = UDim2.fromOffset(8, Y),
 Size = UDim2.new(1, -16, 0, 13),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = Text,
+Text = '-- ' .. HeaderText .. ' ' .. string.rep('-', math.max(4, 34 - #HeaderText)),
 TextColor3 = Color3.new(1, 1, 1),
 __SkipThemeBinding = true,
 TextSize = 8,
 TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 6,
 }, Parent)
-ApplyThemedTextGradient(Label, Theme.Text)
+ApplyThemedTextGradient(Label, Theme.Muted)
 New('Frame', {
 Position = UDim2.fromOffset(8, Y + 14),
 Size = UDim2.new(1, -16, 0, 1),
@@ -22906,7 +23358,7 @@ local StaticGradientLayer = New('Frame', {
 __SkipThemeBinding = true,
 Name = 'StaticBlackGoldGradient', Size = UDim2.fromScale(1, 1),
 -- Visible themed backdrop beneath the now-translucent feature panels.
-BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.05,
+BackgroundColor3 = Theme.Background, BackgroundTransparency = 0.10,
 BorderSizePixel = 0, Active = false, Visible = true, ZIndex = 2,
 }, Main)
 local BackgroundGradient = New('UIGradient', {
@@ -22916,8 +23368,9 @@ ColorSequenceKeypoint.new(0.28, Theme.Panel:Lerp(Theme.Accent, 0.22)),
 ColorSequenceKeypoint.new(0.50, Theme.Panel:Lerp(Theme.AccentBright, 0.55)),
 ColorSequenceKeypoint.new(0.72, Theme.Panel:Lerp(Theme.Accent, 0.22)),
 ColorSequenceKeypoint.new(1.00, Color3.fromRGB(2, 2, 2)),
-}), Rotation = 18, Offset = Vector2.zero,
+}), Rotation = 18, Offset = Vector2.zero, Enabled = false,
 }, StaticGradientLayer)
+HubUI.StaticBackdrop = StaticGradientLayer
 
 local function CreateCheckbox(Parent, Y, Label, InitialValue, Callback)
 local OriginalCheckboxCallback = Callback
@@ -22940,7 +23393,7 @@ local Track = New('Frame', {
 AnchorPoint = Vector2.new(0, 0.5),
 Position = UDim2.new(0, 0, 0.5, 0),
 Size = UDim2.fromOffset(13, 13),
-BackgroundColor3 = Theme.Background,
+BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
 ZIndex = 6,
 }, Button)
@@ -22972,7 +23425,7 @@ local KeyButton = New('TextButton', {
 AnchorPoint = Vector2.new(1, 0),
 Position = UDim2.new(1, -6, 0, Y + 1),
 Size = UDim2.fromOffset(43, 16),
-BackgroundColor3 = Theme.Background,
+BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
 AutoButtonColor = false,
 Font = Enum.Font.Code,
@@ -22995,10 +23448,10 @@ KeyButton = KeyButton,
 }
 function Control:RefreshTheme()
 LabelObject.TextColor3 = Theme.Text
-Track.BackgroundColor3 = Theme.Background
+Track.BackgroundColor3 = Theme.Surface
 TrackStroke.Color = Theme.Border
 Knob.BackgroundColor3 = Theme.Accent
-KeyButton.BackgroundColor3 = Theme.Background
+KeyButton.BackgroundColor3 = Theme.Surface
 KeyStroke.Color = Theme.Border
 end
 function Control:Set(Value, FireCallback)
@@ -23007,7 +23460,7 @@ Control.AnimationSerial += 1
 Control.Value = Value
 Tween(Knob, 0.16, {
 Size = Value and UDim2.fromOffset(9, 9) or UDim2.fromOffset(0, 0),
-Rotation = Value and 0 or 45,
+Rotation = 0,
 BackgroundColor3 = Theme.Accent,
 }, Value and Enum.EasingStyle.Quint or Enum.EasingStyle.Quad,
 Value and Enum.EasingDirection.Out or Enum.EasingDirection.In)
@@ -23031,7 +23484,7 @@ Tween(KeyButton, 0.1, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Them
 Tween(KeyStroke, 0.1, { Color = Theme.Accent })
 end))
 GiveSignal(KeyButton.MouseLeave:Connect(function()
-Tween(KeyButton, 0.1, { BackgroundColor3 = Theme.Background, TextColor3 = Theme.Muted })
+Tween(KeyButton, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Muted })
 Tween(KeyStroke, 0.1, { Color = Theme.Border })
 end))
 return Control
@@ -23057,7 +23510,7 @@ local Container = New('Frame', {
 AnchorPoint = Vector2.new(1, 0),
 Position = UDim2.new(1, -8, 0, Y),
 Size = UDim2.fromOffset(ButtonWidth, 20),
-BackgroundColor3 = Theme.Background,
+BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
 ZIndex = 6,
 }, Parent)
@@ -23085,7 +23538,7 @@ KeyButton = New('TextButton', {
 AnchorPoint = Vector2.new(1, 0),
 Position = UDim2.new(1, -ButtonWidth - 14, 0, Y + 2),
 Size = UDim2.fromOffset(42, 16),
-BackgroundColor3 = Theme.Background,
+BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0, AutoButtonColor = false, Font = Enum.Font.Code,
 Text = '  ', TextColor3 = Theme.Muted, TextSize = 8, ZIndex = 8,
 }, Parent)
@@ -23095,7 +23548,7 @@ Tween(KeyButton, 0.1, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Them
 Tween(KeyStroke, 0.1, { Color = Theme.Accent })
 end))
 GiveSignal(KeyButton.MouseLeave:Connect(function()
-Tween(KeyButton, 0.1, { BackgroundColor3 = Theme.Background, TextColor3 = Theme.Muted })
+Tween(KeyButton, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Muted })
 Tween(KeyStroke, 0.1, { Color = Theme.Border })
 end))
 end
@@ -23126,7 +23579,7 @@ GiveSignal(Container.InputChanged:Connect(function(Input)
 if Input.UserInputType == Enum.UserInputType.MouseWheel then Control:Step(Input.Position.Z > 0 and -1 or 1) end
 end))
 local function SetHover(Value)
-Tween(Container, 0.1, { BackgroundColor3 = Value and Theme.SurfaceHover or Theme.Background })
+Tween(Container, 0.1, { BackgroundColor3 = Value and Theme.SurfaceHover or Theme.Surface })
 Tween(ContainerStroke, 0.1, { Color = Value and Theme.Accent or Theme.Border })
 Tween(LabelObject, 0.1, { TextColor3 = Value and Theme.AccentBright or Theme.Text })
 PreviousButton.TextColor3 = Value and Theme.Text or Theme.Muted
@@ -23157,7 +23610,7 @@ local Button = New('TextButton', {
 AnchorPoint = Vector2.new(1, 0),
 Position = UDim2.new(1, -8, 0, Y),
 Size = UDim2.fromOffset(ButtonWidth, 23),
-BackgroundColor3 = Theme.Background,
+BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
 AutoButtonColor = false,
 Font = Enum.Font.Code,
@@ -23191,7 +23644,7 @@ BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
 ClearTextOnFocus = false,
 Font = Enum.Font.Code,
-PlaceholderText = 'Filter options...',
+PlaceholderText = '> filter...',
 PlaceholderColor3 = Theme.Muted,
 Text = '',
 TextColor3 = Theme.Text,
@@ -23252,7 +23705,7 @@ local Serial = Control.AnimationSerial
 Control.Open = false
 Button.Text = tostring(Control.Value) .. '      v'
 DropdownSearch:ReleaseFocus()
-Tween(Button, 0.18, { BackgroundColor3 = Theme.Background }, Enum.EasingStyle.Sine)
+Tween(Button, 0.18, { BackgroundColor3 = Theme.Surface }, Enum.EasingStyle.Sine)
 Tween(Popup, 0.18, {
 GroupTransparency = 1,
 Position = Popup.Position + UDim2.fromOffset(0, -2),
@@ -23397,7 +23850,7 @@ Tween(Button, 0.1, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Theme.A
 Tween(DropdownStroke, 0.1, { Color = Theme.Accent })
 end))
 GiveSignal(Button.MouseLeave:Connect(function()
-Tween(Button, 0.1, { BackgroundColor3 = Theme.Background, TextColor3 = Theme.Text })
+Tween(Button, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Text })
 Tween(DropdownStroke, 0.1, { Color = Theme.Border })
 end))
 RebuildFilter()
@@ -23423,7 +23876,7 @@ local Container = New('Frame', {
 AnchorPoint = Vector2.new(1, 0),
 Position = UDim2.new(1, -8, 0, Y),
 Size = UDim2.fromOffset(108, 21),
-BackgroundColor3 = Theme.Background,
+BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
 Active = true,
 ZIndex = 6,
@@ -23660,7 +24113,7 @@ Tween(TrackStroke, 0.1, { Color = Theme.Accent })
 if not Control.Dragging then Knob.Size = UDim2.fromOffset(0, 0) end
 end))
 GiveSignal(Hitbox.MouseLeave:Connect(function()
-Tween(Container, 0.1, { BackgroundColor3 = Theme.Background })
+Tween(Container, 0.1, { BackgroundColor3 = Theme.Surface })
 Tween(ContainerStroke, 0.1, { Color = Theme.Border })
 Tween(TrackStroke, 0.1, { Color = Theme.Border })
 if not Control.Dragging then Knob.Size = UDim2.fromOffset(0, 0) end
@@ -25048,7 +25501,7 @@ TextColor3 = Theme.Text, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Lef
 New('TextLabel', {
 Position = UDim2.fromOffset(14, 35), Size = UDim2.new(1, -28, 0, 30),
 BackgroundTransparency = 1, Font = Enum.Font.Code,
-Text = 'Save effects by name, cycle them later, then load and use without pasting again.',
+Text = 'Extract a selected game effect, edit/copy its raw source, or build and save custom Lua.',
 TextWrapped = true, TextColor3 = Theme.Muted, TextSize = 9,
 TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 342,
 }, CustomGoalCard)
@@ -25095,9 +25548,17 @@ local CustomGoalPresetLoad = CreateCustomGoalButton(UDim2.fromOffset(246, 70), U
 local CustomGoalPresetNext = CreateCustomGoalButton(UDim2.fromOffset(323, 70), UDim2.fromOffset(28, 25), '>')
 local CustomGoalPresetSave = CreateCustomGoalButton(UDim2.fromOffset(358, 70), UDim2.fromOffset(70, 25), 'SAVE')
 local CustomGoalPresetDelete = CreateCustomGoalButton(UDim2.fromOffset(435, 70), UDim2.fromOffset(71, 25), 'DELETE')
-local CustomGoalSave = CreateCustomGoalButton(UDim2.fromOffset(14, 408), UDim2.fromOffset(200, 28), 'SAVE SOURCE & USE')
-local CustomGoalTest = CreateCustomGoalButton(UDim2.fromOffset(221, 408), UDim2.fromOffset(150, 28), 'TEST ON PLAYER')
-local CustomGoalClose = CreateCustomGoalButton(UDim2.fromOffset(378, 408), UDim2.fromOffset(128, 28), 'CLOSE')
+local CustomGoalSave = CreateCustomGoalButton(UDim2.fromOffset(14, 408), UDim2.fromOffset(105, 28), 'SAVE & USE')
+local CustomGoalTest = CreateCustomGoalButton(UDim2.fromOffset(126, 408), UDim2.fromOffset(78, 28), 'TEST')
+local CustomGoalExtract = CreateCustomGoalButton(UDim2.fromOffset(211, 408), UDim2.fromOffset(116, 28), 'EXTRACT GAME SRC')
+local CustomGoalCopy = CreateCustomGoalButton(UDim2.fromOffset(334, 408), UDim2.fromOffset(82, 28), 'COPY SRC')
+local CustomGoalClose = CreateCustomGoalButton(UDim2.fromOffset(423, 408), UDim2.fromOffset(83, 28), 'CLOSE')
+CustomGoalSave.TextSize = 8
+CustomGoalTest.TextSize = 8
+CustomGoalExtract.TextSize = 8
+CustomGoalCopy.TextSize = 8
+CustomGoalClose.TextSize = 8
+local ExtractedGoalSourceName = nil
 local CustomGoalAnimationSerial = 0
 local function SetCustomGoalEditorVisible(Value)
 CustomGoalAnimationSerial += 1
@@ -25223,6 +25684,62 @@ if EnterPressed then LoadNamedGoalPreset(CustomGoalPresetName.Text, true) end
 end))
 GiveSignal(CustomGoalEditorButton.MouseButton1Click:Connect(function() SetCustomGoalEditorVisible(true) end))
 GiveSignal(CustomGoalClose.MouseButton1Click:Connect(function() SetCustomGoalEditorVisible(false) end))
+GiveSignal(CustomGoalExtract.MouseButton1Click:Connect(function()
+local Selected = tostring(State.LocalGoalEffect or '')
+CustomGoalStatus.Text = 'EXTRACTING  /  '..string.upper(Selected)
+CustomGoalStatus.TextColor3 = Theme.Muted
+task.spawn(function()
+local Source, SourceName, ExtractError = State.LocalSpoofs.ExtractGoalEffectSource(Selected)
+if not (CustomGoalOverlay and CustomGoalOverlay.Parent) then return end
+if not Source then
+CustomGoalStatus.Text = 'EXTRACT ERROR: '..tostring(ExtractError)
+CustomGoalStatus.TextColor3 = Theme.Bad
+return
+end
+ExtractedGoalSourceName = SourceName or Selected
+CustomGoalCodeBox.Text = Source
+CustomGoalPresetName.Text = HubUI.SanitizeCustomGoalPresetName('Extracted '..Selected)
+CustomGoalStatus.Text = 'EXTRACTED  /  EDIT RAW SOURCE OR COPY IT'
+CustomGoalStatus.TextColor3 = Theme.Success
+end)
+end))
+GiveSignal(CustomGoalCopy.MouseButton1Click:Connect(function()
+local Source = tostring(CustomGoalCodeBox.Text or '')
+if Source == '' then
+CustomGoalStatus.Text = 'NOTHING TO COPY'
+CustomGoalStatus.TextColor3 = Theme.Bad
+return
+end
+local Clipboard = type(GlobalEnv.setclipboard) == 'function' and GlobalEnv.setclipboard
+or (type(setclipboard) == 'function' and setclipboard)
+or (type(GlobalEnv.toclipboard) == 'function' and GlobalEnv.toclipboard)
+if type(Clipboard) == 'function' then
+local Ok, CopyError = pcall(Clipboard, Source)
+if Ok then
+CustomGoalStatus.Text = 'COPIED SOURCE  /  '..string.upper(tostring(ExtractedGoalSourceName or 'EDITOR'))
+CustomGoalStatus.TextColor3 = Theme.Success
+else
+CustomGoalStatus.Text = 'COPY ERROR: '..tostring(CopyError)
+CustomGoalStatus.TextColor3 = Theme.Bad
+end
+return
+end
+if type(writefile) == 'function' then
+local FileName = HubUI.SanitizeCustomGoalPresetName(ExtractedGoalSourceName or State.LocalGoalEffect):gsub('%s+', '_')
+if FileName == '' then FileName = 'GoalEffect' end
+local Ok, FileError = pcall(writefile, 'GoldenEagleHub_Extracted_'..FileName..'.lua', Source)
+if Ok then
+CustomGoalStatus.Text = 'CLIPBOARD UNAVAILABLE  /  SOURCE SAVED TO FILE'
+CustomGoalStatus.TextColor3 = Theme.Success
+else
+CustomGoalStatus.Text = 'COPY ERROR: '..tostring(FileError)
+CustomGoalStatus.TextColor3 = Theme.Bad
+end
+else
+CustomGoalStatus.Text = 'CLIPBOARD IS UNAVAILABLE IN THIS EXECUTOR'
+CustomGoalStatus.TextColor3 = Theme.Bad
+end
+end))
 GiveSignal(CustomGoalSave.MouseButton1Click:Connect(function()
 local EffectFunction = CompileEditorSource()
 if not EffectFunction then return end
@@ -25233,13 +25750,18 @@ local EffectFunction = CompileEditorSource()
 if not EffectFunction then return end
 local Character = LP.Character
 local PreviewGoal = Character and (Character:FindFirstChild('HumanoidRootPart') or Character.PrimaryPart)
-local Ok, ErrorText = pcall(EffectFunction, {
-Scorer = LP, Court = nil, Goal = PreviewGoal,
-TweenService = TweenService, Debris = Debris,
-Lighting = Lighting, Workspace = Workspace, Arguments = table.pack(),
-})
+local OldConfigSource = CONFIG.CustomGoalEffectLua
+local OldRuntimeSource = State.LocalSpoofs.CustomGoalSource
+local OldRuntimeFunction = State.LocalSpoofs.CustomGoalFunction
+CONFIG.CustomGoalEffectLua = CustomGoalCodeBox.Text
+State.LocalSpoofs.CustomGoalSource = CustomGoalCodeBox.Text
+State.LocalSpoofs.CustomGoalFunction = EffectFunction
+local Ok, ErrorText = pcall(State.LocalSpoofs.RunCustomGoalEffect, LP, nil, PreviewGoal)
+CONFIG.CustomGoalEffectLua = OldConfigSource
+State.LocalSpoofs.CustomGoalSource = OldRuntimeSource
+State.LocalSpoofs.CustomGoalFunction = OldRuntimeFunction
 if Ok then
-CustomGoalStatus.Text = 'PREVIEW PLAYED ON YOUR CHARACTER'
+CustomGoalStatus.Text = 'PREVIEW STARTED ON YOUR CHARACTER'
 CustomGoalStatus.TextColor3 = Theme.Success
 else
 CustomGoalStatus.Text = 'RUNTIME ERROR: '..tostring(ErrorText)
@@ -26664,56 +27186,66 @@ CONFIG.AutoGuardStyle = Value
 end,
 150
 )
+HubUI.Controls.AutoGuardNoJump = CreateCheckbox(
+GuardGroup, 113, 'No auto jump (stay grounded)',
+CONFIG.AutoGuardNoJump,
+function(Value) CONFIG.AutoGuardNoJump = Value end
+)
+HubUI.Controls.AutoGuardBallCheckOnly = CreateCheckbox(
+GuardGroup, 143, 'Guard only when opponent has ball',
+CONFIG.AutoGuardBallCheckOnly,
+function(Value) CONFIG.AutoGuardBallCheckOnly = Value end
+)
 
-CreateSectionHeader(GuardGroup, 123, 'Defense preset')
+CreateSectionHeader(GuardGroup, 183, 'Defense preset')
 HubUI.Controls.AutoDefense = CreateCheckbox(
-GuardGroup, 143, 'Auto Defense', State.AutoDefense.Enabled,
+GuardGroup, 203, 'Auto Defense', State.AutoDefense.Enabled,
 function(Value) State.AutoDefense.SetEnabled(Value) end
 )
 HubUI.Controls.AutoDefenseNoclip = CreateCheckbox(
-GuardGroup, 173, 'Defense auto Noclip', CONFIG.AutoDefenseNoclip,
+GuardGroup, 233, 'Defense auto Noclip', CONFIG.AutoDefenseNoclip,
 function(Value)
 CONFIG.AutoDefenseNoclip = Value
 if State.AutoDefense.Enabled then State.Movement.SetNoclip(Value) end
 end
 )
 
-CreateSectionHeader(GuardGroup, 205, 'Off-ball Head Ride')
+CreateSectionHeader(GuardGroup, 265, 'Off-ball Head Ride')
 HubUI.Controls.AutoHeadRide = CreateCheckbox(
-GuardGroup, 225, 'Head ride in close range',
+GuardGroup, 285, 'Head ride in close range',
 State.AutoHeadRide.Enabled,
 function(Value) State.AutoHeadRide.SetEnabled(Value, true) end
 )
 HubUI.Controls.AutoHeadRideAutoJump = CreateCheckbox(
-GuardGroup, 255, 'Auto mount jump',
+GuardGroup, 315, 'Auto mount jump',
 CONFIG.AutoHeadRideAutoJump,
 function(Value) CONFIG.AutoHeadRideAutoJump = Value end
 )
 HubUI.Controls.AutoHeadRideManualOverride = CreateCheckbox(
-GuardGroup, 285, 'Manual movement override',
+GuardGroup, 345, 'Manual movement override',
 CONFIG.AutoHeadRideManualOverride,
 function(Value) CONFIG.AutoHeadRideManualOverride = Value end
 )
 HubUI.Controls.AutoHeadRideEngageRange = CreateNumberInput(
-GuardGroup, 315, 'Head ride engage range',
+GuardGroup, 375, 'Head ride engage range',
 CONFIG.AutoHeadRideEngageRange, 2, 10, 1,
 function(Value) CONFIG.AutoHeadRideEngageRange = Value end
 )
 HubUI.Controls.AutoHeadRideFollowDistance = CreateNumberInput(
-GuardGroup, 345, 'Mounted follow distance',
+GuardGroup, 405, 'Mounted follow distance',
 CONFIG.AutoHeadRideFollowDistance, 1, 12, 1,
 function(Value) CONFIG.AutoHeadRideFollowDistance = Value end
 )
 HubUI.Controls.AutoHeadRideMountSmoothness = CreateNumberInput(
-GuardGroup, 375, 'Mount smoothness',
+GuardGroup, 435, 'Mount smoothness',
 CONFIG.AutoHeadRideMountSmoothness, 1, 35, 0,
 function(Value) CONFIG.AutoHeadRideMountSmoothness = Value end
 )
 
-CreateSectionHeader(GuardGroup, 407, 'Head Ride status')
+CreateSectionHeader(GuardGroup, 467, 'Head Ride status')
 HubUI.AutoHeadRideStatusText = CreateParagraph(
 GuardGroup,
-UDim2.fromOffset(8, 427),
+UDim2.fromOffset(8, 487),
 UDim2.new(1, -16, 0, 52),
 'STATUS  OFF\nTARGET  --\nDIST    --'
 )
@@ -29268,8 +29800,8 @@ ApplyGlobalSettingSearch()
 end))
 GiveSignal(GlobalSearchBox.FocusLost:Connect(function(EnterPressed)
 Tween(GlobalSearchBox, 0.14, {
-Position = UDim2.fromOffset(218, 3),
-Size = UDim2.fromOffset(322, 21),
+Position = UDim2.fromOffset(409, 3),
+Size = UDim2.fromOffset(312, 21),
 BackgroundColor3 = Theme.Surface,
 })
 Tween(GlobalSearchStroke, 0.14, { Color = Theme.Border, Transparency = 0.28, Thickness = 1 })
@@ -29329,6 +29861,8 @@ State.Movement.BodyColliderIncludeSelf },
 { HubUI.Controls.AutoOffenseEdgeRoom, CONFIG.AutoOffenseEdgeRoom },
 { HubUI.Controls.AutoOffenseSpotUrgency, CONFIG.AutoOffenseSpotUrgency },
 { HubUI.Controls.AutoGuard, State.AutoGuardEnabled },
+{ HubUI.Controls.AutoGuardNoJump, CONFIG.AutoGuardNoJump },
+{ HubUI.Controls.AutoGuardBallCheckOnly, CONFIG.AutoGuardBallCheckOnly },
 { HubUI.Controls.AutoDefense, State.AutoDefense.Enabled },
 { HubUI.Controls.AutoDefenseNoclip, CONFIG.AutoDefenseNoclip },
 { HubUI.Controls.AutoHeadRide, State.AutoHeadRide.Enabled },
@@ -30914,10 +31448,12 @@ Dragging = false
 end
 end))
 
-local LastStatsAt = 0
-local LastGradientAt = 0
-local LastControlSyncAt = 0
-local LastViewport = Vector2.zero
+-- Keep render-loop state on HubUI instead of allocating more builder locals.
+-- This function is near Luau's 200-local register cap after constructing every UI control.
+HubUI.LastStatsAt = 0
+HubUI.LastGradientAt = 0
+HubUI.LastControlSyncAt = 0
+HubUI.LastViewport = Vector2.zero
 GiveSignal(RunService.RenderStepped:Connect(WYNF_JIT(function()
 if not (State.Active and Main.Parent) then return end
 if HubUI.RenderFailed then return end
@@ -30961,8 +31497,8 @@ IntroStrokeGradient.Offset = MotionEnabled and Vector2.new(math.sin(Now * 1.8) *
 IntroFillGradient.Offset = MotionEnabled and Vector2.new(math.sin(Now * 2.1) * 0.45, 0) or Vector2.zero
 end
 
-if Now - LastGradientAt >= 0.08 then
-LastGradientAt = Now
+if Now - HubUI.LastGradientAt >= 0.08 then
+HubUI.LastGradientAt = Now
 if PrismActive then
 local RainbowPhase = MotionEnabled and ((Now * GradientSpeed * 0.10) % 1) or 0
 local function Rainbow(Offset, Value)
@@ -31081,15 +31617,15 @@ GlobalSearchStroke.Thickness = GlobalSearchBox:IsFocused() and 1.5 or 1
 end
 
 local Camera = Workspace.CurrentCamera
-if Camera and Camera.ViewportSize ~= LastViewport then
-LastViewport = Camera.ViewportSize
+if Camera and Camera.ViewportSize ~= HubUI.LastViewport then
+HubUI.LastViewport = Camera.ViewportSize
 HubUI.FitScale = CalculateFitScale()
 MainScale.Scale = EffectiveScale() * (HubUI.Open and 1 or 0.95)
 ClampWindowToViewport()
 SaveWindowPosition()
 end
-if Now - LastStatsAt < 0.2 then return end
-LastStatsAt = Now
+if Now - HubUI.LastStatsAt < 0.2 then return end
+HubUI.LastStatsAt = Now
 if Now - State.Watch.LastRefresh >= 1 then
 State.Watch.RefreshOptions()
 if HubUI.Controls.WatchCourt and not HubUI.Controls.WatchCourt.Open then
@@ -31116,8 +31652,8 @@ and not HubUI.Controls.QuickTravelPlayer.Open then
 HubUI.Controls.QuickTravelPlayer:RefreshOptions(nil, CONFIG.QuickTravelPlayer)
 end
 end
-if Now - LastControlSyncAt >= 0.5 then
-LastControlSyncAt = Now
+if Now - HubUI.LastControlSyncAt >= 0.5 then
+HubUI.LastControlSyncAt = Now
 HubUI.Sync()
 end
 QuickTravelStatusText.Text = string.format(
