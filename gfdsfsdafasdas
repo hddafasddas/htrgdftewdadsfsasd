@@ -22372,23 +22372,23 @@ function State.BuildSilentAimHub()
 local HttpService = game:GetService('HttpService')
 local InterfaceFile = 'GoldenEagleHub_Interface.json'
 local InterfaceDefaults = {
-Version = 5,
-ThemePreset = 'Dear ImGui Dark',
+Version = 7,
+ThemePreset = 'Linoria',
 Theme = {
--- Dear ImGui StyleColorsDark mapped to opaque Roblox colors.
-Background = '#0F0F0F', -- WindowBg (0.06, 0.06, 0.06)
-Panel = '#141414',      -- PopupBg (0.08, 0.08, 0.08)
-Surface = '#1D2F4A',    -- FrameBg composited over WindowBg
-SurfaceHover = '#2A5E9D',
-Border = '#6E6E80',     -- Border RGB; stroke transparency supplies alpha
-Text = '#FFFFFF',
-Muted = '#808080',
-Off = '#181818',
-Bad = '#FF4A4A',
-Success = '#3ECC73',
-Warning = '#FFD34E',
-Accent = '#4296FA',     -- official (0.26, 0.59, 0.98)
-AccentBright = '#54A3FF',
+-- Linoria-inspired charcoal hierarchy with Golden Eagle accents.
+Background = '#080808',
+Panel = '#101010',
+Surface = '#191919',
+SurfaceHover = '#272319',
+Border = '#363636',
+Text = '#F4F4F4',
+Muted = '#9A9A9A',
+Off = '#202020',
+Bad = '#E45A62',
+Success = '#63C58A',
+Warning = '#D9B64B',
+Accent = '#D4AF37',
+AccentBright = '#FFE27A',
 },
 Scale = 1,
 WindowTransparency = 0,
@@ -22836,7 +22836,13 @@ end
 
 local InterfaceConfig = DeepCopy(InterfaceDefaults)
 local function NormalizeInterfaceConfig()
+local LoadedVersion = tonumber(InterfaceConfig.Version) or 0
 InterfaceConfig.Version = InterfaceDefaults.Version
+if LoadedVersion < 7 then
+InterfaceConfig.ThemePreset = 'Linoria'
+InterfaceConfig.Theme = DeepCopy(ThemePresets.Linoria)
+InterfaceConfig.Font = 'Code'
+end
 InterfaceConfig.Scale = math.clamp(tonumber(InterfaceConfig.Scale) or 1, 0.65, 1.35)
 InterfaceConfig.WindowTransparency = math.clamp(tonumber(InterfaceConfig.WindowTransparency) or 0, 0, 0.65)
 InterfaceConfig.AnimationSpeed = math.clamp(tonumber(InterfaceConfig.AnimationSpeed) or 1, 0.25, 3)
@@ -22956,7 +22962,9 @@ and tonumber(Properties.TextSize) then
 Object.TextSize = math.max(8, tonumber(Properties.TextSize))
 end
 Object.Parent = Parent
-if ClassName == 'UICorner' then Object.CornerRadius = UDim.new(0, 0) end
+if ClassName == 'UICorner' and Properties.CornerRadius == nil then
+Object.CornerRadius = UDim.new(0, 0)
+end
 for Property, Value in pairs(Properties) do
 if string.sub(tostring(Property), 1, 2) ~= '__' then
 local Role = not SkipThemeBinding and ResolveThemeRole(Value) or nil
@@ -23078,6 +23086,48 @@ end
 
 HubUI.ActiveTweens = setmetatable({}, { __mode = 'k' })
 
+-- ===== LINORIA MOTION SYSTEM =====
+-- Five duration tokens and one easing voice replace per-widget timing drift.
+HubUI.Motion = {
+Duration = { Micro = 0.10, Fast = 0.14, Base = 0.20, Slow = 0.28, Panel = 0.38 },
+Scale = { 0.10, 0.14, 0.20, 0.28, 0.38 },
+Movement = { Position = true, Rotation = true, Scale = true, Size = true, CanvasPosition = true },
+PressScale = 0.975, IconPressScale = 0.96,
+StaggerStep = 0.028, StaggerCap = 8,
+}
+function HubUI.Motion.Speed()
+return math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1)
+end
+function HubUI.Motion.Snap(Value)
+local Best, Distance = HubUI.Motion.Scale[1], math.huge
+for _, Token in ipairs(HubUI.Motion.Scale) do
+local Candidate = math.abs(Token - Value)
+if Candidate < Distance then Best, Distance = Token, Candidate end
+end
+return Best
+end
+function HubUI.Motion.Resolve(Duration, Style, Direction)
+local Raw = math.max(0.001, tonumber(Duration) or HubUI.Motion.Duration.Base)
+if Style == Enum.EasingStyle.Linear then
+return Raw, Enum.EasingStyle.Linear, Enum.EasingDirection.Out
+end
+local Exiting = Direction == Enum.EasingDirection.In
+local Resolved = Raw > HubUI.Motion.Duration.Panel and math.min(Raw, 0.50)
+or HubUI.Motion.Snap(Raw)
+if Exiting then
+return math.max(0.08, Resolved * 0.72), Enum.EasingStyle.Quad, Enum.EasingDirection.In
+end
+return Resolved, Enum.EasingStyle.Quint, Enum.EasingDirection.Out
+end
+function HubUI.Motion.Stagger(Index)
+if InterfaceConfig.ReducedMotion then return 0 end
+return math.clamp(tonumber(Index) or 0, 0, HubUI.Motion.StaggerCap) * HubUI.Motion.StaggerStep
+end
+function HubUI.Motion.Hold(Duration)
+if InterfaceConfig.ReducedMotion then return 0.002 end
+return (math.max(0.001, tonumber(Duration) or HubUI.Motion.Duration.Base) + 0.02) / HubUI.Motion.Speed()
+end
+
 local function Tween(Object, Duration, Properties, EasingStyle, EasingDirection)
 if not (Object and Object.Parent) then return nil end
 
@@ -23111,14 +23161,27 @@ ObjectTweens = {}
 HubUI.ActiveTweens[Object] = ObjectTweens
 end
 
-local Speed = math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1)
-local SmoothDuration = math.max(0.001, tonumber(Duration) or 0.1)
-local AdjustedDuration = InterfaceConfig.ReducedMotion and 0.001 or (SmoothDuration / Speed)
+local Speed = HubUI.Motion.Speed()
+local SmoothDuration, ResolvedStyle, ResolvedDirection =
+HubUI.Motion.Resolve(Duration, EasingStyle, EasingDirection)
+local AnimatedProperties = Properties
+if InterfaceConfig.ReducedMotion then
+AnimatedProperties = {}
+for Property, Value in pairs(Properties) do
+if HubUI.Motion.Movement[Property] then
+pcall(function() Object[Property] = Value end)
+else
+AnimatedProperties[Property] = Value
+end
+end
+if next(AnimatedProperties) == nil then return nil end
+SmoothDuration = HubUI.Motion.Duration.Micro
+end
 local Motion = TweenService:Create(Object, TweenInfo.new(
-AdjustedDuration,
-EasingStyle or Enum.EasingStyle.Sine,
-EasingDirection or Enum.EasingDirection.Out
-), Properties)
+math.max(0.001, SmoothDuration / Speed),
+ResolvedStyle,
+ResolvedDirection
+), AnimatedProperties)
 local Entry = { Motion = Motion, Properties = PropertySet, Done = false }
 table.insert(ObjectTweens, Entry)
 
@@ -23141,6 +23204,18 @@ Motion:Play()
 return Motion
 end
 
+local function MotionOut(Object, Duration, Properties, EasingStyle, EasingDirection)
+if EasingStyle ~= Enum.EasingStyle.Linear then Duration = math.max(0.14, tonumber(Duration) or 0.14) end
+return Tween(Object, Duration, Properties, EasingStyle, EasingDirection)
+end
+function HubUI.Motion.Press(ScaleObject, Down, Amount)
+if not (ScaleObject and ScaleObject.Parent) then return end
+if InterfaceConfig.ReducedMotion then ScaleObject.Scale = 1 return end
+Tween(ScaleObject, Down and 0.10 or 0.20, {
+Scale = Down and (tonumber(Amount) or HubUI.Motion.PressScale) or 1,
+}, Enum.EasingStyle.Quint, Down and Enum.EasingDirection.In or Enum.EasingDirection.Out)
+end
+
 local function AnimateClearButton(Button, Visible)
 Button:SetAttribute('AnimationSerial', (Button:GetAttribute('AnimationSerial') or 0) + 1)
 local Serial = Button:GetAttribute('AnimationSerial')
@@ -23153,7 +23228,7 @@ end
 Tween(Button, 0.20, { TextTransparency = 0, Rotation = 0 }, Enum.EasingStyle.Quint)
 else
 Tween(Button, 0.16, { TextTransparency = 1, Rotation = 24 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.17 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.17), function()
 if Button.Parent and Button:GetAttribute('AnimationSerial') == Serial then
 Button.Visible = false
 Button.Rotation = 0
@@ -23411,12 +23486,19 @@ end
 end
 HubUI.RefreshSpecialThemeSurfaces()
 HubUI.Window = Main
+New('UICorner', { CornerRadius = UDim.new(0, 2) }, Main)
 local MainScale = New('UIScale', { Scale = 1 }, Main)
+local MainAccentLine = New('Frame', {
+Name = 'LinoriaAccent', Position = UDim2.fromOffset(1, 1),
+Size = UDim2.new(1, -2, 0, 2), BackgroundColor3 = Theme.Accent,
+BorderSizePixel = 0, ZIndex = 101,
+}, Main)
+BindAccent(MainAccentLine, 'BackgroundColor3')
 
 local Topbar = New('Frame', {
 Size = UDim2.new(1, 0, 0, 27),
 -- Derived TitleBgActive: recomputed by RefreshSpecialThemeSurfaces per theme.
-BackgroundColor3 = Theme.Surface:Lerp(Theme.SurfaceHover, 0.5),
+BackgroundColor3 = Theme.Panel,
 __SkipThemeBinding = true,
 BorderSizePixel = 0,
 Active = true,
@@ -23580,9 +23662,9 @@ local MenuDefinitions = {
 Name = 'File', Items = {
 { 'Save interface', function() SaveInterfaceConfig(); MenuStatus('[file] interface saved') end },
 { 'Reset Dear ImGui theme', function()
-InterfaceConfig.ThemePreset = 'Dear ImGui Dark'
-HubUI.ApplyTheme(ThemePresets['Dear ImGui Dark'], true)
-MenuStatus('[file] Dear ImGui theme restored')
+InterfaceConfig.ThemePreset = 'Linoria'
+HubUI.ApplyTheme(ThemePresets.Linoria, true)
+MenuStatus('[file] Linoria black/gold restored')
 end },
 { 'Hide window', function() Main.Visible = false end },
 }},
@@ -24128,19 +24210,16 @@ HubUI.TabButtons[Name] = Data
 local function RefreshRow()
 local Selected = HubUI.ActiveTab == Name
 if Selected then
-Button.BackgroundColor3 = Theme.SurfaceHover
-Button.TextColor3 = Theme.Text
+Tween(Button, 0.14, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Theme.Text })
 elseif Data.Hovered then
-Button.BackgroundColor3 = Theme.Surface
-Button.TextColor3 = Theme.Text
+Tween(Button, 0.12, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Text })
 else
-Button.BackgroundColor3 = Theme.Panel
-Button.TextColor3 = Theme.Muted
+MotionOut(Button, 0.16, { BackgroundColor3 = Theme.Panel, TextColor3 = Theme.Muted })
 end
 Button.BackgroundTransparency = 0
 Marker.BackgroundColor3 = Theme.Accent
-Marker.BackgroundTransparency = Selected and 0 or 1
-Marker.Size = UDim2.new(0, 3, 1, 0)
+Tween(Marker, 0.14, { BackgroundTransparency = Selected and 0 or 1 })
+Marker.Size = UDim2.new(0, 2, 1, 0)
 Marker.Position = UDim2.fromOffset(0, 0)
 end
 Data.RefreshRow = RefreshRow
@@ -24215,7 +24294,7 @@ Tween(ActivePageLabel, 0.10, {
 TextTransparency = 1,
 Position = UDim2.fromOffset(196, -2),
 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.105 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.105), function()
 if ThisLabelSerial ~= PageLabelSerial or not ActivePageLabel.Parent then return end
 ActivePageLabel.Text = string.upper(Name)
 ActivePageLabel.Position = UDim2.fromOffset(196, 3)
@@ -24225,26 +24304,26 @@ Position = UDim2.fromOffset(196, 0),
 }, Enum.EasingStyle.Quint)
 end)
 
-local NextWasVisible = NextPage.Visible
 NextPage.Visible = true
-if not NextWasVisible then
-NextPage.Position = UDim2.fromOffset(0, 0)
-NextPage.GroupTransparency = 0
-end
 NextPage.Rotation = 0
+if InterfaceConfig.ReducedMotion then
 NextPage.Position = UDim2.fromOffset(0, 0)
 NextPage.GroupTransparency = 0
-if PreviousPage then
-PreviousPage.Visible = false
-PreviousPage.Position = UDim2.fromOffset(0, 0)
-PreviousPage.GroupTransparency = 1
+else
+NextPage.Position = UDim2.fromOffset(8, 0)
+NextPage.GroupTransparency = 1
+Tween(NextPage, 0.20, { Position = UDim2.fromOffset(0, 0), GroupTransparency = 0 })
+end
+if PreviousPage and PreviousPage ~= NextPage then
+Tween(PreviousPage, 0.12, { Position = UDim2.fromOffset(-6, 0), GroupTransparency = 1 },
+Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 end
 
 for _, TabData in pairs(HubUI.TabButtons) do
 if TabData.RefreshRow then TabData.RefreshRow() end
 end
 
-task.delay(InterfaceConfig.ReducedMotion and 0.003 or 0.29 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.29), function()
 if ThisSerial ~= TabSerial then return end
 for PageName, Page in pairs(Pages) do
 local Selected = PageName == Name
@@ -24303,7 +24382,7 @@ HubUI.ApplyTheme(ThemePresets[PresetName], true)
 SetTerminalStatus('[theme] ' .. PresetName, true)
 else SetTerminalStatus('[error] unknown theme', false) end
 elseif Command == 'clear' then
-SetTerminalStatus('[ready]  Dear ImGui', true)
+SetTerminalStatus('[ready]  LINORIA / GOLD', true)
 elseif Command == 'close' or Command == 'hide' then
 Main.Visible = false
 else
@@ -24341,7 +24420,7 @@ Label.Visible = true
 Label.Size = UDim2.new(1, -6, 0, 0)
 Label.TextTransparency = 1
 end
-task.delay((InterfaceConfig.ReducedMotion and 0 or math.min(DelayIndex, 5) * 0.012) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(DelayIndex)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
 if CategorySearchSerials[Category] ~= Serial or not Label.Parent then return end
 Tween(Label, 0.15, {
 Size = UDim2.new(1, -6, 0, 15),
@@ -24353,7 +24432,7 @@ Tween(Label, 0.1, {
 Size = UDim2.new(1, -6, 0, 0),
 TextTransparency = 1,
 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.11 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.11), function()
 if CategorySearchSerials[Category] == Serial and Label.Parent then Label.Visible = false end
 end)
 end
@@ -24371,7 +24450,7 @@ Button.Size = UDim2.fromOffset(170, 0)
 Button.TextTransparency = 1
 Button.BackgroundTransparency = 1
 end
-task.delay((InterfaceConfig.ReducedMotion and 0 or math.min(DelayIndex, 7) * 0.014) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(DelayIndex)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
 if Data.SearchAnimationSerial ~= Serial or not Button.Parent then return end
 Tween(Button, 0.18, {
 Size = UDim2.fromOffset(170, 22),
@@ -24387,7 +24466,7 @@ TextTransparency = 1,
 BackgroundTransparency = 1,
 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 Tween(Data.Marker, 0.09, { BackgroundTransparency = 1 })
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.12 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.12), function()
 if Data.SearchAnimationSerial == Serial and Button.Parent then Button.Visible = false end
 end)
 end
@@ -24447,7 +24526,7 @@ SearchBox.Text = ''
 SearchBox:CaptureFocus()
 end))
 GiveSignal(ClearSearchButton.MouseEnter:Connect(function() Tween(ClearSearchButton, 0.1, { TextColor3 = Theme.Text }) end))
-GiveSignal(ClearSearchButton.MouseLeave:Connect(function() Tween(ClearSearchButton, 0.1, { TextColor3 = Theme.Muted }) end))
+GiveSignal(ClearSearchButton.MouseLeave:Connect(function() MotionOut(ClearSearchButton, 0.1, { TextColor3 = Theme.Muted }) end))
 ApplyNavigationSearch()
 
 local function ApplyTabLayout()
@@ -24595,13 +24674,13 @@ Rotation = 18,
 HubUI.GroupGradients = HubUI.GroupGradients or {}
 table.insert(HubUI.GroupGradients, PanelGradient)
 local GroupStroke = DarkStroke(Group)
-GroupStroke.Transparency = 0
+GroupStroke.Transparency = 0.18
 
 -- ImGui collapsing-header style: a full width header bar with a hard 1px rule.
 local TitleBack = New('Frame', {
 Position = UDim2.fromOffset(0, 0),
-Size = UDim2.new(1, 0, 0, 14),
-BackgroundColor3 = Theme.Surface,
+Size = UDim2.new(1, 0, 0, 16),
+BackgroundColor3 = Theme.Panel,
 BackgroundTransparency = 0,
 BorderSizePixel = 0,
 ZIndex = 7,
@@ -24618,7 +24697,7 @@ Position = UDim2.fromOffset(5, 0),
 Size = UDim2.new(1, -10, 1, 0),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = '[-] ' .. string.upper(Name),
+Text = '  ' .. string.upper(Name),
 TextColor3 = Color3.new(1, 1, 1),
 __SkipThemeBinding = true,
 TextSize = 10,
@@ -24626,10 +24705,15 @@ TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 8,
 }, TitleBack)
 ApplyThemedTextGradient(Title, Theme.Text)
+local GroupAccent = New('Frame', {
+Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(2, 16),
+BackgroundColor3 = Theme.Accent, BorderSizePixel = 0, ZIndex = 9,
+}, TitleBack)
+BindAccent(GroupAccent, 'BackgroundColor3')
 local Body = New('Frame', {
 Name = 'Content',
-Position = UDim2.fromOffset(0, 15),
-Size = UDim2.new(1, 0, 1, -15),
+Position = UDim2.fromOffset(0, 17),
+Size = UDim2.new(1, 0, 1, -17),
 BackgroundTransparency = 1,
 BorderSizePixel = 0,
 ClipsDescendants = true,
@@ -24637,10 +24721,10 @@ ZIndex = 5,
 }, Group)
 
 GiveSignal(Group.MouseEnter:Connect(function()
-Tween(GroupStroke, 0.12, { Color = Theme.Accent, Transparency = 0.28 })
+Tween(GroupStroke, 0.12, { Color = Theme.Accent, Transparency = 0.38 })
 end))
 GiveSignal(Group.MouseLeave:Connect(function()
-Tween(GroupStroke, 0.15, { Color = Theme.Border, Transparency = 0 })
+MotionOut(GroupStroke, 0.16, { Color = Theme.Border, Transparency = 0.18 })
 end))
 return Body
 end
@@ -24841,16 +24925,16 @@ Tween(LabelObject, 0.1, { TextColor3 = Theme.AccentBright })
 Tween(TrackStroke, 0.1, { Color = Theme.Accent })
 end))
 GiveSignal(Button.MouseLeave:Connect(function()
-Tween(LabelObject, 0.12, { TextColor3 = Theme.Text })
-Tween(TrackStroke, 0.12, { Color = Control.Value and Theme.Accent or Theme.Border })
+MotionOut(LabelObject, 0.12, { TextColor3 = Theme.Text })
+MotionOut(TrackStroke, 0.12, { Color = Control.Value and Theme.Accent or Theme.Border })
 end))
 GiveSignal(KeyButton.MouseEnter:Connect(function()
 Tween(KeyButton, 0.1, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Theme.Text })
 Tween(KeyStroke, 0.1, { Color = Theme.Accent })
 end))
 GiveSignal(KeyButton.MouseLeave:Connect(function()
-Tween(KeyButton, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Muted })
-Tween(KeyStroke, 0.1, { Color = Theme.Border })
+MotionOut(KeyButton, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Muted })
+MotionOut(KeyStroke, 0.1, { Color = Theme.Border })
 end))
 return Control
 end
@@ -24913,8 +24997,8 @@ Tween(KeyButton, 0.1, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Them
 Tween(KeyStroke, 0.1, { Color = Theme.Accent })
 end))
 GiveSignal(KeyButton.MouseLeave:Connect(function()
-Tween(KeyButton, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Muted })
-Tween(KeyStroke, 0.1, { Color = Theme.Border })
+MotionOut(KeyButton, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Muted })
+MotionOut(KeyStroke, 0.1, { Color = Theme.Border })
 end))
 end
 local Control = {
@@ -25076,7 +25160,7 @@ GroupTransparency = 1,
 Position = Popup.Position + UDim2.fromOffset(0, -2),
 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(PopupScale, 0.18, { Scale = 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.19 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.19), function()
 if Control.AnimationSerial == Serial and not Control.Open and Popup.Parent then Popup.Visible = false end
 end)
 if ActiveDropdown == Control then ActiveDropdown = nil end
@@ -25153,7 +25237,7 @@ for RowIndex, Entry in ipairs(Rows) do
 if Entry.Button.Visible then
 Entry.Button.TextTransparency = 1
 Entry.Button.BackgroundTransparency = 1
-task.delay((InterfaceConfig.ReducedMotion and 0 or (RowIndex - 1) * 0.012) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(RowIndex - 1)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
 if Control.AnimationSerial ~= Serial or not Control.Open or not Entry.Button.Parent then return end
 Tween(Entry.Button, 0.18, {
 TextTransparency = 0,
@@ -25183,7 +25267,7 @@ local Entry = { Button = Row, Option = nil, Index = nil }
 Rows[Slot] = Entry
 GiveSignal(Row.MouseButton1Click:Connect(function() if Entry.Option then Control:Set(Entry.Option, true) end end))
 GiveSignal(Row.MouseEnter:Connect(function() Tween(Row, 0.08, { BackgroundColor3 = Theme.SurfaceHover }) end))
-GiveSignal(Row.MouseLeave:Connect(function() Tween(Row, 0.08, { BackgroundColor3 = Entry.Index and (Entry.Index % 2 == 0 and Theme.Surface or Theme.Panel) or Theme.Panel }) end))
+GiveSignal(Row.MouseLeave:Connect(function() MotionOut(Row, 0.08, { BackgroundColor3 = Entry.Index and (Entry.Index % 2 == 0 and Theme.Surface or Theme.Panel) or Theme.Panel }) end))
 end
 GiveSignal(List:GetPropertyChangedSignal('CanvasPosition'):Connect(UpdateRows))
 GiveSignal(DropdownSearch:GetPropertyChangedSignal('Text'):Connect(function()
@@ -25215,8 +25299,8 @@ Tween(Button, 0.1, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Theme.A
 Tween(DropdownStroke, 0.1, { Color = Theme.Accent })
 end))
 GiveSignal(Button.MouseLeave:Connect(function()
-Tween(Button, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Text })
-Tween(DropdownStroke, 0.1, { Color = Theme.Border })
+MotionOut(Button, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Text })
+MotionOut(DropdownStroke, 0.1, { Color = Theme.Border })
 end))
 RebuildFilter()
 UpdateRows()
@@ -25478,9 +25562,9 @@ Tween(TrackStroke, 0.1, { Color = Theme.Accent })
 if not Control.Dragging then Knob.Size = UDim2.fromOffset(0, 0) end
 end))
 GiveSignal(Hitbox.MouseLeave:Connect(function()
-Tween(Container, 0.1, { BackgroundColor3 = Theme.Surface })
-Tween(ContainerStroke, 0.1, { Color = Theme.Border })
-Tween(TrackStroke, 0.1, { Color = Theme.Border })
+MotionOut(Container, 0.1, { BackgroundColor3 = Theme.Surface })
+MotionOut(ContainerStroke, 0.1, { Color = Theme.Border })
+MotionOut(TrackStroke, 0.1, { Color = Theme.Border })
 if not Control.Dragging then Knob.Size = UDim2.fromOffset(0, 0) end
 end))
 
@@ -25556,18 +25640,18 @@ Tween(Button, 0.1, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Theme.A
 Tween(ButtonStroke, 0.1, { Color = Theme.Accent })
 end))
 GiveSignal(Button.MouseLeave:Connect(function()
-Tween(Button, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Text })
-Tween(ButtonStroke, 0.1, { Color = Theme.Border })
-Tween(ButtonScale, 0.12, { Scale = 1 }, Enum.EasingStyle.Quint)
+MotionOut(Button, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Text })
+MotionOut(ButtonStroke, 0.1, { Color = Theme.Border })
+MotionOut(ButtonScale, 0.12, { Scale = 1 }, Enum.EasingStyle.Quint)
 end))
 GiveSignal(Button.InputBegan:Connect(function(Input)
 if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
-Tween(ButtonScale, 0.07, { Scale = 0.955 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+HubUI.Motion.Press(ButtonScale, true)
 end
 end))
 GiveSignal(Button.InputEnded:Connect(function(Input)
 if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
-Tween(ButtonScale, 0.16, { Scale = 1 }, Enum.EasingStyle.Quint)
+HubUI.Motion.Press(ButtonScale, false)
 end
 end))
 return Button
@@ -25794,7 +25878,7 @@ GroupTransparency = 1,
 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(ColorPickerCard, 0.20, { Position = UDim2.fromScale(0.5, 0.515) }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(ColorPickerCardScale, 0.20, { Scale = 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.21 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.21), function()
 if PickerAnimationSerial == Serial and ColorPickerOverlay.Parent then ColorPickerOverlay.Visible = false end
 end)
 DragSV, DragHue = false, false
@@ -26983,13 +27067,13 @@ CustomGoalCard.Position = UDim2.fromScale(0.5, 0.515)
 CustomGoalCardScale.Scale = 0.97
 Tween(CustomGoalOverlay, 0.24, { GroupTransparency = 0, BackgroundTransparency = 0.18 }, Enum.EasingStyle.Sine)
 Tween(CustomGoalCard, 0.27, { Position = UDim2.fromScale(0.5, 0.5) }, Enum.EasingStyle.Quint)
-Tween(CustomGoalCardScale, 0.27, { Scale = 1 }, Enum.EasingStyle.Back)
+Tween(CustomGoalCardScale, 0.27, { Scale = 1 }, Enum.EasingStyle.Quint)
 else
 CustomGoalCodeBox:ReleaseFocus()
 Tween(CustomGoalOverlay, 0.18, { GroupTransparency = 1, BackgroundTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(CustomGoalCard, 0.18, { Position = UDim2.fromScale(0.5, 0.515) }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(CustomGoalCardScale, 0.18, { Scale = 0.98 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.19 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.19), function()
 if CustomGoalAnimationSerial == Serial and CustomGoalOverlay.Parent then CustomGoalOverlay.Visible = false end
 end)
 end
@@ -28982,13 +29066,8 @@ BackgroundColor3 = Theme.Off,
 BorderSizePixel = 0,
 ZIndex = 6,
 }, StatusTop)
-TweenService:Create(StatusDot, TweenInfo.new(
-0.75,
-Enum.EasingStyle.Sine,
-Enum.EasingDirection.InOut,
--1,
-true
-), { BackgroundTransparency = 0.62 }):Play()
+-- Linoria-style status lights communicate through color, not perpetual pulsing.
+StatusDot.BackgroundTransparency = 0
 local StatusText = New('TextLabel', {
 Position = UDim2.fromOffset(25, 0),
 Size = UDim2.new(1, -33, 1, 0),
@@ -29118,7 +29197,7 @@ GiveSignal(RecheckButton.MouseEnter:Connect(function()
 Tween(RecheckButton, 0.1, { BackgroundColor3 = Theme.SurfaceHover })
 end))
 GiveSignal(RecheckButton.MouseLeave:Connect(function()
-Tween(RecheckButton, 0.1, { BackgroundColor3 = Theme.Surface })
+MotionOut(RecheckButton, 0.1, { BackgroundColor3 = Theme.Surface })
 end))
 
 function HubUI.BuildConfigControls()
@@ -29148,7 +29227,7 @@ GiveSignal(Button.MouseEnter:Connect(function()
 Tween(Button, 0.1, { BackgroundTransparency = Danger and 0 or 0.18 })
 end))
 GiveSignal(Button.MouseLeave:Connect(function()
-Tween(Button, 0.1, { BackgroundTransparency = Danger and 0.12 or 0 })
+MotionOut(Button, 0.1, { BackgroundTransparency = Danger and 0.12 or 0 })
 end))
 -- Tactile press dip, matching the timing used elsewhere.
 GiveSignal(Button.MouseButton1Down:Connect(function()
@@ -29461,7 +29540,7 @@ local Errors = 0
 for Index, Entry in ipairs(Queue) do
 local Ok = pcall(function() Entry.Control:Set(Entry.Value, true) end)
 if not Ok then Errors += 1 end
-if Index % 6 == 0 then task.wait(0.035) end
+if Index % 6 == 0 then task.wait(HubUI.Motion.Hold(0.035)) end
 end
 pcall(ApplyExtra, Profile.Extra)
 if HubUI.Sync then pcall(HubUI.Sync) end
@@ -29844,7 +29923,7 @@ function KeybindManager:EndCapture()
 self.Capture = nil
 Tween(CaptureOverlay, 0.18, { GroupTransparency = 1, BackgroundTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(CaptureScale, 0.18, { Scale = 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.19 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.19), function()
 if not self.Capture and CaptureOverlay.Parent then CaptureOverlay.Visible = false end
 end)
 end
@@ -30045,7 +30124,7 @@ if HubUI.SetOpen then HubUI.SetOpen(true) end
 if HubUI.SwitchTab then HubUI.SwitchTab('Keybinds') end
 end))
 GiveSignal(OverlayHeader.MouseEnter:Connect(function() Tween(OverlayHeader, 0.1, { BackgroundColor3 = Theme.SurfaceHover }) end))
-GiveSignal(OverlayHeader.MouseLeave:Connect(function() Tween(OverlayHeader, 0.1, { BackgroundColor3 = Theme.Panel }) end))
+GiveSignal(OverlayHeader.MouseLeave:Connect(function() MotionOut(OverlayHeader, 0.1, { BackgroundColor3 = Theme.Panel }) end))
 
 GiveSignal(OverlayHeader.InputBegan:Connect(function(Input)
 if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
@@ -30091,7 +30170,7 @@ Tween(OverlayScale, 0.26, { Scale = 1 }, Enum.EasingStyle.Quint)
 else
 Tween(Overlay, 0.18, { GroupTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(OverlayScale, 0.18, { Scale = 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.19 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.19), function()
 if ThisSerial == OverlayVisibilitySerial and Overlay.Parent then
 Overlay.Visible = false
 end
@@ -30291,7 +30370,7 @@ GiveSignal(ModeButton.MouseButton1Click:Connect(function() self:CycleMode(Entry)
 GiveSignal(KeyButton.MouseButton1Click:Connect(function() self:BeginCapture(Entry) end))
 GiveSignal(ClearButton.MouseButton1Click:Connect(function() self:SetKey(Entry, nil, true) end))
 GiveSignal(Row.MouseEnter:Connect(function() Tween(Row, 0.1, { BackgroundTransparency = 0.08 }) end))
-GiveSignal(Row.MouseLeave:Connect(function() Tween(Row, 0.1, { BackgroundTransparency = 0.34 }) end))
+GiveSignal(Row.MouseLeave:Connect(function() MotionOut(Row, 0.1, { BackgroundTransparency = 0.34 }) end))
 self.RowControls[Entry.Id] = {
 Row = Row, Label = Label, Meta = Meta, MobileButton = MobileButton,
 VisibilityButton = VisibilityButton, ModeButton = ModeButton,
@@ -30474,7 +30553,7 @@ LauncherDragging = true
 TouchSupport.LauncherMoved = false
 LauncherStart = Input.Position
 LauncherStartPosition = Launcher.Position
-Tween(LauncherScale, 0.08, { Scale = 0.90 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+HubUI.Motion.Press(LauncherScale, true)
 end))
 GiveSignal(UserInputService.InputChanged:Connect(function(Input)
 if not LauncherDragging then return end
@@ -30496,7 +30575,7 @@ and Input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
 if LauncherDragging then
 LauncherDragging = false
 SaveLauncherPosition()
-Tween(LauncherScale, 0.16, { Scale = 1 }, Enum.EasingStyle.Quint)
+HubUI.Motion.Press(LauncherScale, false)
 end
 end))
 GiveSignal(Launcher.Activated:Connect(function()
@@ -30504,9 +30583,9 @@ if TouchSupport.LauncherMoved then
 TouchSupport.LauncherMoved = false
 return
 end
-Tween(LauncherScale, 0.08, { Scale = 0.88 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+HubUI.Motion.Press(LauncherScale, true)
 task.delay(0.09, function()
-if LauncherScale.Parent then Tween(LauncherScale, 0.17, { Scale = 1 }, Enum.EasingStyle.Quint) end
+if LauncherScale.Parent then HubUI.Motion.Press(LauncherScale, false) end
 end)
 if HubUI.SetOpen then HubUI.SetOpen(not HubUI.Open) end
 end))
@@ -30553,9 +30632,9 @@ New('UICorner', { CornerRadius = UDim.new(0, 4) }, Button)
 DarkStroke(Button)
 local Scale = New('UIScale', { Scale = 1 }, Button)
 GiveSignal(Button.Activated:Connect(function()
-Tween(Scale, 0.07, { Scale = 0.88 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+HubUI.Motion.Press(Scale, true)
 task.delay(0.08, function()
-if Scale.Parent then Tween(Scale, 0.14, { Scale = 1 }, Enum.EasingStyle.Quint) end
+if Scale.Parent then HubUI.Motion.Press(Scale, false) end
 end)
 CycleTab(Button == PrevTabButton and -1 or 1)
 end))
@@ -30791,7 +30870,7 @@ Start = Input.Position,
 StartPosition = Button.Position,
 Moved = false,
 }
-Tween(Scale, 0.07, { Scale = 0.92 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+HubUI.Motion.Press(Scale, true)
 if Entry.Mode == 'Hold' then
 ActiveHolds[DragKey] = Entry
 self:Invoke(Entry, true, 1)
@@ -30843,7 +30922,7 @@ KeybindManager:Invoke(HeldEntry, false, 1)
 end
 local MobileData = MobileButtons[Drag.Entry.Id]
 if MobileData and MobileData.Scale then
-Tween(MobileData.Scale, 0.14, { Scale = 1 }, Enum.EasingStyle.Quint)
+HubUI.Motion.Press(MobileData.Scale, false)
 end
 if Drag.Moved then
 SaveMobileButton(Drag.Entry, Drag.Button)
@@ -30886,7 +30965,7 @@ RefreshFlightInput('FlightDown', false, FlightDown)
 end
 end
 LauncherGlow.Rotation = (LauncherGlow.Rotation + 1.5) % 360
-task.wait(0.15)
+task.wait(HubUI.Motion.Hold(0.15))
 end
 end)
 
@@ -31043,7 +31122,7 @@ GroupTransparency = 1,
 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(GlobalSearchResultsScale, 0.18, { Scale = 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(GlobalSearchAccentLine, 0.14, { BackgroundTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.19 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.19), function()
 if GlobalSearchAnimationSerial == Serial and not GlobalSearchIsOpen and GlobalSearchResults.Parent then
 GlobalSearchResults.Visible = false
 end
@@ -31075,7 +31154,7 @@ for Step = 1, 18 do
 if not (Highlight and Highlight.Parent) then return end
 Highlight.Transparency = (Step / 18) * 0.92
 Highlight.Thickness = 2.6 + math.sin(Step * 0.85) * 0.7
-task.wait(0.035)
+task.wait(HubUI.Motion.Hold(0.035))
 end
 if Highlight and Highlight.Parent then Highlight:Destroy() end
 end)
@@ -31134,7 +31213,7 @@ GiveSignal(Row.MouseEnter:Connect(function()
 Tween(Row, 0.08, { BackgroundColor3 = Theme.SurfaceHover, BackgroundTransparency = 0 })
 end))
 GiveSignal(Row.MouseLeave:Connect(function()
-Tween(Row, 0.08, {
+MotionOut(Row, 0.08, {
 BackgroundColor3 = RowSlot % 2 == 0 and Theme.Surface or Theme.Panel,
 BackgroundTransparency = 0.06,
 })
@@ -31193,7 +31272,7 @@ else
 RowData.Label.TextTransparency = 0.42
 RowData.Meta.TextTransparency = 0.55
 end
-task.delay((InterfaceConfig.ReducedMotion and 0 or (Slot - 1) * 0.018) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(Slot - 1)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
 if QuerySerial ~= GlobalSearchQuerySerial or RowData.AnimationSerial ~= RowSerial or not RowData.Button.Parent then return end
 Tween(RowData.Button, 0.16, {
 Position = UDim2.fromOffset(0, (Slot - 1) * 28),
@@ -31209,7 +31288,7 @@ BackgroundTransparency = 1,
 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 Tween(RowData.Label, 0.08, { TextTransparency = 1 })
 Tween(RowData.Meta, 0.08, { TextTransparency = 1 })
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.11 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+task.delay(HubUI.Motion.Hold(0.11), function()
 if RowData.AnimationSerial == RowSerial and not RowData.Entry and RowData.Button.Parent then
 RowData.Button.Visible = false
 end
@@ -31246,7 +31325,7 @@ GlobalSearchBox.Text = ''
 GlobalSearchBox:CaptureFocus()
 end))
 GiveSignal(ClearGlobalSearchButton.MouseEnter:Connect(function() Tween(ClearGlobalSearchButton, 0.1, { TextColor3 = Theme.Text }) end))
-GiveSignal(ClearGlobalSearchButton.MouseLeave:Connect(function() Tween(ClearGlobalSearchButton, 0.1, { TextColor3 = Theme.Muted }) end))
+GiveSignal(ClearGlobalSearchButton.MouseLeave:Connect(function() MotionOut(ClearGlobalSearchButton, 0.1, { TextColor3 = Theme.Muted }) end))
 
 function HubUI.Sync()
 CONFIG.SilentMode = CONFIG.SilentMode == 'Low' and 'Low' or 'High'
@@ -31548,11 +31627,11 @@ Main.Position = UDim2.new(RestingPosition.X.Scale, RestingPosition.X.Offset, Res
 end
 Main.Rotation = 0
 Tween(Main, 0.30, { GroupTransparency = 0, Rotation = 0, Position = RestingPosition }, Enum.EasingStyle.Quint)
-Tween(MainScale, 0.34, { Scale = TargetScale }, Enum.EasingStyle.Back)
+Tween(MainScale, 0.28, { Scale = TargetScale }, Enum.EasingStyle.Quint)
 elseif Main.Visible then
 Tween(Main, 0.22, { GroupTransparency = 1, Rotation = 0 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-Tween(MainScale, 0.22, { Scale = TargetScale * 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(InterfaceConfig.ReducedMotion and 0.002 or 0.23 / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+Tween(MainScale, 0.14, { Scale = TargetScale * 0.99 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+task.delay(HubUI.Motion.Hold(0.23), function()
 if ThisSerial == OpenSerial and not HubUI.Open and Main.Parent then
 Main.Visible = false
 Main.Rotation = 0
@@ -31660,7 +31739,7 @@ Font = Enum.Font.Code, Text = '[X]', TextColor3 = Theme.Muted, TextSize = 10, ZI
 New('UICorner', { CornerRadius = UDim.new(0, 3) }, CloseButton)
 GiveSignal(CloseButton.MouseButton1Click:Connect(CloseModal))
 GiveSignal(CloseButton.MouseEnter:Connect(function() Tween(CloseButton, 0.1, { TextColor3 = Theme.Bad }) end))
-GiveSignal(CloseButton.MouseLeave:Connect(function() Tween(CloseButton, 0.1, { TextColor3 = Theme.Muted }) end))
+GiveSignal(CloseButton.MouseLeave:Connect(function() MotionOut(CloseButton, 0.1, { TextColor3 = Theme.Muted }) end))
 New('Frame', {
 Position = UDim2.fromOffset(1, 30), Size = UDim2.new(1, -2, 0, 1),
 BackgroundColor3 = Theme.Border, BorderSizePixel = 0, ZIndex = 292,
@@ -31677,7 +31756,7 @@ New('UICorner', { CornerRadius = UDim.new(0, 3) }, Button)
 AccentStroke(Button, 1, 0.18)
 GiveSignal(Button.MouseButton1Click:Connect(Callback))
 GiveSignal(Button.MouseEnter:Connect(function() Tween(Button, 0.1, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Theme.AccentBright }) end))
-GiveSignal(Button.MouseLeave:Connect(function() Tween(Button, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Text }) end))
+GiveSignal(Button.MouseLeave:Connect(function() MotionOut(Button, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Text }) end))
 return Button
 end
 
@@ -32491,7 +32570,7 @@ end)
 end
 end))
 GiveSignal(Row.MouseEnter:Connect(function() Tween(Row, 0.08, { BackgroundColor3 = Theme.SurfaceHover, BackgroundTransparency = 0 }) end))
-GiveSignal(Row.MouseLeave:Connect(function() Tween(Row, 0.1, { BackgroundColor3 = Theme.Surface, BackgroundTransparency = 0.25 }) end))
+GiveSignal(Row.MouseLeave:Connect(function() MotionOut(Row, 0.1, { BackgroundColor3 = Theme.Surface, BackgroundTransparency = 0.25 }) end))
 end
 PaletteList.CanvasSize = UDim2.fromOffset(0, Shown * 24)
 end
@@ -32526,7 +32605,7 @@ end)
 
 -- ===== TOAST NOTIFICATIONS =====
 -- Themed in-hub toasts replace the stock Roblox notification popups.
-do
+;(function()
 local ToastRoot = New('Frame', {
 Name = 'Toasts',
 AnchorPoint = Vector2.new(1, 1),
@@ -32557,27 +32636,36 @@ Tween(Toast.Frame, Instant and 0.12 or 0.22, {
 GroupTransparency = 1,
 Position = Toast.Frame.Position + UDim2.fromOffset(264, 0),
 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(0.3, function()
+task.delay(HubUI.Motion.Hold(Instant and 0.12 or 0.22), function()
 if Toast.Frame and Toast.Frame.Parent then Toast.Frame:Destroy() end
 end)
 Restack()
 end
-local function ArmTimer(Toast)
+local function ArmTimer(Toast, Remaining)
 Toast.Serial += 1
 local Serial = Toast.Serial
-Toast.Progress.Size = UDim2.new(1, 0, 0, 2)
+local Duration = math.max(0.12, tonumber(Remaining) or ToastDuration)
+if Remaining == nil then Toast.Progress.Size = UDim2.new(1, 0, 0, 2) end
 if Toast.ProgressTween then pcall(function() Toast.ProgressTween:Cancel() end) end
 Toast.ProgressTween = TweenService:Create(Toast.Progress, TweenInfo.new(
-ToastDuration, Enum.EasingStyle.Linear
+Duration, Enum.EasingStyle.Linear
 ), { Size = UDim2.new(0, 0, 0, 2) })
 Toast.ProgressTween:Play()
-task.delay(ToastDuration, function()
-if Toast.Serial == Serial and not Toast.Closing then Dismiss(Toast) end
+task.delay(Duration, function()
+if Toast.Serial == Serial and not Toast.Closing and not Toast.Hovered then Dismiss(Toast) end
 end)
+end
+local function ToastStyle(Title, Text)
+local Message = string.lower(tostring(Title) .. ' ' .. tostring(Text))
+if string.find(Message, 'error', 1, true) or string.find(Message, 'fail', 1, true) then return '!', Theme.Bad end
+if string.find(Message, 'warn', 1, true) or string.find(Message, 'blocked', 1, true) then return '!', Theme.Warning end
+if string.find(Message, 'success', 1, true) or string.find(Message, 'saved', 1, true) or string.find(Message, 'ready', 1, true) then return '+', Theme.Success end
+return '•', Theme.Accent
 end
 local function ShowToast(Title, Text)
 Title = tostring(Title or 'GOLDEN EAGLE HUB')
 Text = tostring(Text or '')
+local Glyph, SeverityColor = ToastStyle(Title, Text)
 -- Refresh an identical live toast instead of stacking duplicates.
 for _, Toast in ipairs(ActiveToasts) do
 if Toast.Title == Title and Toast.Text == Text and not Toast.Closing then
@@ -32601,19 +32689,25 @@ ZIndex = 91,
 }, ToastRoot)
 New('UICorner', { CornerRadius = UDim.new(0, 4) }, Frame)
 AccentStroke(Frame, 1, 0.25)
+local ToastScale = New('UIScale', { Scale = InterfaceConfig.ReducedMotion and 1 or 0.98 }, Frame)
+local ToastGlyph = New('TextLabel', {
+Position = UDim2.fromOffset(9, 4), Size = UDim2.fromOffset(12, 13),
+BackgroundTransparency = 1, Font = Enum.Font.Code, Text = Glyph,
+TextColor3 = SeverityColor, TextSize = 12, ZIndex = 92,
+}, Frame)
 local TitleLabel = New('TextLabel', {
-Position = UDim2.fromOffset(9, 5),
-Size = UDim2.new(1, -18, 0, 12),
+Position = UDim2.fromOffset(24, 5),
+Size = UDim2.new(1, -33, 0, 12),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = string.upper(Title),
-TextColor3 = Theme.Accent,
+TextColor3 = SeverityColor,
 TextSize = 10,
 TextTruncate = Enum.TextTruncate.AtEnd,
 TextXAlignment = Enum.TextXAlignment.Left,
 ZIndex = 92,
 }, Frame)
-BindAccent(TitleLabel, 'TextColor3')
+-- Severity color is intentionally stable for the toast lifetime.
 New('TextLabel', {
 Position = UDim2.fromOffset(9, 19),
 Size = UDim2.new(1, -18, 0, Lines * 13),
@@ -32632,14 +32726,14 @@ local Progress = New('Frame', {
 AnchorPoint = Vector2.new(0, 1),
 Position = UDim2.new(0, 0, 1, 0),
 Size = UDim2.new(1, 0, 0, 2),
-BackgroundColor3 = Theme.Accent,
+BackgroundColor3 = SeverityColor,
 BorderSizePixel = 0,
 ZIndex = 93,
 }, Frame)
-BindAccent(Progress, 'BackgroundColor3')
+-- Progress inherits the toast severity color.
 local Toast = {
 Frame = Frame, Progress = Progress, Height = Height,
-Title = Title, Text = Text, Serial = 0, Closing = false,
+Title = Title, Text = Text, Serial = 0, Closing = false, Hovered = false,
 }
 local Hit = New('TextButton', {
 Size = UDim2.fromScale(1, 1),
@@ -32650,16 +32744,29 @@ Text = '',
 ZIndex = 94,
 }, Frame)
 GiveSignal(Hit.MouseButton1Click:Connect(function() Dismiss(Toast) end))
+GiveSignal(Hit.MouseEnter:Connect(function()
+Toast.Hovered = true
+Toast.Serial += 1
+if Toast.ProgressTween then pcall(function() Toast.ProgressTween:Cancel() end) end
+Tween(Frame, 0.12, { BackgroundColor3 = Theme.SurfaceHover })
+end))
+GiveSignal(Hit.MouseLeave:Connect(function()
+Toast.Hovered = false
+MotionOut(Frame, 0.16, { BackgroundColor3 = Theme.Panel })
+local Remaining = ToastDuration * math.clamp(Toast.Progress.Size.X.Scale, 0, 1)
+ArmTimer(Toast, Remaining)
+end))
 table.insert(ActiveToasts, Toast)
 Restack()
 Tween(Frame, 0.28, { GroupTransparency = 0 }, Enum.EasingStyle.Quint)
+Tween(ToastScale, 0.20, { Scale = 1 }, Enum.EasingStyle.Quint)
 ArmTimer(Toast)
 end
 GlobalEnv.__GEH_TOAST = function(Title, Text)
 ShowToast(Title, Text)
 return true
 end
-end
+end)()
 
 function HubUI.AnimateUnload()
 if HubUI.UnloadAnimating then return end
@@ -32738,13 +32845,13 @@ local PressScale = ExistingScale or New('UIScale', { Scale = 1 }, Object)
 GiveSignal(Object.InputBegan:Connect(function(Input)
 if Input.UserInputType == Enum.UserInputType.MouseButton1
 or Input.UserInputType == Enum.UserInputType.Touch then
-Tween(PressScale, 0.055, { Scale = 0.975 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+HubUI.Motion.Press(PressScale, true)
 end
 end))
 GiveSignal(Object.InputEnded:Connect(function(Input)
 if Input.UserInputType == Enum.UserInputType.MouseButton1
 or Input.UserInputType == Enum.UserInputType.Touch then
-Tween(PressScale, 0.13, { Scale = 1 }, Enum.EasingStyle.Quint)
+HubUI.Motion.Press(PressScale, false)
 end
 end))
 end
@@ -32753,26 +32860,26 @@ end
 local CloseButtonScale = New('UIScale', { Scale = 1 }, CloseButton)
 local UnloadButtonScale = New('UIScale', { Scale = 1 }, HubUI.UnloadButton)
 GiveSignal(CloseButton.MouseButton1Click:Connect(function()
-Tween(CloseButtonScale, 0.08, { Scale = 0.9 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+HubUI.Motion.Press(CloseButtonScale, true)
 HubUI.SetOpen(false)
 end))
 GiveSignal(CloseButton.MouseEnter:Connect(function()
 Tween(CloseButton, 0.1, { BackgroundColor3 = Theme.SurfaceHover })
 end))
 GiveSignal(CloseButton.MouseLeave:Connect(function()
-Tween(CloseButton, 0.1, { BackgroundColor3 = Theme.Surface })
-Tween(CloseButtonScale, 0.14, { Scale = 1 }, Enum.EasingStyle.Quint)
+MotionOut(CloseButton, 0.1, { BackgroundColor3 = Theme.Surface })
+MotionOut(CloseButtonScale, 0.14, { Scale = 1 }, Enum.EasingStyle.Quint)
 end))
 GiveSignal(HubUI.UnloadButton.MouseButton1Click:Connect(function()
-Tween(UnloadButtonScale, 0.08, { Scale = 0.88 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+HubUI.Motion.Press(UnloadButtonScale, true)
 HubUI.AnimateUnload()
 end))
 GiveSignal(HubUI.UnloadButton.MouseEnter:Connect(function()
 Tween(HubUI.UnloadButton, 0.1, { BackgroundColor3 = Theme.Bad, TextColor3 = Color3.new(1, 1, 1) })
 end))
 GiveSignal(HubUI.UnloadButton.MouseLeave:Connect(function()
-Tween(HubUI.UnloadButton, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Bad })
-Tween(UnloadButtonScale, 0.14, { Scale = 1 }, Enum.EasingStyle.Quint)
+MotionOut(HubUI.UnloadButton, 0.1, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Bad })
+MotionOut(UnloadButtonScale, 0.14, { Scale = 1 }, Enum.EasingStyle.Quint)
 end))
 
 local function PointInside(Object, Point)
@@ -32897,7 +33004,8 @@ if HubNow - (HubUI.HubRenderAt or 0) < HubInterval then return end
 HubUI.HubRenderAt = HubNow
 local RenderOk, RenderError = pcall(function()
 local Now = os.clock()
-local MotionEnabled = not InterfaceConfig.ReducedMotion
+local LinoriaStatic = InterfaceConfig.ThemePreset == 'Linoria'
+local MotionEnabled = not InterfaceConfig.ReducedMotion and not LinoriaStatic
 local PrismActive = InterfaceConfig.ThemePreset == 'Prism'
 local GradientSpeed = math.max(0.01, tonumber(CONFIG.GradientCycleSpeed) or 0.18) * math.max(0.25, tonumber(InterfaceConfig.AnimationSpeed) or 1)
 local GoldPhase = MotionEnabled and (Now * GradientSpeed * math.pi * 2) or 0
@@ -32907,8 +33015,11 @@ and Color3.fromHSV(MotionEnabled and ((Now * GradientSpeed * 0.16) % 1) or 0.86,
 or (MotionEnabled and Theme.Accent:Lerp(Theme.AccentBright, GoldAlpha) or Theme.Accent)
 local Pulse = MotionEnabled and (math.sin(Now * 4.2) + 1) * 0.5 or 0.5
 
-if MainBorder.Thickness ~= 2 then MainBorder.Thickness = 2 end
-if MainBorder.Transparency ~= 0.02 then MainBorder.Transparency = 0.02 end
+MainBorder.Thickness = LinoriaStatic and 1 or 2
+MainBorder.Transparency = LinoriaStatic and 0.12 or 0.02
+MainBorder.Color = LinoriaStatic and Theme.Border or MainBorder.Color
+MainFlameGradient.Enabled = not LinoriaStatic
+BackgroundGradient.Enabled = not LinoriaStatic
 MainFlameGradient.Rotation = MotionEnabled and ((Now * 34 * GradientSpeed) % 360) or 0
 MainFlameGradient.Offset = MotionEnabled and Vector2.new(
 math.sin(Now * GradientSpeed * 2.4) * 0.34,
@@ -33030,8 +33141,8 @@ table.remove(HubUI.Accents, Index)
 end
 end
 for Name, Data in pairs(HubUI.TabButtons) do
-Data.Button.TextColor3 = Name == HubUI.ActiveTab and Accent or Theme.Muted
-Data.Button.BackgroundColor3 = Name == HubUI.ActiveTab and Theme.Panel or Theme.Background
+Data.Button.TextColor3 = Name == HubUI.ActiveTab and Theme.Text or Theme.Muted
+Data.Button.BackgroundColor3 = Name == HubUI.ActiveTab and Theme.SurfaceHover or Theme.Panel
 end
 local ActiveCount = 0
 for _, Control in pairs(HubUI.Controls) do
@@ -33422,22 +33533,22 @@ Tween(HubUI.IntroTitle, 0.46, { Position = UDim2.fromOffset(0, 14), TextTranspar
 end
 Tween(Intro, 0.38, { GroupTransparency = 0 }, Enum.EasingStyle.Sine)
 Tween(IntroScale, 0.52, { Scale = 1 }, Enum.EasingStyle.Quint)
-task.wait(0.20)
+task.wait(HubUI.Motion.Hold(0.20))
 IntroBrand.TextTransparency = 1
 Tween(IntroBrand, 0.30, { TextTransparency = 0.15 }, Enum.EasingStyle.Sine)
 Tween(IntroStatus, 0.28, { TextTransparency = 0 }, Enum.EasingStyle.Sine)
-task.wait(0.20)
+task.wait(HubUI.Motion.Hold(0.20))
 
 -- Crossfade the status line so text never pops between stages.
 Tween(IntroStatus, 0.10, { TextTransparency = 1 }, Enum.EasingStyle.Sine)
-task.wait(0.10)
+task.wait(HubUI.Motion.Hold(0.10))
 IntroStatus.Text = 'SETTING THE STAGE'
 Tween(IntroStatus, 0.16, { TextTransparency = 0 }, Enum.EasingStyle.Sine)
 if HubUI.IntroPercent then
 Tween(HubUI.IntroPercent, 0.22, { TextTransparency = 0.15 }, Enum.EasingStyle.Sine)
 end
 
-local FillTween = Tween(IntroFill, 1.10, { Size = UDim2.fromScale(1, 1) })
+local FillTween = Tween(IntroFill, 1.10, { Size = UDim2.fromScale(1, 1) }, Enum.EasingStyle.Linear)
 -- Counter is driven off the real fill width, so it can never drift out
 -- of sync with the bar or with a reduced-motion duration.
 task.spawn(function()
@@ -33449,7 +33560,7 @@ end
 local Stage = Progress < 0.34 and 'SETTING THE STAGE'
 or (Progress < 0.68 and 'FINALIZING' or 'ALMOST READY')
 if IntroStatus.Text ~= Stage then IntroStatus.Text = Stage end
-task.wait(0.03)
+task.wait(HubUI.Motion.Hold(0.03))
 end
 if HubUI.IntroPercent then HubUI.IntroPercent.Text = '100%' end
 end)
@@ -33457,11 +33568,11 @@ FillTween.Completed:Wait()
 if not (State.Active and ScreenGui.Parent and Intro.Parent) then return end
 
 Tween(IntroStatus, 0.10, { TextTransparency = 1 }, Enum.EasingStyle.Sine)
-task.wait(0.10)
+task.wait(HubUI.Motion.Hold(0.10))
 IntroStatus.Text = 'WELCOME BACK'
 IntroStatus.TextColor3 = Theme.AccentBright
 Tween(IntroStatus, 0.18, { TextTransparency = 0 }, Enum.EasingStyle.Sine)
-task.wait(0.22)
+task.wait(HubUI.Motion.Hold(0.22))
 
 Main.Visible = true
 Main.GroupTransparency = 1
@@ -33474,7 +33585,7 @@ Tween(IntroScale, 0.34, { Scale = 1.03 }, Enum.EasingStyle.Quint)
 if HubUI.IntroScrim then
 Tween(HubUI.IntroScrim, 0.40, { BackgroundTransparency = 1 }, Enum.EasingStyle.Sine)
 end
-task.wait(0.36)
+task.wait(HubUI.Motion.Hold(0.36))
 
 if Intro and Intro.Parent then Intro:Destroy() end
 if HubUI.IntroScrim then HubUI.IntroScrim:Destroy(); HubUI.IntroScrim = nil end
