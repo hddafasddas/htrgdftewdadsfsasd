@@ -221,6 +221,13 @@ AutoBodySpaceAngle = 20,
 AutoBodyTargetHysteresis = 2.5,
 AutoBodyHandStableTime = 0.12,
 AutoBodyHandSwitchCooldown = 0.40,
+AutoBodyFurthestHand = false,
+AutoBodyFurthestHandRange = 14,
+AutoBodyFurthestHandDeadzone = 0.18,
+HotReloadEnabled = false,
+HotReloadInterval = 3,
+HotReloadFile = 'SilverSurfer_Source.lua',
+HotReloadUrl = '',
 AutoBodyMode = 'Shield',
 AutoBodyMethod = 'CFrame Rotation',
 AutoBodyRimBlend = 35,
@@ -22584,7 +22591,7 @@ end
 
 local function CreateCompleteSilverSurferUI()
 --[[
-    SILVER SURFER UI  |  v1.14.0
+    SILVER SURFER UI  |  v1.15.0
     A single-file Roblox Luau interface framework in the spirit of Linoria:
     a compact, monospaced, bordered desktop panel -- rebuilt with a cleaner
     component model, deterministic layout, and a polished black + gold theme.
@@ -27711,6 +27718,9 @@ local function createAutoguard(getGame, notify)
         handSwitchCamera = true,  -- let camera yaw anticipate the next cut
         handSwitchCourt = true,   -- weigh rim direction and sideline space
         handSwitchSensitivity = 0.16, -- score needed before a switch is asked for
+        furthestHand = false, -- park the ball in the hand away from pressure
+        furthestHandRange = 14, -- studs; defender must be this close to count
+        furthestHandDeadzone = 0.18, -- ignore threats sitting dead ahead
 
         -- Adaptive defense: reassign between the ball handler and the nearest
         -- off-ball opponent as the possession develops.
@@ -29080,7 +29090,33 @@ local function createAutoguard(getGame, notify)
 
     local function updateDirectionalHandSwitch(character, humanoid, root, ball)
         local now = os.clock()
-        local desired = desiredMovementHand(character, humanoid, root)
+        local desired = nil
+
+        -- Ball protection: hold the ball in whichever hand is furthest from
+        -- the nearest defender. Returns no opinion when nobody is close
+        -- enough, or when the defender sits dead ahead or behind us, so a
+        -- centred threat cannot make the two hands flip-flop. Either way the
+        -- normal directional read below still gets the final say.
+        if cfg.furthestHand and root then
+            local direction, distance = nearestDefender(root)
+            if direction and distance <= math.clamp(
+                tonumber(cfg.furthestHandRange) or 14, 4, HAND_DEFENDER_RANGE) then
+                local _, cameraRight = cameraBasis()
+                local frameRight = cameraRight or rightOf(flatten(root.CFrame.LookVector))
+                if frameRight then
+                    local side = direction:Dot(frameRight)
+                    if math.abs(side) >= math.clamp(
+                        tonumber(cfg.furthestHandDeadzone) or 0.18, 0.05, 0.60) then
+                        -- Defender to our right means the left hand is far.
+                        desired = side > 0 and "Left" or "Right"
+                    end
+                end
+            end
+        end
+
+        if not desired then
+            desired = desiredMovementHand(character, humanoid, root)
+        end
         if not desired then
             st.lastDesiredHand = nil
             st.pendingHand = nil
@@ -29525,7 +29561,7 @@ local function createAutoguard(getGame, notify)
         -- Hand switching only cares about the ball and movement input, not
         -- about whether Auto Body's defender-facing behaviour is on. Those
         -- are unrelated features that happened to share a UI section.
-        if cfg.autoHandSwitch and heldBall then
+        if (cfg.autoHandSwitch or cfg.furthestHand) and heldBall then
             updateDirectionalHandSwitch(character, humanoid, root, heldBall)
         else
             resetHandSwitchState()
@@ -31789,6 +31825,16 @@ local function createAutoguard(getGame, notify)
     function API:SetHandSwitchSensitivity(value)
         cfg.handSwitchSensitivity = math.clamp(tonumber(value) or 0.16, 0.05, 0.60)
     end
+    function API:SetFurthestHand(value)
+        cfg.furthestHand = value == true
+        resetHandSwitchState()
+    end
+    function API:SetFurthestHandRange(value)
+        cfg.furthestHandRange = math.clamp(tonumber(value) or 14, 4, 22)
+    end
+    function API:SetFurthestHandDeadzone(value)
+        cfg.furthestHandDeadzone = math.clamp(tonumber(value) or 0.18, 0.05, 0.60)
+    end
     function API:Destroy()
         cfg.enabled = false
         saveMovementStyle(true)
@@ -33375,8 +33421,32 @@ local function launchShowcase()
         Default = true,
         Callback = function(value) autoguard:SetHandSwitchCourt(value) end,
     })
+    bodyCore:AddToggle("guard_furthest_hand", {
+        Text = "Ball In Furthest Hand",
+        Default = false,
+        Callback = function(value)
+            autoguard:SetFurthestHand(value)
+            CONFIG.AutoBodyFurthestHand = value == true
+        end,
+    })
 
     local bodyTuning = bodyTab:AddSection("Tuning", "Right")
+    bodyTuning:AddSlider("guard_furthest_hand_range", {
+        Text = "Furthest hand range", Min = 4, Max = 22, Default = 14, Rounding = 0,
+        Suffix = " studs",
+        Callback = function(value)
+            autoguard:SetFurthestHandRange(value)
+            CONFIG.AutoBodyFurthestHandRange = value
+        end,
+    })
+    bodyTuning:AddSlider("guard_furthest_hand_deadzone", {
+        Text = "Furthest hand deadzone", Min = 5, Max = 60, Default = 18, Rounding = 0,
+        Suffix = "%",
+        Callback = function(value)
+            autoguard:SetFurthestHandDeadzone(value / 100)
+            CONFIG.AutoBodyFurthestHandDeadzone = value / 100
+        end,
+    })
     bodyTuning:AddSlider("guard_auto_body_range", {
         Text = "Detection range", Min = 6, Max = 60, Default = 28, Rounding = 0,
         Callback = function(value) autoguard:SetAutoBodyRange(value); CONFIG.AutoBodyRange = value end,
@@ -34616,6 +34686,7 @@ end)
         { Bind = 'kb_hand_switch', Text = 'Directional hand switching', Target = 'guard_auto_hand_switch' },
         { Bind = 'kb_hand_switch_camera', Text = 'Camera awareness', Target = 'guard_hand_switch_camera' },
         { Bind = 'kb_hand_switch_court', Text = 'Court awareness', Target = 'guard_hand_switch_court' },
+        { Bind = 'kb_furthest_hand', Text = 'Ball in furthest hand', Target = 'guard_furthest_hand' },
     })
 
     local KeybindVisuals = keybindsTab:AddSection('Visuals', 'Right')
@@ -34681,6 +34752,10 @@ end)
         { Kind = 'action', Bind = 'kb_ghost_stop', Text = 'Stop ghost playback', Run = function()
             State.GhostReplay.StopPlayback('KEYBIND STOP')
         end },
+        { Bind = 'kb_hot_reload', Text = 'Auto hot reload', Target = 'hot_reload' },
+        { Kind = 'action', Bind = 'kb_hot_reload_now', Text = 'Reload script now', Run = function()
+            State.HotReload.Check(true)
+        end },
         { Kind = 'action', Bind = 'kb_unload', Text = 'Unload script', Run = function()
             UI:Destroy()
         end },
@@ -34698,6 +34773,196 @@ end)
         { Kind = 'legacy', Bind = 'kb_cfg_getopen', Text = 'Auto get open', Field = 'AutoGetOpenKey' },
     })
 
+
+    --== Hot reload =========================================================
+    -- Watches the script source (local file or URL) and re-executes it when the
+    -- bytes change. The fresh chunk runs the re-injection guard at the top of
+    -- the file, which calls the unload hook installed below, so the old copy is
+    -- torn down before the new one boots instead of both running at once.
+    State.HotReload = {
+        Enabled = CONFIG.HotReloadEnabled == true,
+        Status = 'IDLE',
+        Signature = nil,
+        Reloads = 0,
+        LastCheckAt = 0,
+        StatusLabel = nil,
+    }
+
+    function State.HotReload.Teardown()
+        pcall(function() State.HotReload.Enabled = false end)
+        pcall(function() State.Active = false end)
+        pcall(function() State.RequestedEnabled = false end)
+        pcall(function() SetSilentAimEnabled(false, false) end)
+        if type(destroyEngine) == 'function' then
+            pcall(destroyEngine, activeEngine)
+        end
+        if type(autoguard) == 'table' and autoguard.Destroy then
+            pcall(function() autoguard:Destroy() end)
+        end
+        pcall(function() UI:Destroy() end)
+        for Index = #Signals, 1, -1 do
+            local Connection = Signals[Index]
+            pcall(function() Connection:Disconnect() end)
+            Signals[Index] = nil
+        end
+    end
+
+    function State.HotReload.Fetch()
+        local Url = tostring(CONFIG.HotReloadUrl or '')
+        if Url ~= '' then
+            local Ok, Body = pcall(function() return game:HttpGet(Url, true) end)
+            if not Ok or type(Body) ~= 'string' or #Body == 0 then
+                Ok, Body = pcall(function()
+                    return request({ Url = Url, Method = 'GET' }).Body
+                end)
+            end
+            if Ok and type(Body) == 'string' and #Body > 0 then return Body end
+            return nil, 'FETCH FAILED'
+        end
+
+        local File = tostring(CONFIG.HotReloadFile or '')
+        if File == '' then return nil, 'NO SOURCE SET' end
+        if type(isfile) ~= 'function' or type(readfile) ~= 'function' then
+            return nil, 'NO FILESYSTEM'
+        end
+        local Exists = false
+        pcall(function() Exists = isfile(File) end)
+        if not Exists then return nil, 'SOURCE NOT FOUND' end
+        local Ok, Body = pcall(readfile, File)
+        if Ok and type(Body) == 'string' and #Body > 0 then return Body end
+        return nil, 'READ FAILED'
+    end
+
+    -- Sampled hash. Folding in every byte of a 1.3 MB source every few seconds
+    -- would cost real frame time, so we mix the length with ~512 evenly spaced
+    -- bytes, which still catches edits that keep the length identical.
+    function State.HotReload.Sign(Source)
+        local Length = #Source
+        local Hash = Length
+        local Step = math.max(1, math.floor(Length / 512))
+        for Index = 1, Length, Step do
+            Hash = (Hash * 31 + string.byte(Source, Index)) % 2147483647
+        end
+        return Length .. ':' .. Hash
+    end
+
+    function State.HotReload.Apply(Source)
+        if type(loadstring) ~= 'function' then
+            State.HotReload.Status = 'NO LOADSTRING'
+            return false
+        end
+        local Chunk, CompileError = loadstring(Source, 'SilverSurferHotReload')
+        if not Chunk then
+            State.HotReload.Status = 'COMPILE ERROR'
+            UI:Notify({
+                Title = 'Hot reload',
+                Content = 'New build did not compile. Keeping this one.',
+                Type = 'Warning',
+            })
+            pcall(Notify, 'SILVER SURFER',
+                'Hot reload compile error: ' .. tostring(CompileError))
+            return false
+        end
+
+        State.HotReload.Status = 'RELOADING'
+        UI:Notify({
+            Title = 'Hot reload',
+            Content = 'New build detected. Reloading.',
+            Type = 'Info',
+        })
+        GlobalEnv.__HOOPZ_SILENTAIM_UNLOAD = State.HotReload.Teardown
+        task.defer(function()
+            local Ok, Err = pcall(Chunk)
+            if not Ok then
+                pcall(Notify, 'SILVER SURFER', 'Hot reload failed: ' .. tostring(Err))
+            end
+        end)
+        return true
+    end
+
+    function State.HotReload.Check(Force)
+        local Source, Reason = State.HotReload.Fetch()
+        if not Source then
+            State.HotReload.Status = Reason or 'FETCH FAILED'
+            return false
+        end
+        local Signature = State.HotReload.Sign(Source)
+        local Baseline = State.HotReload.Signature
+        State.HotReload.Signature = Signature
+        if not Force and (Baseline == nil or Signature == Baseline) then
+            State.HotReload.Status = 'WATCHING'
+            return false
+        end
+        State.HotReload.Reloads = State.HotReload.Reloads + 1
+        return State.HotReload.Apply(Source)
+    end
+
+    -- Installed even when auto reload is off, so a manual re-execute of the
+    -- script also unloads this instance first. This hook was read by the
+    -- re-injection guard at the top of the file but never assigned before.
+    GlobalEnv.__HOOPZ_SILENTAIM_UNLOAD = State.HotReload.Teardown
+
+    HubUI.HotReloadGroup = utilityTab:AddSection('Hot Reload', 'Left')
+    State.HotReload.StatusLabel = HubUI.HotReloadGroup:AddLabel('Hot reload: idle', true)
+    HubUI.HotReloadGroup:AddToggle('hot_reload', {
+        Text = 'Auto reload on source change',
+        Default = CONFIG.HotReloadEnabled == true,
+        Callback = function(value)
+            CONFIG.HotReloadEnabled = value == true
+            State.HotReload.Enabled = value == true
+            State.HotReload.Signature = nil
+            State.HotReload.Status = value and 'WATCHING' or 'IDLE'
+        end,
+    })
+    HubUI.HotReloadGroup:AddSlider('hot_reload_interval', {
+        Text = 'Check interval', Min = 1, Max = 60, Default = 3, Rounding = 0,
+        Suffix = 's',
+        Callback = function(value) CONFIG.HotReloadInterval = value end,
+    })
+    HubUI.HotReloadGroup:AddTextbox('hot_reload_file', {
+        Text = 'Source file',
+        Default = tostring(CONFIG.HotReloadFile or ''),
+        Placeholder = 'SilverSurfer_Source.lua',
+        Callback = function(value) CONFIG.HotReloadFile = value end,
+    })
+    HubUI.HotReloadGroup:AddTextbox('hot_reload_url', {
+        Text = 'Source URL (overrides file)',
+        Default = tostring(CONFIG.HotReloadUrl or ''),
+        Placeholder = 'https://raw.githubusercontent.com/...',
+        Callback = function(value) CONFIG.HotReloadUrl = value end,
+    })
+    HubUI.HotReloadGroup:AddButton('Reload now', function()
+        task.spawn(State.HotReload.Check, true)
+    end)
+    HubUI.HotReloadGroup:AddButton('Check for changes', function()
+        task.spawn(function()
+            State.HotReload.Check(false)
+            UI:Notify({
+                Title = 'Hot reload',
+                Content = tostring(State.HotReload.Status),
+                Type = 'Info',
+            })
+        end)
+    end)
+
+    task.spawn(function()
+        local Session = GlobalEnv.__HOOPZ_SILENTAIM_SESSION
+        while true do
+            task.wait(1)
+            if GlobalEnv.__HOOPZ_SILENTAIM_SESSION ~= Session then return end
+            if State.HotReload.StatusLabel then
+                State.HotReload.StatusLabel.Text = ('Hot reload: %s | reloads %d'):format(
+                    tostring(State.HotReload.Status), State.HotReload.Reloads)
+            end
+            if State.HotReload.Enabled then
+                local Interval = math.clamp(tonumber(CONFIG.HotReloadInterval) or 3, 1, 60)
+                if os.clock() - State.HotReload.LastCheckAt >= Interval then
+                    State.HotReload.LastCheckAt = os.clock()
+                    pcall(State.HotReload.Check, false)
+                end
+            end
+        end
+    end)
 
     HubUI.SpooferTab = window:AddTab('Spoofer')
     HubUI.Section_spoof_identity = HubUI.SpooferTab:AddSection('Identity', 'Left')
