@@ -37,6 +37,7 @@ AimMode = 'Legit',
 SilentMode = 'High',
 SilentAimMethod = 'Camera Ray Spoof',
 ClickToShoot = false,
+SilentShotDelay = 0,
 HumanizeEnabled = false,
 HumanizeAccuracy = 92,
 HumanizeMaxAngle = 25,
@@ -22591,7 +22592,7 @@ end
 
 local function CreateCompleteSilverSurferUI()
 --[[
-    SILVER SURFER UI  |  v1.15.0
+    SILVER SURFER UI  |  v1.16.0
     A single-file Roblox Luau interface framework in the spirit of Linoria:
     a compact, monospaced, bordered desktop panel -- rebuilt with a cleaner
     component model, deterministic layout, and a polished black + gold theme.
@@ -25215,6 +25216,7 @@ local function createHoopzSilentAim(notify)
         Enabled = false,
         ArcMode = 'High', -- High = lobbed root, Low = flat bullet root
         ShootMode = 'Click', -- Click = manual release; Jump apex = automatic release
+        ShotDelay = 0, -- seconds held before the release actually goes out
         Power = 85,
         VerticalBoost = 55, -- FormulaVerticalBoost
         HighAimYOffset = -1.6, -- applied only in High mode
@@ -25679,10 +25681,15 @@ local function createHoopzSilentAim(notify)
             Runtime.JumpArmed = true
         end
         if Runtime.JumpArmed and not Runtime.ShotThisJump and VerticalVelocity <= 0.5 then
+            -- Consume the jump immediately so the delay window cannot queue a
+            -- second release, then let the timer decide when the click lands.
             Runtime.ShotThisJump = true
-            if not FireShot() then
-                Notify('Apex reached, but click input is unavailable')
-            end
+            task.delay(math.clamp(tonumber(CONFIG.ShotDelay) or 0, 0, 1.5), function()
+                if Runtime.Unloaded then return end
+                if not FireShot() then
+                    Notify('Apex reached, but click input is unavailable')
+                end
+            end)
         end
     end
 
@@ -25788,9 +25795,23 @@ local function createHoopzSilentAim(notify)
             .. ((CONFIG.ArcMode == 'Low') and '  (flat)' or '  (lobbed)'))
     end
     function API:SetShootMode(Value)
-        CONFIG.ShootMode = Value == 'Jump apex' and 'Jump apex' or 'Click'
+        CONFIG.ShootMode = (Value == 'Jump apex' and 'Jump apex')
+            or (Value == 'Trigger key' and 'Trigger key')
+            or 'Click'
         ResetJumpShot()
         Notify('Shoot mode: ' .. CONFIG.ShootMode)
+    end
+    function API:SetShotDelay(Value)
+        CONFIG.ShotDelay = math.clamp(tonumber(Value) or 0, 0, 1.5)
+    end
+    function API:FireNow()
+        -- Manual release. Runs in every shoot mode so the trigger key stays
+        -- usable even while Click or Jump apex is selected.
+        task.delay(math.clamp(tonumber(CONFIG.ShotDelay) or 0, 0, 1.5), function()
+            if Runtime.Unloaded then return end
+            FireShot()
+        end)
+        return true
     end
     function API:SetPower(Value)
         CONFIG.Power = math.clamp(tonumber(Value) or 85, 1, 200)
@@ -26699,7 +26720,17 @@ local function createSwishSilentAim(externalNotify)
                 -- the apex instead of permanently setting shotFired.
                 if now - st.lastFireAttempt >= 0.06 then
                     st.lastFireAttempt = now
-                    st.shotFired = fire() == true
+                    if (tonumber(cfg.shotDelay) or 0) <= 0 then
+                        st.shotFired = fire() == true
+                    else
+                        -- With a delay set the retry loop has to be closed off
+                        -- up front, otherwise the apex keeps re-arming while
+                        -- the timer is still pending and stacks releases.
+                        st.shotFired = true
+                        task.delay(math.clamp(tonumber(cfg.shotDelay) or 0, 0, 1.5), function()
+                            if not st.unloaded then fire() end
+                        end)
+                    end
                 end
             end
         else
@@ -26733,12 +26764,25 @@ local function createSwishSilentAim(externalNotify)
         return st.origSend ~= nil
     end
     function API:SetShootMode(value)
-        -- Click = packet rewrite only on user release; Jump apex = auto release.
+        -- Click = packet rewrite only on user release; Jump apex = auto
+        -- release; Trigger key = no automatic release at all.
         cfg.autoApex = value == "Jump apex"
+        cfg.shootMode = value == "Trigger key" and "Trigger key"
+            or (cfg.autoApex and "Jump apex" or "Click")
         st.jumpRose = false
         st.shotFired = false
         st.lastFireAttempt = 0
-        notify("Shoot mode: " .. (cfg.autoApex and "Jump apex" or "Click"))
+        notify("Shoot mode: " .. cfg.shootMode)
+    end
+    function API:SetShotDelay(value)
+        cfg.shotDelay = math.clamp(tonumber(value) or 0, 0, 1.5)
+    end
+    function API:FireNow()
+        task.delay(math.clamp(tonumber(cfg.shotDelay) or 0, 0, 1.5), function()
+            if st.unloaded then return end
+            fire()
+        end)
+        return true
     end
     function API:SetArcMode(value)
         cfg.highArc = value ~= "Low"
@@ -27150,8 +27194,14 @@ local function createRooftop2SilentAim(externalNotify)
             local direction = aimDirection()
             if direction then
                 st.shotFired = true
-                local power = tonumber(LocalPlayer:GetAttribute("Power")) or 70
-                remote.SendServer("Ball_Shoot", direction, power)
+                task.delay(math.clamp(tonumber(cfg.shotDelay) or 0, 0, 1.5), function()
+                    if st.unloaded or not cfg.enabled then return end
+                    -- Re-solve at release time; a delayed shot is aimed from
+                    -- wherever the player actually is when it goes out.
+                    local aim = aimDirection() or direction
+                    local power = tonumber(LocalPlayer:GetAttribute("Power")) or 70
+                    remote.SendServer("Ball_Shoot", aim, power)
+                end)
             end
         end
     end))
@@ -27168,9 +27218,25 @@ local function createRooftop2SilentAim(externalNotify)
         return true
     end
     function API:SetShootMode(value)
-        cfg.shootMode = value == "Jump apex" and "Jump apex" or "Click"
+        cfg.shootMode = (value == "Jump apex" and "Jump apex")
+            or (value == "Trigger key" and "Trigger key")
+            or "Click"
         resetJump()
         notify("Shoot mode: " .. cfg.shootMode)
+    end
+    function API:SetShotDelay(value)
+        cfg.shotDelay = math.clamp(tonumber(value) or 0, 0, 1.5)
+    end
+    function API:FireNow()
+        task.delay(math.clamp(tonumber(cfg.shotDelay) or 0, 0, 1.5), function()
+            if st.unloaded or not cfg.enabled then return end
+            if not holdingBall() then return end
+            local direction = aimDirection()
+            if not direction then return end
+            local power = tonumber(LocalPlayer:GetAttribute("Power")) or 70
+            remote.SendServer("Ball_Shoot", direction, power)
+        end)
+        return true
     end
     function API:SetArcMode(value)
         cfg.arcMode = value == "Low" and "Low" or "High"
@@ -27605,9 +27671,12 @@ end)
                     elseif State.JumpArmed and not State.ShotFired
                         and velocityY <= Config.ApexVelocity then
                         State.ShotFired = true
-                        if not fireNativeClick() then
-                            notify("Drop Offs native click unavailable")
-                        end
+                        task.delay(math.clamp(tonumber(Config.ShotDelay) or 0, 0, 1.5), function()
+                            if State.Unloaded or not Config.Enabled then return end
+                            if not fireNativeClick() then
+                                notify("Drop Offs native click unavailable")
+                            end
+                        end)
                     end
                 end
             else
@@ -27637,9 +27706,25 @@ end)
         return true
     end
     function API:SetShootMode(value)
-        Config.ShootMode = value == "Jump apex" and "Jump apex" or "Click"
+        Config.ShootMode = (value == "Jump apex" and "Jump apex")
+            or (value == "Trigger key" and "Trigger key")
+            or "Click"
         resetJump()
         notify("Shoot mode: " .. Config.ShootMode)
+    end
+    function API:SetShotDelay(value)
+        Config.ShotDelay = math.clamp(tonumber(value) or 0, 0, 1.5)
+    end
+    function API:FireNow()
+        task.delay(math.clamp(tonumber(Config.ShotDelay) or 0, 0, 1.5), function()
+            if State.Unloaded or not Config.Enabled then return end
+            -- fireNativeClick's virtual-input fallback checks ShotFired, so it
+            -- has to be set for the manual path too, then released again.
+            State.ShotFired = true
+            fireNativeClick()
+            task.delay(0.25, function() State.ShotFired = false end)
+        end)
+        return true
     end
     function API:SetTargetHoop(value)
         local allowed = { Auto = true, Go1 = true, Go2 = true, Own = true, Opponent = true }
@@ -31911,6 +31996,9 @@ local function launchShowcase()
         local arc = controlValue("silent_arc", "High")
         if engine.SetShootMode then engine:SetShootMode(shoot) end
         if engine.SetArcMode then engine:SetArcMode(arc) end
+        if engine.SetShotDelay and UI.Options.silent_shot_delay then
+            engine:SetShotDelay(UI.Options.silent_shot_delay.Value / 1000)
+        end
         if engine.SetPower and UI.Options.silent_power then
             engine:SetPower(UI.Options.silent_power.Value)
         end
@@ -32961,10 +33049,27 @@ local function launchShowcase()
         end,
     })
     silentControls:AddSegmented("shoot_mode", {
-        Text = "Shoot mode", Values = { "Click", "Jump apex" }, Default = "Click",
+        Text = "Shoot mode",
+        Values = { "Click", "Jump apex", "Trigger key" }, Default = "Click",
         Callback = function(value)
             if activeEngine and activeEngine.SetShootMode then
                 activeEngine:SetShootMode(value)
+            end
+            if value == "Trigger key" then
+                UI:Notify({
+                    Title = "Silent aim",
+                    Content = "Jumping no longer shoots. Use the shoot key in Keybinds.",
+                    Type = "Info",
+                })
+            end
+        end,
+    })
+    silentControls:AddSlider("silent_shot_delay", {
+        Text = "Shot delay", Min = 0, Max = 1500, Default = 0, Rounding = 0, Suffix = " ms",
+        Callback = function(value)
+            CONFIG.SilentShotDelay = value
+            if activeEngine and activeEngine.SetShotDelay then
+                activeEngine:SetShotDelay(value / 1000)
             end
         end,
     })
@@ -34642,6 +34747,22 @@ end)
 
     local KeybindShooting = keybindsTab:AddSection('Shooting', 'Right')
     KB_Build(KeybindShooting, {
+        { Kind = 'action', Bind = 'kb_shoot_now', Text = 'Shoot now (silent aim)', Default = 'X',
+          Run = function()
+              if not activeEngine then
+                  UI:Notify({ Title = 'Silent aim',
+                      Content = 'No engine is running for this game.', Type = 'Warning' })
+                  return
+              end
+              if not activeEngine.FireNow then
+                  UI:Notify({ Title = 'Silent aim',
+                      Content = 'This engine cannot fire on command.', Type = 'Warning' })
+                  return
+              end
+              activeEngine:FireNow()
+          end },
+        { Kind = 'cycle', Bind = 'kb_cycle_shot_delay', Text = 'Cycle shot delay', Target = 'silent_shot_delay',
+          Values = { 0, 100, 200, 350, 500 } },
         { Bind = 'kb_force_score', Text = 'Force score', Target = 'swish_force_score' },
         { Bind = 'kb_autopower', Text = 'Auto power', Target = 'swish_autopower' },
         { Bind = 'kb_fullcourt', Text = 'Fullcourt bypass', Target = 'swish_fullcourt' },
