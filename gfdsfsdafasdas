@@ -13374,7 +13374,7 @@ end
 
 State.AutoConfig = {
 PlaceId = 6229116934,
-Folder = 'SilverSurfer_Configs',
+Folder = 'SilverSurferUI',
 LastLoaded = nil,
 }
 
@@ -13397,7 +13397,7 @@ local TimeOk, Time = pcall(lastmodified, Path)
 if TimeOk then Modified = tonumber(Time) or 0 end
 end
 if LatestName == nil or Modified > LatestTime then
-LatestName = Stem:gsub('_', ' ')
+LatestName = Stem
 LatestTime = Modified
 end
 end
@@ -13420,15 +13420,12 @@ end
 
 function State.AutoConfig.LoadLatest()
 if game.PlaceId ~= State.AutoConfig.PlaceId then return false end
-if not (type(HubUI) == 'table' and type(HubUI.Configs) == 'table'
-and type(HubUI.Configs.Read) == 'function' and type(HubUI.Configs.Apply) == 'function') then
-return false
-end
+local Library = type(HubUI) == 'table' and HubUI.Library or nil
+if type(Library) ~= 'table' or type(Library.LoadConfig) ~= 'function' then return false end
 local Name = State.AutoConfig.FindLatest()
 if not Name then return false end
-local Profile = HubUI.Configs.Read(Name)
-if type(Profile) ~= 'table' then return false end
-HubUI.Configs.Apply(Profile)
+local Loaded = Library:LoadConfig(Name)
+if not Loaded then return false end
 State.AutoConfig.LastLoaded = Name
 return true, Name
 end
@@ -22592,7 +22589,7 @@ end
 
 local function CreateCompleteSilverSurferUI()
 --[[
-    SILVER SURFER UI  |  v1.16.0
+    SILVER SURFER UI  |  v1.16.1
     A single-file Roblox Luau interface framework in the spirit of Linoria:
     a compact, monospaced, bordered desktop panel -- rebuilt with a cleaner
     component model, deterministic layout, and a polished black + gold theme.
@@ -25021,48 +25018,150 @@ end
 
 --== config =================================================================
 
-function Aureate:ExportConfig()
-    local data = { Version = self.Version, Values = {} }
-    for id, control in pairs(self.Options) do
-        local value = control.Value
-        if typeof(value) == "Color3" then
-            data.Values[id] = { __type = "Color3", value = value:ToHex() }
-        elseif type(value) ~= "function" then
-            data.Values[id] = value
+local function configName(value)
+    value = tostring(value or "default"):match("^%s*(.-)%s*$") or "default"
+    if value == "" then value = "default" end
+    -- A profile name is a filename, not a path. This also stops accidental
+    -- slashes and executor-specific invalid characters from breaking load.
+    value = value:gsub("[\\/:*?\"<>|]", "_")
+    return string.sub(value, 1, 64)
+end
+
+local function configEncodeValue(value, seen)
+    local kind = typeof(value)
+    if kind == "Color3" then
+        return { __type = "Color3", value = value:ToHex() }, true
+    elseif kind == "EnumItem" then
+        return { __type = "EnumItem", value = value.Name }, true
+    elseif kind == "Vector2" then
+        return { __type = "Vector2", x = value.X, y = value.Y }, true
+    elseif kind == "Vector3" then
+        return { __type = "Vector3", x = value.X, y = value.Y, z = value.Z }, true
+    end
+
+    local luaType = type(value)
+    if luaType == "nil" or luaType == "string" or luaType == "number" or luaType == "boolean" then
+        return value, true
+    end
+    if luaType ~= "table" then return nil, false end
+    seen = seen or {}
+    if seen[value] then return nil, false end
+    seen[value] = true
+    local copy = {}
+    for key, entry in pairs(value) do
+        if type(key) == "string" or type(key) == "number" then
+            local encoded, supported = configEncodeValue(entry, seen)
+            if supported then copy[key] = encoded end
         end
     end
-    return HttpService:JSONEncode(data)
+    seen[value] = nil
+    return copy, true
+end
+
+local function configDecodeValue(value)
+    if type(value) ~= "table" or type(value.__type) ~= "string" then return value end
+    if value.__type == "Color3" then
+        local ok, decoded = pcall(Color3.fromHex, tostring(value.value or ""))
+        return ok and decoded or nil
+    elseif value.__type == "EnumItem" then
+        -- Keybind controls consume the enum item's name, so returning the name
+        -- is both portable and compatible with old profiles.
+        return tostring(value.value or "None")
+    elseif value.__type == "Vector2" then
+        return Vector2.new(tonumber(value.x) or 0, tonumber(value.y) or 0)
+    elseif value.__type == "Vector3" then
+        return Vector3.new(tonumber(value.x) or 0, tonumber(value.y) or 0, tonumber(value.z) or 0)
+    end
+    return value
+end
+
+function Aureate:ExportConfig()
+    local data = { Version = self.Version, Values = {} }
+    local skipped = 0
+    for id, control in pairs(self.Options) do
+        -- config_name describes the file being operated on; restoring an old
+        -- value here makes the UI appear to jump to a different profile.
+        if id ~= "config_name" then
+            local encoded, supported = configEncodeValue(control.Value)
+            if supported then data.Values[id] = encoded else skipped += 1 end
+        end
+    end
+    local ok, json = pcall(HttpService.JSONEncode, HttpService, data)
+    if not ok then return nil, "JSON encode failed: " .. tostring(json) end
+    return json, nil, skipped
 end
 
 function Aureate:ImportConfig(json, silent)
     local ok, data = pcall(HttpService.JSONDecode, HttpService, json)
-    if not ok or type(data) ~= "table" then return false, "Invalid config" end
-    for id, value in pairs(data.Values or {}) do
+    if not ok or type(data) ~= "table" or type(data.Values) ~= "table" then
+        return false, "Invalid or damaged config file"
+    end
+
+    local applied, missing, failed = 0, 0, 0
+    local errors = {}
+    -- Stable ordering makes profile loads repeatable rather than depending on
+    -- hash iteration. Controls such as game/engine are therefore deterministic.
+    local ids = {}
+    for id in pairs(data.Values) do table.insert(ids, tostring(id)) end
+    table.sort(ids)
+    for _, id in ipairs(ids) do
         local control = self.Options[id]
-        if control and control.SetValue then
-            if type(value) == "table" and value.__type == "Color3" then
-                value = Color3.fromHex(value.value)
+        if control and type(control.SetValue) == "function" then
+            local value = configDecodeValue(data.Values[id])
+            local setOk, setErr = pcall(control.SetValue, control, value, silent == true)
+            if setOk then
+                applied += 1
+            else
+                failed += 1
+                if #errors < 3 then table.insert(errors, id .. ": " .. tostring(setErr)) end
             end
-            control:SetValue(value, silent)
+        else
+            missing += 1
         end
     end
-    return true
+    if applied == 0 and failed > 0 then
+        return false, "Config values failed to apply: " .. table.concat(errors, " | ")
+    end
+    return true, string.format("Applied %d settings (%d unavailable, %d failed)", applied, missing, failed)
 end
 
 function Aureate:SaveConfig(name)
-    if not writefile then return false, "No filesystem access" end
-    if makefolder then pcall(makefolder, self.ConfigFolder) end
-    local ok, err = pcall(writefile, self.ConfigFolder .. "/" .. (name or "default") .. ".json", self:ExportConfig())
-    return ok, err
+    if type(writefile) ~= "function" then return false, "No filesystem access" end
+    local profile = configName(name)
+    if type(makefolder) == "function" then
+        local folderOk, folderErr = pcall(makefolder, self.ConfigFolder)
+        if not folderOk and type(isfolder) == "function" then
+            local checkOk, exists = pcall(isfolder, self.ConfigFolder)
+            if not checkOk or not exists then return false, "Cannot create config folder: " .. tostring(folderErr) end
+        end
+    end
+    -- Export must be protected before writefile is called. Previously it was
+    -- evaluated as a pcall argument, so an encode error escaped the pcall and
+    -- the button silently did nothing.
+    local exportOk, json, exportErr, skipped = pcall(self.ExportConfig, self)
+    if not exportOk then return false, "Config export crashed: " .. tostring(json) end
+    if not json then return false, tostring(exportErr) end
+    local path = self.ConfigFolder .. "/" .. profile .. ".json"
+    local writeOk, writeErr = pcall(writefile, path, json)
+    if not writeOk then return false, "Write failed: " .. tostring(writeErr) end
+    return true, string.format("Saved %s (%d unsupported skipped)", profile, tonumber(skipped) or 0)
 end
 
 function Aureate:LoadConfig(name, silent)
-    if not readfile or not isfile then return false, "No filesystem access" end
-    local path = self.ConfigFolder .. "/" .. (name or "default") .. ".json"
-    if not isfile(path) then return false, "Config not found" end
-    local ok, contents = pcall(readfile, path)
-    if not ok then return false, contents end
-    return self:ImportConfig(contents, silent)
+    if type(readfile) ~= "function" or type(isfile) ~= "function" then
+        return false, "No filesystem access"
+    end
+    local profile = configName(name)
+    local path = self.ConfigFolder .. "/" .. profile .. ".json"
+    local existsOk, exists = pcall(isfile, path)
+    if not existsOk then return false, "Cannot access config folder" end
+    if not exists then return false, "Config not found: " .. profile end
+    local readOk, contents = pcall(readfile, path)
+    if not readOk then return false, "Read failed: " .. tostring(contents) end
+    local importOk, loaded, details = pcall(self.ImportConfig, self, contents, silent)
+    if not importOk then return false, "Config import crashed: " .. tostring(loaded) end
+    if not loaded then return false, tostring(details) end
+    return true, details
 end
 
 function Aureate:Destroy()
@@ -33612,12 +33711,12 @@ local function launchShowcase()
     local cfg = settings:AddSection("Configuration", "Right")
     cfg:AddTextbox("config_name", { Text = "Config name", Default = "default" })
     cfg:AddButton("Save config", function()
-        local ok, err = UI:SaveConfig(UI.Options.config_name.Value)
-        UI:Notify({ Title = ok and "Saved" or "Save failed", Content = ok and "Config written." or tostring(err), Type = ok and "Success" or "Warning" })
+        local ok, details = UI:SaveConfig(UI.Options.config_name.Value)
+        UI:Notify({ Title = ok and "Saved" or "Save failed", Content = tostring(details), Type = ok and "Success" or "Warning" })
     end)
     cfg:AddButton("Load config", function()
-        local ok, err = UI:LoadConfig(UI.Options.config_name.Value)
-        UI:Notify({ Title = ok and "Loaded" or "Load failed", Content = ok and "Config applied." or tostring(err), Type = ok and "Success" or "Warning" })
+        local ok, details = UI:LoadConfig(UI.Options.config_name.Value)
+        UI:Notify({ Title = ok and "Loaded" or "Load failed", Content = tostring(details), Type = ok and "Success" or "Warning" })
     end)
 
 
