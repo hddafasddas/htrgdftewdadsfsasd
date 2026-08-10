@@ -22584,7 +22584,7 @@ end
 
 local function CreateCompleteSilverSurferUI()
 --[[
-    SILVER SURFER UI  |  v1.13.29
+    SILVER SURFER UI  |  v1.14.0
     A single-file Roblox Luau interface framework in the spirit of Linoria:
     a compact, monospaced, bordered desktop panel -- rebuilt with a cleaner
     component model, deterministic layout, and a polished black + gold theme.
@@ -34452,6 +34452,253 @@ end)
     HubUI.CfgNumber = function(sec, key, label) return sec:AddTextbox('cfg_' .. key, { Text = label, Default = tostring(CONFIG[key] or 0), Numeric = true, Callback = function(v) CONFIG[key] = tonumber(v) or 0 end }) end
     HubUI.CfgList = function(sec, key, label, values) return sec:AddDropdown('cfg_' .. key, { Text = label, Values = values, Default = CONFIG[key] or values[1], Callback = function(v) CONFIG[key] = v end }) end
     HubUI.Run = function(fn, ...) if type(fn) ~= 'function' then UI:Notify({ Title = 'Unavailable', Content = 'That action is not supported here.', Type = 'Warning' }) return end local ok, err = pcall(fn, ...) UI:Notify({ Title = ok and 'Done' or 'Action failed', Content = ok and 'Applied.' or tostring(err), Type = ok and 'Success' or 'Warning' }) end
+    --== Keybinds tab =======================================================
+    local keybindsTab = window:AddTab('Keybinds')
+
+    local function KB_Resolve(label, targetId)
+        local control = UI.Options[targetId]
+        if not control then
+            UI:Notify({ Title = 'Keybinds', Content = label .. ' is unavailable.', Type = 'Warning' })
+            return nil
+        end
+        return control
+    end
+
+    local function KB_Toggle(section, bindId, label, targetId, default)
+        section:AddKeybind(bindId, {
+            Text = label,
+            Default = default or 'None',
+            Mode = 'Toggle',
+            OnClick = function()
+                local control = KB_Resolve(label, targetId)
+                if not control then return end
+                local nextValue = not control.Value
+                control:SetValue(nextValue)
+                UI:Notify({
+                    Title = label,
+                    Content = nextValue and 'ON' or 'OFF',
+                    Type = nextValue and 'Success' or 'Info',
+                })
+            end,
+        })
+    end
+
+    local function KB_Cycle(section, bindId, label, targetId, values, default)
+        section:AddKeybind(bindId, {
+            Text = label,
+            Default = default or 'None',
+            Mode = 'Toggle',
+            OnClick = function()
+                local control = KB_Resolve(label, targetId)
+                if not control then return end
+                if type(values) ~= 'table' or #values == 0 then return end
+                local index = table.find(values, control.Value) or 1
+                local nextValue = values[(index % #values) + 1]
+                control:SetValue(nextValue)
+                UI:Notify({ Title = label, Content = tostring(nextValue), Type = 'Info' })
+            end,
+        })
+    end
+
+    local function KB_Action(section, bindId, label, run, default)
+        section:AddKeybind(bindId, {
+            Text = label,
+            Default = default or 'None',
+            Mode = 'Toggle',
+            OnClick = function()
+                local ok = pcall(run)
+                if not ok then
+                    UI:Notify({ Title = 'Keybinds', Content = label .. ' failed.', Type = 'Warning' })
+                end
+            end,
+        })
+    end
+
+    local function KB_Legacy(section, bindId, label, field)
+        local current = CONFIG[field]
+        local currentName = (typeof(current) == 'EnumItem') and current.Name or 'None'
+        local control = section:AddKeybind(bindId, {
+            Text = label,
+            Default = currentName,
+            Mode = 'Toggle',
+        })
+        control:OnChanged(function(value)
+            local ok, key = pcall(function() return Enum.KeyCode[value] end)
+            if ok and key then
+                CONFIG[field] = key
+                if field == 'MenuKey' then HubUI.MenuKey = key end
+                UI:Notify({ Title = label, Content = 'Bound to ' .. tostring(value), Type = 'Success' })
+            else
+                UI:Notify({
+                    Title = label,
+                    Content = 'This hotkey needs a keyboard key.',
+                    Type = 'Warning',
+                })
+            end
+        end)
+    end
+
+    local function KB_Build(section, rows)
+        for _, row in ipairs(rows) do
+            if row.Kind == 'cycle' then
+                KB_Cycle(section, row.Bind, row.Text, row.Target, row.Values, row.Default)
+            elseif row.Kind == 'action' then
+                KB_Action(section, row.Bind, row.Text, row.Run, row.Default)
+            elseif row.Kind == 'legacy' then
+                KB_Legacy(section, row.Bind, row.Text, row.Field)
+            else
+                KB_Toggle(section, row.Bind, row.Text, row.Target, row.Default)
+            end
+        end
+    end
+
+    local KeybindCore = keybindsTab:AddSection('Core Toggles', 'Left')
+    KeybindCore:AddLabel('Click a bind box, then press any key or mouse button.', true)
+    KB_Build(KeybindCore, {
+        { Bind = 'kb_silent', Text = 'Silent aim', Target = 'silent', Default = 'Z' },
+        { Bind = 'kb_guard', Text = 'Autoguard', Target = 'guard' },
+        { Bind = 'kb_auto_body', Text = 'Auto body', Target = 'guard_auto_body' },
+        { Bind = 'kb_drop_guard', Text = 'Drop prevention', Target = 'drop_guard' },
+        { Bind = 'kb_ebl', Text = 'Auto EBL', Target = 'ebl_enabled' },
+        { Bind = 'kb_trick', Text = 'Trickshots', Target = 'trick_enabled' },
+        { Bind = 'kb_trick_shoot', Text = 'Trickshot auto shoot', Target = 'trick_shoot' },
+        { Kind = 'cycle', Bind = 'kb_cycle_game', Text = 'Cycle game', Target = 'silent_game',
+          Values = { 'Hoopz', 'Swish', 'Drop Offs', 'Rooftop 2' } },
+        { Kind = 'cycle', Bind = 'kb_cycle_shoot_mode', Text = 'Cycle shoot mode', Target = 'shoot_mode',
+          Values = { 'Click', 'Jump apex' } },
+        { Kind = 'cycle', Bind = 'kb_cycle_arc', Text = 'Cycle shot arc', Target = 'silent_arc',
+          Values = { 'High', 'Low' } },
+    })
+
+    local KeybindShooting = keybindsTab:AddSection('Shooting', 'Right')
+    KB_Build(KeybindShooting, {
+        { Bind = 'kb_force_score', Text = 'Force score', Target = 'swish_force_score' },
+        { Bind = 'kb_autopower', Text = 'Auto power', Target = 'swish_autopower' },
+        { Bind = 'kb_fullcourt', Text = 'Fullcourt bypass', Target = 'swish_fullcourt' },
+        { Kind = 'cycle', Bind = 'kb_cycle_hoop', Text = 'Cycle target hoop', Target = 'swish_hoop',
+          Values = { 'Auto', 'Go1', 'Go2', 'Own', 'Opponent' } },
+        { Kind = 'cycle', Bind = 'kb_cycle_power_pref', Text = 'Cycle power preference', Target = 'swish_power_pref',
+          Values = { 'Lowest', 'Highest' } },
+    })
+
+    local KeybindGuard = keybindsTab:AddSection('Autoguard', 'Left')
+    KB_Build(KeybindGuard, {
+        { Bind = 'kb_guard_adaptive', Text = 'Adaptive defense', Target = 'guard_adaptive' },
+        { Bind = 'kb_guard_head_ride', Text = 'Off-ball head ride', Target = 'guard_head_ride' },
+        { Bind = 'kb_guard_head_ride_jump', Text = 'Head ride auto jump', Target = 'guard_head_ride_jump' },
+        { Bind = 'kb_guard_pause', Text = 'Pause while holding ball', Target = 'guard_pause' },
+        { Bind = 'kb_guard_jump', Text = 'Mirror carrier jumps', Target = 'guard_jump' },
+        { Bind = 'kb_guard_override', Text = 'Manual override', Target = 'guard_manual_override' },
+        { Bind = 'kb_guard_air_catch', Text = 'Jump for airborne balls', Target = 'guard_air_catch' },
+        { Bind = 'kb_guard_ignore_mates', Text = 'Ignore teammates', Target = 'guard_ignore_teammates' },
+        { Bind = 'kb_guard_cutoff_clamp', Text = 'Keep cutoff in bounds', Target = 'guard_cutoff_clamp' },
+        { Kind = 'cycle', Bind = 'kb_cycle_defense', Text = 'Cycle defense focus', Target = 'guard_defense_type',
+          Values = { 'On-ball', 'Off-ball' } },
+        { Kind = 'cycle', Bind = 'kb_cycle_offball', Text = 'Cycle off-ball position', Target = 'guard_offball_position',
+          Values = { 'Front', 'Behind' } },
+    })
+
+    local KeybindGhost = keybindsTab:AddSection('Ghost & Offense', 'Right')
+    KB_Build(KeybindGhost, {
+        { Bind = 'kb_ghost_enabled', Text = 'Show guard ghost', Target = 'ghost_enabled' },
+        { Bind = 'kb_ghost_advisory', Text = 'Advisory mode', Target = 'ghost_advisory' },
+        { Bind = 'kb_ghost_path', Text = 'Guard ghost path', Target = 'ghost_path' },
+        { Bind = 'kb_ghost_label', Text = 'Distance readout', Target = 'ghost_label' },
+        { Bind = 'kb_ghost_feedback', Text = 'Colour by distance', Target = 'ghost_feedback' },
+        { Bind = 'kb_offense_training', Text = 'Train my movement', Target = 'offense_training' },
+        { Bind = 'kb_offense_ghost', Text = 'Show learned ghost', Target = 'offense_ghost' },
+        { Bind = 'kb_offense_auto', Text = 'Auto follow learned move', Target = 'offense_auto' },
+    })
+
+    local KeybindBody = keybindsTab:AddSection('Auto Body', 'Left')
+    KB_Build(KeybindBody, {
+        { Bind = 'kb_body_only_holding', Text = 'Only while holding ball', Target = 'guard_auto_body_only_holding' },
+        { Bind = 'kb_hand_switch', Text = 'Directional hand switching', Target = 'guard_auto_hand_switch' },
+        { Bind = 'kb_hand_switch_camera', Text = 'Camera awareness', Target = 'guard_hand_switch_camera' },
+        { Bind = 'kb_hand_switch_court', Text = 'Court awareness', Target = 'guard_hand_switch_court' },
+    })
+
+    local KeybindVisuals = keybindsTab:AddSection('Visuals', 'Right')
+    KB_Build(KeybindVisuals, {
+        { Bind = 'kb_fullbright', Text = 'Fullbright', Target = 'fullbright', Default = 'B' },
+        { Bind = 'kb_rtx', Text = 'Silver RTX', Target = 'rtx_enabled' },
+        { Bind = 'kb_rtx_animate', Text = 'Animated light shimmer', Target = 'rtx_animate' },
+        { Bind = 'kb_rtx_dof', Text = 'Depth of field', Target = 'rtx_dof' },
+        { Bind = 'kb_range_hud', Text = 'Live range HUD', Target = 'range_hud', Default = 'J' },
+        { Bind = 'kb_highlight', Text = 'Character highlight', Target = 'character_highlight', Default = 'H' },
+        { Bind = 'kb_highlight_animate', Text = 'Highlight pulse', Target = 'highlight_animate' },
+        { Bind = 'kb_highlight_walls', Text = 'Highlight through walls', Target = 'highlight_through_walls' },
+        { Bind = 'kb_cursor', Text = 'Custom cursor', Target = 'custom_cursor' },
+        { Bind = 'kb_motion', Text = 'UI animations', Target = 'motion' },
+    })
+
+    local KeybindActions = keybindsTab:AddSection('Actions', 'Left')
+    KB_Build(KeybindActions, {
+        { Kind = 'action', Bind = 'kb_watch_toggle', Text = 'Start / stop watching', Run = function()
+            State.Watch.SetActive(not State.Watch.Active)
+            pcall(State.Watch.PushOptions)
+            UI:Notify({
+                Title = 'Watch',
+                Content = tostring(State.Watch.Status),
+                Type = State.Watch.Active and 'Success' or 'Info',
+            })
+        end },
+        { Kind = 'action', Bind = 'kb_watch_next', Text = 'Next match', Default = 'RightBracket', Run = function()
+            State.Watch.CycleCourt(1)
+            pcall(State.Watch.PushOptions)
+        end },
+        { Kind = 'action', Bind = 'kb_watch_prev', Text = 'Previous match', Default = 'LeftBracket', Run = function()
+            State.Watch.CycleCourt(-1)
+            pcall(State.Watch.PushOptions)
+        end },
+        { Kind = 'action', Bind = 'kb_cam_next', Text = 'Next camera', Default = 'M', Run = function()
+            State.Watch.CycleMode(1)
+        end },
+        { Kind = 'action', Bind = 'kb_cam_prev', Text = 'Previous camera', Run = function()
+            State.Watch.CycleMode(-1)
+        end },
+        { Kind = 'action', Bind = 'kb_watch_refresh', Text = 'Refresh match list', Run = function()
+            State.Watch.RefreshOptions()
+            pcall(State.Watch.PushOptions)
+            UI:Notify({
+                Title = 'Watch',
+                Content = (#State.Watch.CourtOptions - 1) .. ' live match(es)',
+                Type = 'Info',
+            })
+        end },
+        { Kind = 'action', Bind = 'kb_travel', Text = 'Quick travel to destination', Run = function()
+            State.Extras.QuickTravel()
+        end },
+        { Kind = 'action', Bind = 'kb_travel_player', Text = 'Teleport to player', Run = function()
+            State.Extras.QuickTravelToPlayer()
+        end },
+        { Kind = 'action', Bind = 'kb_hop', Text = 'Server hop', Run = function()
+            State.Utility.HopNow('Keybind')
+        end },
+        { Kind = 'action', Bind = 'kb_ghost_play', Text = 'Play ghost recording', Run = function()
+            State.GhostReplay.Play()
+        end },
+        { Kind = 'action', Bind = 'kb_ghost_stop', Text = 'Stop ghost playback', Run = function()
+            State.GhostReplay.StopPlayback('KEYBIND STOP')
+        end },
+        { Kind = 'action', Bind = 'kb_unload', Text = 'Unload script', Run = function()
+            UI:Destroy()
+        end },
+    })
+
+    local KeybindLegacy = keybindsTab:AddSection('Built-in Hotkeys', 'Right')
+    KeybindLegacy:AddLabel('These rebind the original script hotkeys. Keyboard keys only.', true)
+    KB_Build(KeybindLegacy, {
+        { Kind = 'legacy', Bind = 'kb_cfg_toggle', Text = 'Master toggle', Field = 'ToggleKey' },
+        { Kind = 'legacy', Bind = 'kb_cfg_menu', Text = 'Open / close menu', Field = 'MenuKey' },
+        { Kind = 'legacy', Bind = 'kb_cfg_silent', Text = 'Silent mode toggle', Field = 'SilentModeToggleKey' },
+        { Kind = 'legacy', Bind = 'kb_cfg_nojump', Text = 'No jump shot', Field = 'NoJumpShotKey' },
+        { Kind = 'legacy', Bind = 'kb_cfg_guard_on', Text = 'Autoguard on-ball', Field = 'AutoGuardOnBallKey' },
+        { Kind = 'legacy', Bind = 'kb_cfg_guard_off', Text = 'Autoguard off-ball', Field = 'AutoGuardOffBallKey' },
+        { Kind = 'legacy', Bind = 'kb_cfg_getopen', Text = 'Auto get open', Field = 'AutoGetOpenKey' },
+    })
+
+
     HubUI.SpooferTab = window:AddTab('Spoofer')
     HubUI.Section_spoof_identity = HubUI.SpooferTab:AddSection('Identity', 'Left')
     HubUI.CfgText(HubUI.Section_spoof_identity, 'LocalAlias', 'Display alias', 'Anonymous')
