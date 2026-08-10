@@ -34553,4 +34553,3 @@ Notify('SILVER SURFER', 'Previous instance unloaded. Reload complete.')
 end
 GlobalEnv.__HOOPZ_SILENTAIM_REINJECTING = false
 pcall(function() if type(writefile) == 'function' then writefile('SilverSurfer_Crash.txt', '[OK] Initial injection completed.\n') end end)
- 
