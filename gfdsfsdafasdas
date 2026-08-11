@@ -712,8 +712,65 @@ do
 -- ===== EXECUTOR COMPATIBILITY LAYER =====
 -- Instead of aborting on executors that are missing functions, fill the
 -- gaps with safe fallbacks and record what had to be degraded.
-local Compat = { Missing = {}, Shimmed = {} }
+local Compat = { Missing = {}, Shimmed = {}, Features = {} }
 GlobalEnv.__SS_COMPAT = Compat
+
+local function resolveFunction(...)
+for Index = 1, select('#', ...) do
+local Candidate = select(Index, ...)
+if type(Candidate) == 'function' then return Candidate end
+end
+return nil
+end
+
+local ExecutorName = 'Unknown'
+local Identify = resolveFunction(identifyexecutor, getexecutorname, getexecutor, GlobalEnv.identifyexecutor)
+if Identify then
+local Ok, Name = pcall(Identify)
+if Ok and Name ~= nil and tostring(Name) ~= '' then ExecutorName = tostring(Name) end
+end
+Compat.Executor = ExecutorName
+Compat.Mobile = UserInputService.TouchEnabled == true
+Compat.Platform = Compat.Mobile and 'Mobile' or 'Desktop'
+
+-- Normalise common UNC aliases used across Real, Delta, Solara, Xeno, Wave,
+-- Codex, Hydrogen and other executors. Every assignment is capability-based;
+-- an executor name is informational and never used to assume support.
+if type(gethui) ~= 'function' then
+local Alias = resolveFunction(get_hidden_gui, gethiddengui, get_hidden_ui)
+if Alias then GlobalEnv.gethui = Alias; table.insert(Compat.Shimmed, 'gethui') end
+end
+if type(hookmetamethod) ~= 'function' then
+local Alias = resolveFunction(hook_meta_method, hookmetamethodclosure)
+if Alias then GlobalEnv.hookmetamethod = Alias; table.insert(Compat.Shimmed, 'hookmetamethod') end
+end
+if type(getconnections) ~= 'function' then
+local Alias = resolveFunction(get_connections, type(debug) == 'table' and debug.getconnections or nil)
+if Alias then GlobalEnv.getconnections = Alias; table.insert(Compat.Shimmed, 'getconnections') end
+end
+if type(firesignal) ~= 'function' then
+local Alias = resolveFunction(fire_signal, type(debug) == 'table' and debug.firesignal or nil)
+if Alias then GlobalEnv.firesignal = Alias; table.insert(Compat.Shimmed, 'firesignal') end
+end
+if type(setclipboard) ~= 'function' then
+local Alias = resolveFunction(toclipboard, set_clipboard)
+if Alias then GlobalEnv.setclipboard = Alias; table.insert(Compat.Shimmed, 'setclipboard') end
+end
+if type(getcustomasset) ~= 'function' then
+local Alias = resolveFunction(getsynasset, getexecutorasset, get_custom_asset)
+if Alias then GlobalEnv.getcustomasset = Alias; table.insert(Compat.Shimmed, 'getcustomasset') end
+end
+if type(queue_on_teleport) ~= 'function' then
+local SynQueue = type(syn) == 'table' and syn.queue_on_teleport or nil
+local Alias = resolveFunction(queueonteleport, SynQueue)
+if Alias then GlobalEnv.queue_on_teleport = Alias; table.insert(Compat.Shimmed, 'queue_on_teleport') end
+end
+if type(request) ~= 'function' then
+local SynRequest = type(syn) == 'table' and syn.request or nil
+local FluxusRequest = type(fluxus) == 'table' and fluxus.request or nil
+local Alias = resolveFunction(http_request, SynRequest, FluxusRequest)
+if Alias then GlobalEnv.request = Alias; table.insert(Compat.Shimmed, 'request') end
+end
 
 -- getrawmetatable: fall back to debug.getmetatable (identical on most executors).
 if type(getrawmetatable) ~= 'function' then
@@ -783,6 +840,15 @@ Compat.NoActors = true
 table.insert(Compat.Missing, 'getactors/run_on_actor')
 end
 
+Compat.Features.HookFunction = type(hookfunction) == 'function'
+Compat.Features.HookMetamethod = type(hookmetamethod) == 'function'
+Compat.Features.Actors = type(getactors) == 'function' and type(run_on_actor) == 'function'
+Compat.Features.Signals = type(getconnections) == 'function' or type(firesignal) == 'function'
+Compat.Features.Touch = type(firetouchinterest) == 'function'
+Compat.Features.Files = type(writefile) == 'function' and type(readfile) == 'function'
+Compat.Features.Http = type(request) == 'function' or type(http_request) == 'function'
+Compat.Features.CustomAssets = type(getcustomasset) == 'function' or type(getsynasset) == 'function'
+
 if Compat.NoHooking then
 Notify('SILVER SURFER', 'No hookfunction or alias found - aim spoof features are disabled, everything else works.')
 warn('[SILVER SURFER] Compatibility mode, missing: ' .. table.concat(Compat.Missing, ', '))
@@ -790,8 +856,8 @@ elseif #Compat.Shimmed > 0 or #Compat.Missing > 0 then
 local Parts = {}
 if #Compat.Shimmed > 0 then table.insert(Parts, 'shimmed: ' .. table.concat(Compat.Shimmed, ', ')) end
 if Compat.NoActors then table.insert(Parts, 'main-VM mode (no actor support)') end
-Notify('SILVER SURFER', 'Compatibility mode - ' .. table.concat(Parts, '; '))
-warn('[SILVER SURFER] Compatibility mode - ' .. table.concat(Parts, '; '))
+Notify('SILVER SURFER', ExecutorName .. ' compatibility - ' .. table.concat(Parts, '; '))
+warn('[SILVER SURFER] ' .. ExecutorName .. ' compatibility - ' .. table.concat(Parts, '; '))
 end
 end
 
@@ -23168,6 +23234,7 @@ function Aureate.new(options)
     self.ConfigFolder = options.ConfigFolder or "SilverSurferUI"
     self.Visible = true
     self.OpenDropdown = nil
+    self.IsMobile = UserInputService.TouchEnabled == true
 
     self.Gui = create("ScreenGui", {
         Name = self.Name .. "_UI",
@@ -23194,7 +23261,7 @@ function Aureate.new(options)
         Name = "Notifications",
         AnchorPoint = Vector2.new(1, 1),
         Position = UDim2.new(1, -16, 1, -16),
-        Size = UDim2.fromOffset(300, 460),
+        Size = UDim2.fromOffset(self.IsMobile and 250 or 300, self.IsMobile and 300 or 460),
         BackgroundTransparency = 1,
         ZIndex = 400,
         Parent = self.Gui,
@@ -23206,6 +23273,20 @@ function Aureate.new(options)
             SortOrder = Enum.SortOrder.LayoutOrder,
         })
     })
+
+    if self.IsMobile then
+        self.MobileToggle = create("TextButton", {
+            Name = "MobileMenuToggle", AnchorPoint = Vector2.new(1, 0),
+            Position = UDim2.new(1, -12, 0, 12), Size = UDim2.fromOffset(54, 54),
+            BackgroundColor3 = self.Theme.Surface, BackgroundTransparency = 0.08,
+            BorderSizePixel = 0, AutoButtonColor = true, Text = "SS",
+            TextColor3 = self.Theme.Gold, Font = Enum.Font.GothamBold, TextSize = 17,
+            ZIndex = 1000, Parent = self.Gui,
+        }, { corner(10), stroke(self.Theme.GoldDark) })
+        self:_bind(self.MobileToggle, "BackgroundColor3", "Surface")
+        self:_bind(self.MobileToggle, "TextColor3", "Gold")
+        self.Janitor:Add(self.MobileToggle.Activated:Connect(function() self:Toggle() end))
+    end
 
     self.Janitor:Add(UserInputService.InputBegan:Connect(function(input, processed)
         if not processed and input.KeyCode == self.ToggleKey then self:Toggle() end
@@ -23352,9 +23433,12 @@ function Aureate:CreateWindow(options)
     local win = setmetatable({}, Window)
     win.Library, win.Janitor, win.Tabs = self, Janitor.new(), {}
     win.Visible = false
-    win.Size = options.Size or UDim2.fromOffset(600, 520)
+    win.Mobile = self.IsMobile == true
+    win.Size = win.Mobile and UDim2.new(1, -18, 1, -82)
+        or (options.Size or UDim2.fromOffset(600, 520))
 
-    local position = options.Position or UDim2.fromScale(0.5, 0.5)
+    local position = win.Mobile and UDim2.new(0.5, 0, 0.5, 16)
+        or (options.Position or UDim2.fromScale(0.5, 0.5))
 
     local shadow = create("ImageLabel", {
         Name = "Shadow", AnchorPoint = Vector2.new(0.5, 0.5), Position = position,
@@ -23417,10 +23501,14 @@ function Aureate:CreateWindow(options)
         local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
         local windowWidth = win.Size.X.Offset + viewport.X * win.Size.X.Scale
         local windowHeight = win.Size.Y.Offset + viewport.Y * win.Size.Y.Scale
-        win.FitScale = math.clamp(math.min(
-            (viewport.X - 24) / math.max(windowWidth, 1),
-            (viewport.Y - 24) / math.max(windowHeight, 1)
-        ), 0.45, 1)
+        if win.Mobile then
+            win.FitScale = 1
+        else
+            win.FitScale = math.clamp(math.min(
+                (viewport.X - 24) / math.max(windowWidth, 1),
+                (viewport.Y - 24) / math.max(windowHeight, 1)
+            ), 0.45, 1)
+        end
         scale.Scale = win.FitScale
         task.defer(function()
             if win.AutoFitTabs then win:AutoFitTabs() end
@@ -23607,17 +23695,21 @@ function Aureate:CreateWindow(options)
     self:_bind(searchEmpty, "TextColor3", "TextDim")
 
     -- dragging ---------------------------------------------------------
-    local dragging, dragStart, startPos
+    local dragging, dragStart, startPos, dragInput
     win.Janitor:Add(titlebar.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging, dragStart, startPos = true, input.Position, root.Position
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging, dragStart, startPos, dragInput = true, input.Position, root.Position, input
         end
     end))
     win.Janitor:Add(UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        if input == dragInput or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging, dragInput = false, nil
+        end
     end))
     win.Janitor:Add(UserInputService.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
             local delta = input.Position - dragStart
             local target = startPos + UDim2.fromOffset(delta.X, delta.Y)
             root.Position, shadow.Position = target, target
@@ -23773,7 +23865,17 @@ function Window:AddTab(name)
     tab.Button, tab.Edge, tab.Underline = button, edge, underline
     tab.Page, tab.Left, tab.Middle, tab.Right = page, left, middle, right
     tab.Columns, tab.ColumnScale = columns, columnScale
-    tab.ColumnFrames = { left, middle, right }
+    if self.Mobile then
+        left.Size = UDim2.new(1, -4, 0, 0)
+        left.Position = UDim2.fromOffset(0, 0)
+        middle.Visible = false
+        right.Visible = false
+        tab.ColumnFrames = { left }
+        page.ScrollBarThickness = 5
+        page.ScrollingEnabled = true
+    else
+        tab.ColumnFrames = { left, middle, right }
+    end
     table.insert(self.Tabs, tab)
 
     self.Janitor:Add(button.MouseEnter:Connect(function()
@@ -23878,14 +23980,14 @@ function Window:AutoFitTabs()
 
             local available = tab.Page.AbsoluteSize.Y - 6
             local fit = 1
-            if tallest > 4 and available > 60 then
+            if not self.Mobile and tallest > 4 and available > 60 then
                 fit = math.clamp(available / tallest, 0.42, 1)
             end
 
             tab.ColumnScale.Scale = fit
             tab.Columns.AutomaticSize = Enum.AutomaticSize.None
             tab.Columns.Size = UDim2.new(1 / fit, -6 / fit, 0, tallest)
-            tab.Page.ScrollBarThickness = (fit > 0.4201) and 0 or 2
+            tab.Page.ScrollBarThickness = self.Mobile and 5 or ((fit > 0.4201) and 0 or 2)
         end
     end
 end
@@ -24389,16 +24491,19 @@ function Section:AddSlider(id, options)
     end
 
     self.Janitor:Add(hit.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             update(input.Position)
         end
     end))
     self.Janitor:Add(UserInputService.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then update(input.Position) end
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then update(input.Position) end
     end))
     self.Janitor:Add(UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
     end))
     self.Janitor:Add(hit.MouseEnter:Connect(function()
         lib:_tween(track, MOTION.Fast, { BackgroundColor3 = lib.Theme.SurfaceRaised })
@@ -33626,12 +33731,16 @@ local function launchShowcase()
         or "Hoopz"
 
     local compactTabs = detectedGame ~= "Hoopz"
+    local desktopSimple = not UserInputService.TouchEnabled
     local main = window:AddTab("Main")
     local visuals = window:AddTab("Visuals")
-    local guardTab = window:AddTab(compactTabs and "Autoguard + Auto Body" or "Autoguard")
+    local guardName = desktopSimple and "Defense"
+        or (compactTabs and "Autoguard + Auto Body" or "Autoguard")
+    local guardTab = window:AddTab(guardName)
     local offenseTab = window:AddTab("Offense")
-    local bodyTab = compactTabs and guardTab or window:AddTab("Auto Body")
-    local settings = window:AddTab("UI Settings")
+    local bodyTab = (desktopSimple or compactTabs) and guardTab or window:AddTab("Auto Body")
+    local settings = window:AddTab("Settings")
+    local moreTab = nil
 
     local silentControls = main:AddSection("Silent Aim", "Left")
     silentControls:AddSegmented("silent_game", {
@@ -34256,6 +34365,7 @@ local function launchShowcase()
     local function CreateDropdown(p,_,l,o,v,cb)return Compat(p:AddDropdown(NextGEId(l),{Text=l,Values=o,Default=v,Callback=cb}),'Dropdown')end
 
     local passingTab=window:AddTab('Passing')
+    if desktopSimple then moreTab = window:AddTab('More') end
     local dunkingTab=window:AddTab('Dunking')
     local movementTab=window:AddTab('Movement')
     local ballTab=window:AddTab('Ball')
@@ -35764,36 +35874,40 @@ end)
     HubUI.Section_ball_actions:AddButton('Refresh ball studio', function() HubUI.Run(State.BallStudio.Refresh) end)
     HubUI.Section_ball_actions:AddButton('Resync ball proxies', function() HubUI.Run(State.BallStudio.SyncProxies, true) end)
     HubUI.Section_ball_actions:AddButton('Restore stock ball', function() HubUI.Run(State.BallStudio.Cleanup) end)
-    -- Tab manager: compact by default outside Hoopz, but every optional page
-    -- remains constructed so users can restore exactly the tabs they want.
+    -- Simple desktop navigation keeps the five everyday destinations visible.
+    -- Advanced pages remain fully built and are opened from the More directory.
     local managedTabs = {
-        { Name = 'Visuals', Tab = visuals, CompactDefault = true },
-        { Name = compactTabs and 'Autoguard + Auto Body' or 'Autoguard', Tab = guardTab, CompactDefault = true },
-        { Name = 'Passing', Tab = passingTab, CompactDefault = true },
-        { Name = 'Offense', Tab = offenseTab, CompactDefault = false },
-        { Name = 'Dunking', Tab = dunkingTab, CompactDefault = false },
-        { Name = 'Movement', Tab = movementTab, CompactDefault = false },
-        { Name = 'Ball', Tab = ballTab, CompactDefault = false },
-        { Name = 'Utility', Tab = utilityTab, CompactDefault = false },
-        { Name = 'Watch', Tab = watchTab, CompactDefault = false },
-        { Name = 'Replay', Tab = replayTab, CompactDefault = false },
-        { Name = 'Keybinds', Tab = keybindsTab, CompactDefault = false },
-        { Name = 'UI Settings', Tab = settings, CompactDefault = false },
-        { Name = 'Spoofer', Tab = HubUI.SpooferTab, CompactDefault = false },
+        { Name = 'Visuals', Tab = visuals, CompactDefault = true, Category = 'Everyday' },
+        { Name = guardName, Tab = guardTab, CompactDefault = true, Category = 'Everyday' },
+        { Name = 'Passing', Tab = passingTab, CompactDefault = true, Category = 'Everyday' },
+        { Name = 'Offense', Tab = offenseTab, CompactDefault = false, Category = 'Gameplay' },
+        { Name = 'Dunking', Tab = dunkingTab, CompactDefault = false, Category = 'Gameplay' },
+        { Name = 'Movement', Tab = movementTab, CompactDefault = false, Category = 'Gameplay' },
+        { Name = 'Ball', Tab = ballTab, CompactDefault = false, Category = 'Gameplay' },
+        { Name = 'Utility', Tab = utilityTab, CompactDefault = false, Category = 'Tools' },
+        { Name = 'Watch', Tab = watchTab, CompactDefault = false, Category = 'Tools' },
+        { Name = 'Replay', Tab = replayTab, CompactDefault = false, Category = 'Tools' },
+        { Name = 'Keybinds', Tab = keybindsTab, CompactDefault = false, Category = 'Customize' },
+        { Name = 'Settings', Tab = settings, CompactDefault = false, Category = 'Customize' },
+        { Name = 'Spoofer', Tab = HubUI.SpooferTab, CompactDefault = false, Category = 'Customize' },
     }
-    if not compactTabs then
-        table.insert(managedTabs, 3, { Name = 'Auto Body', Tab = bodyTab, CompactDefault = true })
+    if not desktopSimple and not compactTabs then
+        table.insert(managedTabs, 3, { Name = 'Auto Body', Tab = bodyTab, CompactDefault = true, Category = 'Everyday' })
     end
 
-    local tabManager = main:AddSection('Tab Manager', 'Right')
-    tabManager:AddLabel(compactTabs
-        and ('Compact layout active for ' .. detectedGame .. '. Enable any extra tabs below.')
-        or 'Hoopz keeps every tab visible by default. Disable any tabs you do not need.')
+    local managerParent = (desktopSimple and moreTab) or main
+    local tabManager = managerParent:AddSection(desktopSimple and 'Choose Visible Tabs' or 'Tab Manager', 'Right')
+    tabManager:AddLabel(desktopSimple
+        and 'Only everyday tabs start visible. Turn on any advanced page here.'
+        or (compactTabs and ('Compact layout active for ' .. detectedGame .. '. Enable extra tabs below.')
+            or 'Enable or disable any tab below.'))
     for index, entry in ipairs(managedTabs) do
         local managedEntry = entry
-        local defaultVisible = compactTabs and managedEntry.CompactDefault or true
+        local defaultVisible = desktopSimple and managedEntry.CompactDefault
+            or (compactTabs and managedEntry.CompactDefault or true)
         window:SetTabVisible(managedEntry.Tab, defaultVisible)
         local id = ('tab_visible_%02d_%s'):format(index, string.lower(managedEntry.Name):gsub('[^%w]+', '_'))
+        managedEntry.OptionId = id
         tabManager:AddToggle(id, {
             Text = 'Show ' .. managedEntry.Name,
             Default = defaultVisible,
@@ -35802,39 +35916,116 @@ end)
             end,
         })
     end
-    tabManager:AddButton('Use compact tabs', function()
+
+    local function SetManagedVisible(entry, visible, selectAfter)
+        window:SetTabVisible(entry.Tab, visible)
+        local option = entry.OptionId and UI.Options[entry.OptionId]
+        if option and option.SetValue then option:SetValue(visible, true) end
+        if visible and selectAfter then window:SelectTab(entry.Tab) end
+    end
+
+    tabManager:AddButton(desktopSimple and 'Restore simple layout' or 'Use compact tabs', function()
         for _, entry in ipairs(managedTabs) do
-            local visible = entry.CompactDefault == true
-            window:SetTabVisible(entry.Tab, visible)
-            local idSuffix = string.lower(entry.Name):gsub('[^%w]+', '_')
-            for optionId, option in pairs(UI.Options) do
-                if string.find(optionId, 'tab_visible_', 1, true) == 1
-                    and string.sub(optionId, -#idSuffix) == idSuffix
-                    and option.SetValue then
-                    option:SetValue(visible, true)
-                end
-            end
+            SetManagedVisible(entry, entry.CompactDefault == true, false)
         end
         window:SelectTab(main)
     end)
-    tabManager:AddButton('Show all tabs', function()
+    tabManager:AddButton('Show every tab', function()
+        for _, entry in ipairs(managedTabs) do SetManagedVisible(entry, true, false) end
+    end)
+
+    if desktopSimple then
+        local startHere = main:AddSection('Start Here', 'Right')
+        startHere:AddLabel('1. Set up shots on Main.  2. Pick defense or passing.  3. Use More for advanced tools.')
+        startHere:AddButton('Open Defense', function() window:SelectTab(guardTab) end)
+        startHere:AddButton('Open Passing', function() window:SelectTab(passingTab) end)
+        startHere:AddButton('Open Visuals', function() window:SelectTab(visuals) end)
+        startHere:AddButton('Browse More Features', function() window:SelectTab(moreTab) end)
+
+        local gameplayDirectory = moreTab:AddSection('Gameplay Features', 'Left')
+        local toolsDirectory = moreTab:AddSection('Tools', 'Middle')
+        local customizeDirectory = moreTab:AddSection('Customize', 'Right')
+        gameplayDirectory:AddLabel('Advanced movement and scoring controls')
+        toolsDirectory:AddLabel('Travel, spectating, and recordings')
+        customizeDirectory:AddLabel('Keys, interface, and local appearance')
         for _, entry in ipairs(managedTabs) do
-            window:SetTabVisible(entry.Tab, true)
-            local idSuffix = string.lower(entry.Name):gsub('[^%w]+', '_')
-            for optionId, option in pairs(UI.Options) do
-                if string.find(optionId, 'tab_visible_', 1, true) == 1
-                    and string.sub(optionId, -#idSuffix) == idSuffix
-                    and option.SetValue then
-                    option:SetValue(true, true)
-                end
+            local directoryEntry = entry
+            if directoryEntry.Category == 'Gameplay' then
+                gameplayDirectory:AddButton('Open ' .. directoryEntry.Name, function()
+                    SetManagedVisible(directoryEntry, true, true)
+                end)
+            elseif directoryEntry.Category == 'Tools' then
+                toolsDirectory:AddButton('Open ' .. directoryEntry.Name, function()
+                    SetManagedVisible(directoryEntry, true, true)
+                end)
+            elseif directoryEntry.Category == 'Customize' then
+                customizeDirectory:AddButton('Open ' .. directoryEntry.Name, function()
+                    SetManagedVisible(directoryEntry, true, true)
+                end)
             end
         end
-    end)
+    end
 
     -- Legacy handles kept alive so ported code can still drive both toggles.
     HubUI.Controls.AutoGuard = { Kind = 'Checkbox', Value = false, Get = function(self) return self.Value end, Set = function(self, v, fire) self.Value = v == true if HubUI.GuardToggle then HubUI.GuardToggle:SetValue(v == true, fire == false) end return self end }
     HubUI.Controls.AutoBody = { Kind = 'Checkbox', Value = false, Get = function(self) return self.Value end, Set = function(self, v, fire) self.Value = v == true if HubUI.BodyToggle then HubUI.BodyToggle:SetValue(v == true, fire == false) end return self end }
     HubUI.SetVisible=function(v)UI:SetVisible(v)end;HubUI.Toggle=function()UI:Toggle()end;HubUI.Destroy=function()UI:Destroy()end;HubUI.Notify=function(t,x)UI:Notify({Title=t or 'SILVER SURFER',Content=x or ''})end;GlobalEnv.__SS_TOAST=HubUI.Notify
+
+    if UserInputService.TouchEnabled then
+        CONFIG.MobilePassButtons = true
+        local Dock = create('Frame', {
+            Name = 'MobileQuickActions', AnchorPoint = Vector2.new(0.5, 1),
+            Position = UDim2.new(0.5, 0, 1, -14), Size = UDim2.fromOffset(344, 52),
+            BackgroundColor3 = UI.Theme.Surface, BackgroundTransparency = 0.1,
+            BorderSizePixel = 0, ZIndex = 950, Parent = UI.Gui,
+        }, { corner(10), stroke(UI.Theme.Border) })
+        local DockLayout = create('UIListLayout', {
+            FillDirection = Enum.FillDirection.Horizontal,
+            HorizontalAlignment = Enum.HorizontalAlignment.Center,
+            VerticalAlignment = Enum.VerticalAlignment.Center,
+            Padding = UDim.new(0, 5), Parent = Dock,
+        })
+        local function QuickButton(Label, Callback)
+            local Button = create('TextButton', {
+                Size = UDim2.fromOffset(51, 40), BackgroundColor3 = UI.Theme.SurfaceAlt,
+                BorderSizePixel = 0, AutoButtonColor = true, Text = Label,
+                TextColor3 = UI.Theme.Text, Font = Enum.Font.GothamBold,
+                TextSize = 10, ZIndex = 951, Parent = Dock,
+            }, { corner(7), stroke(UI.Theme.BorderSoft) })
+            UI.Janitor:Add(Button.Activated:Connect(function()
+                local Ok, Error = pcall(Callback)
+                if not Ok then UI:Notify({ Title = Label, Content = tostring(Error), Type = 'Warning' }) end
+            end))
+            return Button
+        end
+        QuickButton('MENU', function() UI:Toggle() end)
+        QuickButton('AIM', function()
+            local Control = UI.Options.silent
+            if Control then Control:SetValue(not Control.Value) end
+        end)
+        QuickButton('SHOOT', function()
+            if State.Trickshots and type(State.Trickshots.EngineFire) == 'function' then
+                State.Trickshots.EngineFire()
+            end
+        end)
+        QuickButton('GUARD', function()
+            if HubUI.GuardToggle then HubUI.GuardToggle:SetValue(not HubUI.GuardToggle.Value) end
+        end)
+        QuickButton('PASS', function()
+            local Control = HubUI.Controls and HubUI.Controls.AutoPass
+            if Control and Control.SetValue then
+                Control:SetValue(not Control.Value)
+            elseif Control and Control.Set then
+                Control:Set(not Control.Value)
+            end
+            State.MobilePass.Refresh()
+        end)
+        QuickButton('BODY', function()
+            if HubUI.BodyToggle then HubUI.BodyToggle:SetValue(not HubUI.BodyToggle.Value) end
+        end)
+        UI.Janitor:Add(Dock)
+        task.defer(State.MobilePass.Refresh)
+    end
     task.defer(function() task.wait(0.2) if window.AutoFitTabs then window:AutoFitTabs() end end)
 
 
