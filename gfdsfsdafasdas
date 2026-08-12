@@ -214,8 +214,10 @@ SprintSpeed = 38,
 SlowKeyEnabled = false,
 SlowSpeed = 8,
 IcePhysics = false,
-IceAcceleration = 9,
-IceGlide = 0.965,
+IceAcceleration = 4.5,
+IceTurnGrip = 3.25,
+IceAirMomentum = true,
+IceGlide = 0.994,
 InfiniteJump = false,
 InfiniteJumpMethod = 'JumpRequest',
 JumpPower = false,
@@ -227,6 +229,14 @@ Flight = false,
 FlightMethod = 'Assembly Linear Velocity',
 FlightSpeed = 70,
 AirWalk = false,
+Freecam = false,
+FreecamKey = Enum.KeyCode.P,
+FreecamTeleportKey = Enum.KeyCode.T,
+FreecamTeleportDistance = 2000,
+FreecamSpeed = 60,
+FreecamSensitivity = 0.22,
+FreecamFOV = 70,
+FreecamBoost = 3,
 
 BallReach = false,
 BallReachRadius = 10,
@@ -1337,6 +1347,12 @@ MatchCached = false,
 LastManualDirection = Vector3.zero,
 TransientSpeedActive = false,
 AdvancedStatus = 'READY',
+IceMomentum = Vector3.zero,
+IceHumanoid = nil,
+IceOriginalWalkSpeed = nil,
+IceCharacter = nil,
+IceOriginalProperties = setmetatable({}, { __mode = 'k' }),
+IceJumpQueuedUntil = 0,
 }
 
 function State.Movement.GetRig()
@@ -1519,20 +1535,128 @@ end
 if Direction.Magnitude>0.001 then State.Movement.LastManualDirection=Direction end
 
 if CONFIG.IcePhysics then
-local Desired=Direction*Speed
-local NewFlat
-if Direction.Magnitude>0.001 then
-local Alpha=1-math.exp(-math.clamp(tonumber(CONFIG.IceAcceleration) or 9,1,30)*DT)
-NewFlat=Flat:Lerp(Desired,Alpha)
-else
-local Glide=math.clamp(tonumber(CONFIG.IceGlide) or 0.965,0.80,0.995)
-NewFlat=Flat*(Glide^(DT*60))
-if NewFlat.Magnitude<0.08 then NewFlat=Vector3.zero end
-end
-Root.AssemblyLinearVelocity=Vector3.new(NewFlat.X,Current.Y,NewFlat.Z)
-State.Movement.AdvancedStatus='ICE ' .. (Direction.Magnitude>0.001 and 'ACCEL' or 'GLIDE')
+-- Ice velocity is applied in PreSimulation so the Humanoid controller cannot
+-- overwrite it before the physics step.
+State.Movement.AdvancedStatus='ICE ACTIVE'
 elseif not (SprintHeld or SlowHeld) and State.Movement.AdvancedStatus~='OOB GUARD' then
 State.Movement.AdvancedStatus='READY'
+end
+end
+
+
+function State.Movement.RestoreIcePhysics()
+if State.Movement.IceHumanoid and State.Movement.IceHumanoid.Parent and State.Movement.IceOriginalWalkSpeed then
+pcall(function() State.Movement.IceHumanoid.WalkSpeed=State.Movement.IceOriginalWalkSpeed end)
+end
+for Part,Original in pairs(State.Movement.IceOriginalProperties) do
+if Part and Part.Parent then pcall(function() Part.CustomPhysicalProperties=Original end) end
+State.Movement.IceOriginalProperties[Part]=nil
+end
+State.Movement.IceHumanoid=nil; State.Movement.IceOriginalWalkSpeed=nil; State.Movement.IceCharacter=nil
+State.Movement.IceMomentum=Vector3.zero
+State.Movement.IceJumpQueuedUntil=0
+end
+function State.Movement.PrepareIceCharacter(Character,HumanoidObject,Root)
+if State.Movement.IceCharacter==Character then return end
+State.Movement.RestoreIcePhysics()
+State.Movement.IceCharacter=Character; State.Movement.IceHumanoid=HumanoidObject
+State.Movement.IceOriginalWalkSpeed=HumanoidObject.WalkSpeed
+local V=Root.AssemblyLinearVelocity; State.Movement.IceMomentum=Vector3.new(V.X,0,V.Z)
+for _,Part in ipairs(Character:GetChildren()) do
+if Part:IsA('BasePart') then
+State.Movement.IceOriginalProperties[Part]=Part.CustomPhysicalProperties
+local Current=Part.CurrentPhysicalProperties
+pcall(function() Part.CustomPhysicalProperties=PhysicalProperties.new(Current.Density,0,Current.Elasticity,100,Current.ElasticityWeight) end)
+end
+end
+end
+function State.Movement.GetIceInput(HumanoidObject,Root)
+if UserInputService:GetFocusedTextBox() then return Vector3.zero end
+local Camera=Workspace.CurrentCamera
+local Forward=Camera and Vector3.new(Camera.CFrame.LookVector.X,0,Camera.CFrame.LookVector.Z) or Vector3.new(Root.CFrame.LookVector.X,0,Root.CFrame.LookVector.Z)
+local Right=Camera and Vector3.new(Camera.CFrame.RightVector.X,0,Camera.CFrame.RightVector.Z) or Vector3.new(Root.CFrame.RightVector.X,0,Root.CFrame.RightVector.Z)
+if Forward.Magnitude>.001 then Forward=Forward.Unit end; if Right.Magnitude>.001 then Right=Right.Unit end
+local Direction=Vector3.zero
+if UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.Up) then Direction+=Forward end
+if UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.Down) then Direction-=Forward end
+if UserInputService:IsKeyDown(Enum.KeyCode.D) or UserInputService:IsKeyDown(Enum.KeyCode.Right) then Direction+=Right end
+if UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.Left) then Direction-=Right end
+-- MoveDirection keeps mobile thumbsticks and controllers supported.
+if Direction.Magnitude<=.001 then local Raw=HumanoidObject.MoveDirection; Direction=Vector3.new(Raw.X,0,Raw.Z) end
+return Direction.Magnitude>.001 and Direction.Unit or Vector3.zero
+end
+function State.Movement.ApplyIcePhysics(DeltaTime)
+if not CONFIG.IcePhysics then return end
+if State.Movement.FlightEnabled or (State.Stepback and State.Stepback.Active) then return end
+if State.Runtime and State.Runtime.MovementOwner and os.clock()<(State.Runtime.MovementLeaseUntil or 0) then return end
+local Character,HumanoidObject,Root=State.Movement.GetRig()
+if not (Character and HumanoidObject and Root) or HumanoidObject.Health<=0 then return end
+State.Movement.PrepareIceCharacter(Character,HumanoidObject,Root)
+local DT=math.clamp(tonumber(DeltaTime) or 1/60,0,0.05)
+local Actual=Root.AssemblyLinearVelocity
+HumanoidObject.WalkSpeed=0
+local Direction=State.Movement.GetIceInput(HumanoidObject,Root)
+local Base=State.Movement.WalkSpeedEnabled and State.Movement.WalkSpeedValue or (State.Movement.IceOriginalWalkSpeed or 16)
+if CONFIG.SpeedProfiles and not State.Movement.IsInMatch() then Base=CONFIG.OutOfMatchSpeed end
+if CONFIG.SprintKeyEnabled and UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then Base=CONFIG.SprintSpeed end
+if CONFIG.SlowKeyEnabled and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then Base=CONFIG.SlowSpeed end
+Base=math.clamp(tonumber(Base) or 16,1,250)
+local Momentum=State.Movement.IceMomentum or Vector3.zero
+local Grounded=HumanoidObject.FloorMaterial~=Enum.Material.Air
+local JumpQueued=os.clock()<=(State.Movement.IceJumpQueuedUntil or 0)
+
+if not Grounded then
+-- Keep the exact horizontal takeoff momentum instead of copying Roblox's
+-- air-braked velocity back into the ice state.
+if CONFIG.IceAirMomentum~=false then Root.AssemblyLinearVelocity=Vector3.new(Momentum.X,Actual.Y,Momentum.Z) end
+State.Movement.AdvancedStatus='ICE AIR MOMENTUM'
+return
+end
+
+if Direction.Magnitude>.001 then
+local Speed=Momentum.Magnitude
+local Acceleration=math.clamp(tonumber(CONFIG.IceAcceleration) or 4.5,.25,20)
+local TurnGrip=math.clamp(tonumber(CONFIG.IceTurnGrip) or 3.25,.15,15)
+local SpeedAlpha=1-math.exp(-Acceleration*DT)
+local TurnAlpha=1-math.exp(-TurnGrip*DT)
+local NewSpeed=Speed+(Base-Speed)*SpeedAlpha
+if Speed<=.05 then Momentum=Direction*math.max(NewSpeed,Base*.08)
+else
+local Heading=Momentum.Unit:Lerp(Direction,TurnAlpha)
+Momentum=(Heading.Magnitude>.001 and Heading.Unit or Direction)*math.max(NewSpeed,.05)
+end
+else
+local Retention=math.clamp(tonumber(CONFIG.IceGlide) or .994,.90,.9998)
+Momentum*=Retention^(DT*60)
+if Momentum.Magnitude<.03 then Momentum=Vector3.zero end
+end
+State.Movement.IceMomentum=Momentum
+
+if JumpQueued and not (State.NoJump and State.NoJump.Active) then
+State.Movement.IceJumpQueuedUntil=0
+local JumpVelocity
+if HumanoidObject.UseJumpPower then JumpVelocity=math.max(tonumber(HumanoidObject.JumpPower) or 50,1)
+else JumpVelocity=math.sqrt(2*Workspace.Gravity*math.max(tonumber(HumanoidObject.JumpHeight) or 7.2,.1)) end
+pcall(function() HumanoidObject.Jump=true; HumanoidObject:ChangeState(Enum.HumanoidStateType.Jumping) end)
+Root.AssemblyLinearVelocity=Vector3.new(Momentum.X,JumpVelocity,Momentum.Z)
+State.Movement.AdvancedStatus='ICE JUMP MOMENTUM'
+return
+end
+Root.AssemblyLinearVelocity=Vector3.new(Momentum.X,Actual.Y,Momentum.Z)
+State.Movement.AdvancedStatus=Direction.Magnitude>.001 and 'ICE STEER' or 'ICE GLIDE'
+end
+function State.Movement.SetIcePhysics(Value)
+Value=Value==true
+if Value and CONFIG.IcePhysics and State.Movement.IceCharacter then return end
+if not Value and not CONFIG.IcePhysics and not State.Movement.IceCharacter then return end
+CONFIG.IcePhysics=Value
+if Value then
+local Character,HumanoidObject,Root=State.Movement.GetRig()
+if Character and HumanoidObject and Root then State.Movement.PrepareIceCharacter(Character,HumanoidObject,Root) end
+State.Movement.AdvancedStatus='ICE READY'
+else
+State.Movement.RestoreIcePhysics(); State.Movement.AdvancedStatus='READY'
+State.Movement.ApplyWalkSpeed()
 end
 end
 
@@ -1916,7 +2040,7 @@ if not (CurrentHumanoid and CurrentRoot) or CurrentHumanoid.Health <= 0 then ret
 CurrentHumanoid.AutoRotate = false
 pcall(function() CurrentHumanoid:ChangeState(Enum.HumanoidStateType.Physics) end)
 local Direction = State.Movement.GetFlightDirection()
-local Speed = math.clamp(tonumber(State.Movement.FlightSpeed) or 70, 1, 300)
+local Speed = math.clamp(tonumber(State.Movement.FlightSpeed) or 70, 1, 500)
 local Method = State.Movement.FlightMethod or 'Assembly Linear Velocity'
 
 if Method == 'PivotTo' then
@@ -1968,6 +2092,10 @@ end
 function State.Movement.SetFlight(Enabled)
 State.Movement.FlightEnabled = Enabled == true
 CONFIG.Flight = State.Movement.FlightEnabled
+if State.Movement.FlightEnabled then
+State.Movement.FlightMethod = 'Assembly Linear Velocity'
+CONFIG.FlightMethod = 'Assembly Linear Velocity'
+end
 if not State.Movement.FlightEnabled then
 State.MobileInput.FlightUp = false
 State.MobileInput.FlightDown = false
@@ -1977,9 +2105,94 @@ State.Movement.RefreshAirWalk()
 end
 
 function State.Movement.SetFlightSpeed(Value)
-Value = math.clamp(tonumber(Value) or 70, 1, 300)
+Value = math.clamp(tonumber(Value) or 70, 1, 500)
 State.Movement.FlightSpeed = Value
 CONFIG.FlightSpeed = Value
+end
+
+
+State.Freecam = {
+Enabled = CONFIG.Freecam == true,
+BindName = 'SilverSurferFreecam',
+Position = Vector3.zero,
+Yaw = 0,
+Pitch = 0,
+Saved = nil,
+Status = CONFIG.Freecam and 'READY' or 'OFF',
+}
+function State.Freecam.GetInput()
+if UserInputService:GetFocusedTextBox() then return Vector3.zero end
+local X,Y,Z=0,0,0
+if UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.Up) then Z-=1 end
+if UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.Down) then Z+=1 end
+if UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.Left) then X-=1 end
+if UserInputService:IsKeyDown(Enum.KeyCode.D) or UserInputService:IsKeyDown(Enum.KeyCode.Right) then X+=1 end
+if UserInputService:IsKeyDown(Enum.KeyCode.Space) or UserInputService:IsKeyDown(Enum.KeyCode.E) then Y+=1 end
+if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl) or UserInputService:IsKeyDown(Enum.KeyCode.Q) then Y-=1 end
+local V=Vector3.new(X,Y,Z)
+return V.Magnitude>1 and V.Unit or V
+end
+function State.Freecam.SetEnabled(Value)
+Value=Value==true
+if Value==State.Freecam.Enabled then return end
+local Camera=Workspace.CurrentCamera
+if not Camera then return end
+if Value then
+if State.Watch and State.Watch.Active and State.Watch.SetActive then pcall(State.Watch.SetActive,false) end
+local X,Y=Camera.CFrame:ToOrientation()
+State.Freecam.Saved={CameraType=Camera.CameraType,CameraSubject=Camera.CameraSubject,FieldOfView=Camera.FieldOfView,CFrame=Camera.CFrame,MouseBehavior=UserInputService.MouseBehavior,MouseIconEnabled=UserInputService.MouseIconEnabled}
+State.Freecam.Position=Camera.CFrame.Position
+State.Freecam.Pitch=X
+State.Freecam.Yaw=Y
+State.Freecam.Enabled=true; CONFIG.Freecam=true; State.Freecam.Status='ACTIVE'
+Camera.CameraType=Enum.CameraType.Scriptable; Camera.CameraSubject=nil; Camera.FieldOfView=math.clamp(tonumber(CONFIG.FreecamFOV) or 70,30,120)
+UserInputService.MouseBehavior=Enum.MouseBehavior.LockCenter; UserInputService.MouseIconEnabled=false
+pcall(function() State.Lifecycle:UnbindFromRenderStep(State.Freecam.BindName) end)
+State.Lifecycle:BindToRenderStep(State.Freecam.BindName,Enum.RenderPriority.Camera.Value+20,function(DeltaTime)
+if not State.Active or not State.Freecam.Enabled then return end
+local Current=Workspace.CurrentCamera; if not Current then return end
+Current.CameraType=Enum.CameraType.Scriptable; Current.CameraSubject=nil
+local Delta=UserInputService:GetMouseDelta(); local Sens=math.clamp(tonumber(CONFIG.FreecamSensitivity) or .22,.02,1.5)
+State.Freecam.Yaw-=Delta.X*Sens*.01; State.Freecam.Pitch=math.clamp(State.Freecam.Pitch-Delta.Y*Sens*.01,math.rad(-89),math.rad(89))
+local Rotation=CFrame.Angles(0,State.Freecam.Yaw,0)*CFrame.Angles(State.Freecam.Pitch,0,0)
+local Direction=State.Freecam.GetInput(); local Speed=math.clamp(tonumber(CONFIG.FreecamSpeed) or 60,1,500)
+if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift) then Speed*=math.clamp(tonumber(CONFIG.FreecamBoost) or 3,1,10) end
+State.Freecam.Position+=Rotation:VectorToWorldSpace(Direction)*Speed*math.clamp(DeltaTime or 1/60,0,0.1)
+Current.CFrame=CFrame.new(State.Freecam.Position)*Rotation
+Current.FieldOfView=math.clamp(tonumber(CONFIG.FreecamFOV) or 70,30,120)
+end)
+else
+State.Freecam.Enabled=false; CONFIG.Freecam=false; State.Freecam.Status='OFF'
+pcall(function() State.Lifecycle:UnbindFromRenderStep(State.Freecam.BindName) end)
+local Saved=State.Freecam.Saved; local Current=Workspace.CurrentCamera
+if Current and Saved then Current.CameraType=Saved.CameraType or Enum.CameraType.Custom; Current.CameraSubject=Saved.CameraSubject; Current.FieldOfView=Saved.FieldOfView or 70; Current.CFrame=Saved.CFrame or Current.CFrame end
+if Saved then UserInputService.MouseBehavior=Saved.MouseBehavior or Enum.MouseBehavior.Default; UserInputService.MouseIconEnabled=Saved.MouseIconEnabled~=false else UserInputService.MouseBehavior=Enum.MouseBehavior.Default; UserInputService.MouseIconEnabled=true end
+State.Freecam.Saved=nil
+end
+if HubUI and HubUI.Sync then HubUI.Sync() end
+end
+function State.Freecam.SetSpeed(Value) CONFIG.FreecamSpeed=math.clamp(tonumber(Value) or 60,1,500) end
+function State.Freecam.SetSensitivity(Value) CONFIG.FreecamSensitivity=math.clamp(tonumber(Value) or .22,.02,1.5) end
+function State.Freecam.SetFOV(Value) CONFIG.FreecamFOV=math.clamp(tonumber(Value) or 70,30,120); if State.Freecam.Enabled and Workspace.CurrentCamera then Workspace.CurrentCamera.FieldOfView=CONFIG.FreecamFOV end end
+function State.Freecam.SetBoost(Value) CONFIG.FreecamBoost=math.clamp(tonumber(Value) or 3,1,10) end
+function State.Freecam.TeleportToLook()
+if not State.Freecam.Enabled then return false,'FREECAM OFF' end
+local Camera=Workspace.CurrentCamera
+local Character=LP.Character
+local Root=Character and safe_find(Character,'HumanoidRootPart')
+local HumanoidObject=Character and safe_find(Character,'Humanoid')
+if not (Camera and Character and Root and HumanoidObject) then return false,'NO CHARACTER' end
+local Distance=math.clamp(tonumber(CONFIG.FreecamTeleportDistance) or 2000,25,10000)
+local Params=RaycastParams.new(); Params.FilterType=Enum.RaycastFilterType.Exclude; Params.FilterDescendantsInstances={Character}; Params.IgnoreWater=false
+local Result=Workspace:Raycast(Camera.CFrame.Position,Camera.CFrame.LookVector*Distance,Params)
+local Target=Result and Result.Position or (Camera.CFrame.Position+Camera.CFrame.LookVector*Distance)
+local GroundOffset=(tonumber(HumanoidObject.HipHeight) or 2)+(Root.Size.Y*.5)+.35
+if Result and math.abs(Result.Normal.Y)>.35 then Target+=Result.Normal*GroundOffset else Target+=Vector3.new(0,GroundOffset,0) end
+local FlatLook=Vector3.new(Camera.CFrame.LookVector.X,0,Camera.CFrame.LookVector.Z)
+local Destination=FlatLook.Magnitude>.001 and CFrame.lookAt(Target,Target+FlatLook.Unit) or CFrame.new(Target)
+pcall(function() Character:PivotTo(Destination); Root.AssemblyLinearVelocity=Vector3.zero; Root.AssemblyAngularVelocity=Vector3.zero end)
+State.Freecam.Status=Result and 'TELEPORTED TO LOOK HIT' or 'TELEPORTED TO LOOK RAY'
+return true,State.Freecam.Status
 end
 
 
@@ -3200,6 +3413,7 @@ end
 end))
 
 GiveSignal(UserInputService.JumpRequest:Connect(function()
+if State.Active and CONFIG.IcePhysics then State.Movement.IceJumpQueuedUntil=os.clock()+.20 end
 if not (State.Active and State.Movement.InfiniteJumpEnabled) then return end
 local _, HumanoidObject = State.Movement.GetRig()
 if HumanoidObject and HumanoidObject.Health > 0 and not HumanoidObject.Sit then
@@ -3238,6 +3452,11 @@ GiveSignal(RunService.Stepped:Connect(WYNF_JIT(function()
 if State.Active and State.Movement.NoclipEnabled then
 pcall(State.Movement.ApplyNoclip)
 end
+end)))
+
+GiveSignal(RunService.PreSimulation:Connect(WYNF_JIT(function(DeltaTime)
+if not State.Active then return end
+if CONFIG.IcePhysics then pcall(State.Movement.ApplyIcePhysics,DeltaTime) end
 end)))
 
 GiveSignal(RunService.Heartbeat:Connect(WYNF_JIT(function(DeltaTime)
@@ -24222,6 +24441,20 @@ Intro = false,
 ReducedMotion = false,
 LockWindow = false,
 Font = 'Code',
+AnimatedBorder = true,
+BorderStyle = 'Silver Sweep',
+BorderThickness = 2.5,
+BorderSpeed = 1,
+BorderGlow = 0.08,
+WindowRadius = 10,
+PanelRadius = 8,
+ButtonRadius = 7,
+ButtonStyle = 'Rounded',
+RoundedUI = true,
+PanelGradients = true,
+AccentLine = true,
+ScrollbarWidth = 4,
+HoverAnimations = true,
 KeybindMenuVisible = true,
 KeybindMenuPosition = { X = -14, Y = 86 },
 ActiveHudVisible = false,
@@ -24691,6 +24924,20 @@ if InterfaceConfig.ThemePreset ~= 'Custom' and ThemePresets[InterfaceConfig.Them
 InterfaceConfig.Theme = DeepCopy(ThemePresets[InterfaceConfig.ThemePreset])
 end
 InterfaceConfig.Font = tostring(InterfaceConfig.Font or 'Code')
+InterfaceConfig.AnimatedBorder = InterfaceConfig.AnimatedBorder ~= false
+InterfaceConfig.BorderStyle = tostring(InterfaceConfig.BorderStyle or 'Silver Sweep')
+InterfaceConfig.BorderThickness = math.clamp(tonumber(InterfaceConfig.BorderThickness) or 2.5, .5, 8)
+InterfaceConfig.BorderSpeed = math.clamp(tonumber(InterfaceConfig.BorderSpeed) or 1, .05, 5)
+InterfaceConfig.BorderGlow = math.clamp(tonumber(InterfaceConfig.BorderGlow) or .08, 0, .9)
+InterfaceConfig.WindowRadius = math.clamp(tonumber(InterfaceConfig.WindowRadius) or 10, 0, 30)
+InterfaceConfig.PanelRadius = math.clamp(tonumber(InterfaceConfig.PanelRadius) or 8, 0, 24)
+InterfaceConfig.ButtonRadius = math.clamp(tonumber(InterfaceConfig.ButtonRadius) or 7, 0, 24)
+InterfaceConfig.ButtonStyle = tostring(InterfaceConfig.ButtonStyle or 'Rounded')
+InterfaceConfig.RoundedUI = InterfaceConfig.RoundedUI ~= false
+InterfaceConfig.PanelGradients = InterfaceConfig.PanelGradients ~= false
+InterfaceConfig.AccentLine = InterfaceConfig.AccentLine ~= false
+InterfaceConfig.ScrollbarWidth = math.clamp(math.floor(tonumber(InterfaceConfig.ScrollbarWidth) or 4), 0, 10)
+InterfaceConfig.HoverAnimations = InterfaceConfig.HoverAnimations ~= false
 InterfaceConfig.KeybindMenuVisible = InterfaceConfig.KeybindMenuVisible ~= false
 InterfaceConfig.KeybindMenuPosition = type(InterfaceConfig.KeybindMenuPosition) == 'table'
 and InterfaceConfig.KeybindMenuPosition or DeepCopy(InterfaceDefaults.KeybindMenuPosition)
@@ -24888,6 +25135,7 @@ HubUI.KeybindManager:RefreshOverlay()
 end
 if ShouldSave ~= false then SaveInterfaceConfig() end
 if HubUI.RefreshThemeEditor then HubUI.RefreshThemeEditor() end
+if HubUI.ApplyCustomization then HubUI.ApplyCustomization(false) end
 end
 
 local function BindAccent(Object, Property)
@@ -25040,6 +25288,7 @@ return Tween(Object, Duration, Properties, EasingStyle, EasingDirection)
 end
 function HubUI.Motion.Press(ScaleObject, Down, Amount)
 if not (ScaleObject and ScaleObject.Parent) then return end
+if InterfaceConfig.HoverAnimations==false then ScaleObject.Scale=Down and .985 or 1; return end
 if InterfaceConfig.ReducedMotion then ScaleObject.Scale = 1 return end
 Tween(ScaleObject, Down and 0.10 or 0.20, {
 Scale = Down and (tonumber(Amount) or HubUI.Motion.PressScale) or 1,
@@ -25225,24 +25474,21 @@ ZIndex = 2,
 }, ScreenGui)
 local MainBorder = New('UIStroke', {
 __SkipThemeBinding = true,
-Color = Theme.Border,
-Thickness = 1,
-Transparency = 0,
+Color = Color3.fromRGB(224, 229, 235),
+Thickness = InterfaceConfig.BorderThickness,
+Transparency = InterfaceConfig.BorderGlow,
 ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-LineJoinMode = Enum.LineJoinMode.Miter,
+LineJoinMode = Enum.LineJoinMode.Round,
 }, Main)
 local MainFlameGradient = New('UIGradient', {
-Enabled = false,
+Enabled = InterfaceConfig.AnimatedBorder,
 Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Color3.fromRGB(0, 0, 0)),
-ColorSequenceKeypoint.new(0.16, Color3.fromRGB(0, 0, 0)),
-ColorSequenceKeypoint.new(0.30, Color3.fromRGB(126, 87, 7)),
-ColorSequenceKeypoint.new(0.42, Color3.fromRGB(255, 226, 122)),
-ColorSequenceKeypoint.new(0.54, Color3.fromRGB(0, 0, 0)),
-ColorSequenceKeypoint.new(0.70, Color3.fromRGB(0, 0, 0)),
-ColorSequenceKeypoint.new(0.84, Color3.fromRGB(184, 134, 11)),
-ColorSequenceKeypoint.new(0.94, Color3.fromRGB(255, 226, 122)),
-ColorSequenceKeypoint.new(1.00, Color3.fromRGB(0, 0, 0)),
+ColorSequenceKeypoint.new(0.00, Color3.fromRGB(112, 122, 134)),
+ColorSequenceKeypoint.new(0.18, Color3.fromRGB(242, 246, 250)),
+ColorSequenceKeypoint.new(0.38, Color3.fromRGB(174, 184, 195)),
+ColorSequenceKeypoint.new(0.58, Color3.fromRGB(255, 255, 255)),
+ColorSequenceKeypoint.new(0.78, Color3.fromRGB(145, 155, 168)),
+ColorSequenceKeypoint.new(1.00, Color3.fromRGB(236, 241, 246)),
 }),
 Rotation = 0,
 Offset = Vector2.zero,
@@ -25316,7 +25562,7 @@ end
 end
 HubUI.RefreshSpecialThemeSurfaces()
 HubUI.Window = Main
-New('UICorner', { CornerRadius = UDim.new(0, 2) }, Main)
+HubUI.MainCorner = New('UICorner', { CornerRadius = UDim.new(0, InterfaceConfig.WindowRadius) }, Main)
 local MainScale = New('UIScale', { Scale = 1 }, Main)
 local MainAccentLine = New('Frame', {
 Name = 'LinoriaAccent', Position = UDim2.fromOffset(1, 1),
@@ -25858,6 +26104,10 @@ Pages.Movement = New('CanvasGroup', {
 Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
 BorderSizePixel = 0, GroupTransparency = 1, Visible = false, ZIndex = 4,
 }, Content)
+Pages.Freecam = New('CanvasGroup', {
+Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+BorderSizePixel = 0, GroupTransparency = 1, Visible = false, ZIndex = 4,
+}, Content)
 Pages.Ball = New('CanvasGroup', {
 Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
 BorderSizePixel = 0, GroupTransparency = 1, Visible = false, ZIndex = 4,
@@ -25889,7 +26139,8 @@ local TabDefinitions = {
 { Name = 'Body', Category = 'AUTOMATION', Search = 'body auto body defender back face rotate smooth tween hand switch crossover dribble opposite side space separation shoulder angle stickiness cooldown left right anti reach offense' },
 { Name = 'AutoMix', DisplayName = 'Mix', Category = 'AUTOMATION', Search = 'auto mix dribble spin threat strategic movement manual blend steal protection f g cross fake escape' },
 { Name = 'Queue', Category = 'AUTOMATION', Search = 'queue auto queue court match requeue' },
-{ Name = 'Movement', Category = 'PLAYER', Search = 'movement walkspeed speed infinite jump jump power noclip flight air walk' },
+{ Name = 'Movement', Category = 'PLAYER', Search = 'movement walkspeed speed infinite jump jump power noclip velocity flight fly air walk space control' },
+{ Name = 'Freecam', DisplayName = 'Freecam', Category = 'PLAYER', Search = 'freecam free camera spectator cinematic fov sensitivity speed fly camera flight' },
 { Name = 'Ball', Category = 'PLAYER', Search = 'ball reach mag magnet loose held steal pickup catch rebound basketball opponent collider collision touch force safe grace' },
 { Name = 'Privacy', Category = 'PLAYER', Search = 'privacy anonymizer alias rank elo stats match history spoof' },
 { Name = 'Cosmetics', Category = 'PLAYER', Search = 'cosmetics aura trail ball skin body aura goal effects logos' },
@@ -25915,7 +26166,7 @@ GetOpen = 'GET OPEN  /  OFF-BALL',
 Guard = 'GUARD  /  DEFENSE', Body = 'BODY  /  BALL PROTECTION',
 AutoMix = 'MIX  /  DEFENSE-REACTIVE HANDLES',
 Queue = 'QUEUE  /  MATCHMAKING',
-Movement = 'MOVEMENT  /  LOCAL', Ball = 'BALL  /  REACH + MAG', Privacy = 'PRIVACY  /  LOCAL', Cosmetics = 'COSMETICS  /  LOCAL',
+Movement = 'MOVEMENT  /  LOCAL', Freecam = 'FREECAM  /  CAMERA FLIGHT', Ball = 'BALL  /  REACH + MAG', Privacy = 'PRIVACY  /  LOCAL', Cosmetics = 'COSMETICS  /  LOCAL',
 BallStudio = 'CUSTOMIZATION  /  BALL + TRAIL + SHOT FX',
 Interface = 'INTERFACE  /  THEME + LAYOUT', Keybinds = 'KEYBINDS  /  HOTKEYS + MENU',
 Configs = 'CONFIGS  /  PROFILES + UNLOAD',
@@ -26562,15 +26813,24 @@ Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(2, 16),
 BackgroundColor3 = Theme.Accent, BorderSizePixel = 0, ZIndex = 9,
 }, TitleBack)
 BindAccent(GroupAccent, 'BackgroundColor3')
-local Body = New('Frame', {
+local Body = New('ScrollingFrame', {
 Name = 'Content',
 Position = UDim2.fromOffset(0, 17),
 Size = UDim2.new(1, 0, 1, -17),
 BackgroundTransparency = 1,
 BorderSizePixel = 0,
 ClipsDescendants = true,
+CanvasSize = UDim2.fromOffset(0, 0),
+AutomaticCanvasSize = Enum.AutomaticSize.Y,
+ScrollingDirection = Enum.ScrollingDirection.Y,
+ScrollBarThickness = InterfaceConfig.ScrollbarWidth,
+ScrollBarImageColor3 = Theme.Accent,
+ScrollBarImageTransparency = .15,
+ElasticBehavior = Enum.ElasticBehavior.WhenScrollable,
+VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
 ZIndex = 5,
 }, Group)
+Body:SetAttribute('SilverSurferGroupScroll', true)
 
 GiveSignal(Group.MouseEnter:Connect(function()
 Tween(GroupStroke, 0.12, { Color = Theme.Accent, Transparency = 0.38 })
@@ -26651,6 +26911,8 @@ HubUI.BallTrailGroup = CreateGroup('Trail, Audio & Presets', Pages.BallStudio, U
 HubUI.BallSkinGroup = CreateGroup('Ball Models & Effects', Pages.BallStudio, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local MovementCoreGroup = CreateGroup('Walk & Jump', Pages.Movement, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local MovementFlightGroup = CreateGroup('Flight', Pages.Movement, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.FreecamCameraGroup = CreateGroup('Freecam Camera', Pages.Freecam, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.FreecamFlightGroup = CreateGroup('Flight Speeds', Pages.Freecam, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local BallReachGroup = CreateGroup('Ball Reach', Pages.Ball, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local BallMagGroup = CreateGroup('Loose Ball Magnet', Pages.Ball, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local InterfaceThemeGroup = CreateGroup('Theme Editor', Pages.Interface, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
@@ -27881,6 +28143,7 @@ HubUI.Controls.InterfaceIntro:Set(InterfaceConfig.Intro, false)
 HubUI.Controls.InterfaceReducedMotion:Set(InterfaceConfig.ReducedMotion, false)
 HubUI.Controls.InterfaceLockWindow:Set(InterfaceConfig.LockWindow, false)
 HubUI.Controls.InterfaceFont:Set(InterfaceConfig.Font, false)
+if HubUI.ApplyCustomization then HubUI.ApplyCustomization(false) end
 HiddenTabControl:Set(InterfaceConfig.HiddenTabs[SelectedTab] == true, false)
 Main.BackgroundTransparency = InterfaceConfig.WindowTransparency
 StaticGradientLayer.BackgroundTransparency = math.clamp(0.18 + InterfaceConfig.WindowTransparency * 0.72, 0.18, 0.82)
@@ -28439,17 +28702,17 @@ function(Value) State.Movement.SetBodyColliderIncludeSelf(Value) end
 
 CreateSectionHeader(MovementFlightGroup, 11, 'Air movement')
 HubUI.Controls.Flight = CreateCheckbox(
-MovementFlightGroup, 31, 'Flight', State.Movement.FlightEnabled,
+MovementFlightGroup, 31, 'Velocity Flight', State.Movement.FlightEnabled,
 function(Value) State.Movement.SetFlight(Value) end
 )
 HubUI.Controls.FlightMethod = CreateSelector(
-MovementFlightGroup, 61, 'Flight method', { 'Assembly Linear Velocity', 'PivotTo', 'BodyVelocity' },
+MovementFlightGroup, 61, 'Flight implementation', { 'Assembly Linear Velocity', 'PivotTo', 'BodyVelocity' },
 State.Movement.FlightMethod or 'Assembly Linear Velocity',
 function(Value) State.Movement.SetFlightMethod(Value) end,
 118
 )
 HubUI.Controls.FlightSpeed = CreateNumberInput(
-MovementFlightGroup, 91, 'Flight speed', State.Movement.FlightSpeed, 1, 300, 0,
+MovementFlightGroup, 91, 'Velocity flight speed', State.Movement.FlightSpeed, 1, 500, 0,
 function(Value) State.Movement.SetFlightSpeed(Value) end
 )
 HubUI.Controls.AirWalk = CreateCheckbox(
@@ -28478,15 +28741,55 @@ HubUI.Controls.SprintKeyEnabled = CreateCheckbox(MovementFlightGroup, 345, 'Spri
 HubUI.Controls.SprintSpeed = CreateNumberInput(MovementFlightGroup, 375, 'Sprint speed', CONFIG.SprintSpeed, 16, 100, 0, function(Value) CONFIG.SprintSpeed = Value end)
 HubUI.Controls.SlowKeyEnabled = CreateCheckbox(MovementFlightGroup, 405, 'Slow key [LEFT CTRL]', CONFIG.SlowKeyEnabled == true, function(Value) CONFIG.SlowKeyEnabled = Value == true end)
 HubUI.Controls.SlowSpeed = CreateNumberInput(MovementFlightGroup, 435, 'Slow speed', CONFIG.SlowSpeed, 1, 20, 0, function(Value) CONFIG.SlowSpeed = Value end)
-HubUI.Controls.IcePhysics = CreateCheckbox(MovementFlightGroup, 465, 'Ice physics', CONFIG.IcePhysics == true, function(Value) CONFIG.IcePhysics = Value == true end)
-HubUI.Controls.IceGlide = CreateNumberInput(MovementFlightGroup, 495, 'Ice glide', CONFIG.IceGlide, 0.80, 0.995, 3, function(Value) CONFIG.IceGlide = Value end)
+HubUI.Controls.IcePhysics = CreateCheckbox(MovementFlightGroup, 465, 'Ice physics', CONFIG.IcePhysics == true, function(Value) State.Movement.SetIcePhysics(Value) end)
+HubUI.Controls.IceGlide = CreateNumberInput(MovementFlightGroup, 495, 'Ice retention', CONFIG.IceGlide, 0.90, 0.9995, 4, function(Value) CONFIG.IceGlide = Value end)
+
+function HubUI.CreateFreecamActionButton(Parent,Y,Text,Callback)
+local Button=New('TextButton',{Position=UDim2.fromOffset(8,Y),Size=UDim2.new(1,-16,0,25),BackgroundColor3=Theme.Surface,BorderSizePixel=0,AutoButtonColor=false,Font=Enum.Font.Code,Text=Text,TextColor3=Theme.Text,TextSize=9,ZIndex=8},Parent)
+New('UICorner',{CornerRadius=UDim.new(0,3)},Button); DarkStroke(Button)
+GiveSignal(Button.MouseButton1Click:Connect(Callback))
+GiveSignal(Button.MouseEnter:Connect(function() Tween(Button,.1,{BackgroundColor3=Theme.SurfaceHover,TextColor3=Theme.AccentBright}) end))
+GiveSignal(Button.MouseLeave:Connect(function() MotionOut(Button,.1,{BackgroundColor3=Theme.Surface,TextColor3=Theme.Text}) end))
+return Button
+end
+
+CreateSectionHeader(HubUI.FreecamCameraGroup,11,'Freecam camera')
+HubUI.Controls.Freecam=CreateCheckbox(HubUI.FreecamCameraGroup,31,'Enable Freecam [P]',State.Freecam.Enabled,function(Value) State.Freecam.SetEnabled(Value) end)
+HubUI.Controls.FreecamSpeed=CreateNumberInput(HubUI.FreecamCameraGroup,61,'Camera flight speed',CONFIG.FreecamSpeed,1,500,0,function(Value) State.Freecam.SetSpeed(Value) end)
+HubUI.Controls.FreecamSensitivity=CreateNumberInput(HubUI.FreecamCameraGroup,91,'Mouse sensitivity',CONFIG.FreecamSensitivity,.02,1.5,2,function(Value) State.Freecam.SetSensitivity(Value) end)
+HubUI.Controls.FreecamFOV=CreateNumberInput(HubUI.FreecamCameraGroup,121,'Camera FOV',CONFIG.FreecamFOV,30,120,0,function(Value) State.Freecam.SetFOV(Value) end)
+HubUI.Controls.FreecamBoost=CreateNumberInput(HubUI.FreecamCameraGroup,151,'Shift speed multiplier',CONFIG.FreecamBoost,1,10,1,function(Value) State.Freecam.SetBoost(Value) end)
+CreateSectionHeader(HubUI.FreecamCameraGroup,183,'Controls')
+CreateParagraph(HubUI.FreecamCameraGroup,UDim2.fromOffset(8,203),UDim2.new(1,-16,0,116),'WASD / arrows  Move camera\nSPACE or E       Rise\nCTRL or Q        Descend\nSHIFT            Speed boost\nMOUSE            Look around\nP                Toggle freecam\nT                Teleport to aim')
+CreateSectionHeader(HubUI.FreecamCameraGroup,335,'Ice tuning')
+HubUI.Controls.IceAcceleration=CreateNumberInput(HubUI.FreecamCameraGroup,355,'Ice acceleration',CONFIG.IceAcceleration,.25,20,2,function(Value) CONFIG.IceAcceleration=Value end)
+HubUI.Controls.IceRetentionMirror=CreateNumberInput(HubUI.FreecamCameraGroup,385,'Ice retention',CONFIG.IceGlide,.90,.9998,4,function(Value) CONFIG.IceGlide=Value; if HubUI.Controls.IceGlide then HubUI.Controls.IceGlide:Set(Value,false) end end)
+HubUI.Controls.IceTurnGrip=CreateNumberInput(HubUI.FreecamCameraGroup,415,'Ice turning grip',CONFIG.IceTurnGrip,.15,15,2,function(Value) CONFIG.IceTurnGrip=Value end)
+HubUI.Controls.IceAirMomentum=CreateCheckbox(HubUI.FreecamCameraGroup,445,'Keep momentum when jumping',CONFIG.IceAirMomentum~=false,function(Value) CONFIG.IceAirMomentum=Value==true end)
+
+CreateSectionHeader(HubUI.FreecamFlightGroup,11,'Player velocity flight')
+HubUI.Controls.FreecamVelocityFlight=CreateCheckbox(HubUI.FreecamFlightGroup,31,'Velocity Flight',State.Movement.FlightEnabled,function(Value) State.Movement.SetFlight(Value) end)
+HubUI.Controls.FreecamFlightSpeed=CreateNumberInput(HubUI.FreecamFlightGroup,61,'Player flight speed',State.Movement.FlightSpeed,1,500,0,function(Value) State.Movement.SetFlightSpeed(Value) end)
+CreateSectionHeader(HubUI.FreecamFlightGroup,93,'Camera presets')
+HubUI.CreateFreecamActionButton(HubUI.FreecamFlightGroup,113,'Wide camera  [90 FOV]',function() if HubUI.Controls.FreecamFOV then HubUI.Controls.FreecamFOV:Set(90,true) end end)
+HubUI.CreateFreecamActionButton(HubUI.FreecamFlightGroup,143,'Default camera  [70 FOV]',function() if HubUI.Controls.FreecamFOV then HubUI.Controls.FreecamFOV:Set(70,true) end end)
+HubUI.CreateFreecamActionButton(HubUI.FreecamFlightGroup,173,'Zoom camera  [45 FOV]',function() if HubUI.Controls.FreecamFOV then HubUI.Controls.FreecamFOV:Set(45,true) end end)
+CreateSectionHeader(HubUI.FreecamFlightGroup,205,'Teleport')
+HubUI.CreateFreecamActionButton(HubUI.FreecamFlightGroup,225,'TELEPORT TO CAMERA AIM  [T]',function() State.Freecam.TeleportToLook() end)
+HubUI.Controls.FreecamTeleportDistance=CreateNumberInput(HubUI.FreecamFlightGroup,255,'Maximum aim distance',CONFIG.FreecamTeleportDistance,25,10000,0,function(Value) CONFIG.FreecamTeleportDistance=Value end)
+CreateParagraph(HubUI.FreecamFlightGroup,UDim2.fromOffset(8,291),UDim2.new(1,-16,0,86),'The teleport ray starts at the freecam\nand follows the center camera direction.\nIt places your character above the hit\nsurface and faces the camera direction.')
 
 State.Movement.LastFlightTapAt = 0
 GiveSignal(UserInputService.InputBegan:Connect(function(Input, GameProcessed)
+if not GameProcessed and not UserInputService:GetFocusedTextBox()
+and State.Freecam.Enabled and Input.KeyCode==(CONFIG.FreecamTeleportKey or Enum.KeyCode.T) then
+local Ok,Message=State.Freecam.TeleportToLook()
+Notify('FREECAM',Ok and 'Teleported to camera aim.' or tostring(Message))
+end
 if not GameProcessed and CONFIG.FlightDoubleTap and Input.KeyCode == Enum.KeyCode.Space then
 local Now = os.clock()
 if Now - (State.Movement.LastFlightTapAt or 0) <= 0.28 then
-State.Movement.LastFlightTapAt = 0
+
 local FlightControl = HubUI.Controls.Flight
 if FlightControl and FlightControl.Set then
 FlightControl:Set(not FlightControl.Value, true)
@@ -30356,6 +30659,54 @@ UDim2.new(1, -16, 0, 92),
 'STATUS   OFF\nCAM ANGLE --\nSPREAD   --\nMAKES    0 | MISSES 0\nBLOCKED  0'
 )
 
+function HubUI.ApplyCustomization(ShouldSave)
+local Rounded=InterfaceConfig.RoundedUI~=false
+local ButtonStyle=tostring(InterfaceConfig.ButtonStyle or 'Rounded')
+local WindowRadius=Rounded and math.clamp(tonumber(InterfaceConfig.WindowRadius) or 10,0,30) or 0
+local PanelRadius=Rounded and math.clamp(tonumber(InterfaceConfig.PanelRadius) or 8,0,24) or 0
+local ButtonRadius=Rounded and math.clamp(tonumber(InterfaceConfig.ButtonRadius) or 7,0,24) or 0
+if ButtonStyle=='Square' then ButtonRadius=0 elseif ButtonStyle=='Pill' then ButtonRadius=999 end
+if HubUI.MainCorner then HubUI.MainCorner.CornerRadius=UDim.new(ButtonRadius>=999 and 0 or 0,WindowRadius) end
+MainBorder.Thickness=math.clamp(tonumber(InterfaceConfig.BorderThickness) or 2.5,.5,8)
+MainBorder.Transparency=math.clamp(tonumber(InterfaceConfig.BorderGlow) or .08,0,.9)
+MainBorder.LineJoinMode=Rounded and Enum.LineJoinMode.Round or Enum.LineJoinMode.Miter
+MainFlameGradient.Enabled=InterfaceConfig.AnimatedBorder~=false and InterfaceConfig.BorderStyle~='Static'
+HubUI.LastBorderStyleKey=nil
+if HubUI.RefreshBorderStyle then HubUI.RefreshBorderStyle(os.clock(),true) end
+MainAccentLine.Visible=InterfaceConfig.AccentLine~=false
+for _,Object in ipairs(Main:GetDescendants()) do
+if Object:IsA('ScrollingFrame') and Object:GetAttribute('SilverSurferGroupScroll') then
+Object.ScrollBarThickness=math.clamp(math.floor(tonumber(InterfaceConfig.ScrollbarWidth) or 4),0,10)
+Object.ScrollBarImageColor3=Theme.Accent
+elseif Object:IsA('UICorner') then
+local Parent=Object.Parent
+if Parent==Main then Object.CornerRadius=UDim.new(0,WindowRadius)
+elseif Parent and Parent:IsA('TextButton') then Object.CornerRadius=ButtonRadius>=999 and UDim.new(1,0) or UDim.new(0,ButtonRadius)
+elseif Parent and Parent:IsA('TextBox') then Object.CornerRadius=UDim.new(0,math.min(ButtonRadius,12))
+elseif Parent and string.find(Parent.Name,'Groupbox',1,true) then Object.CornerRadius=UDim.new(0,PanelRadius)
+end
+end
+end
+for _,Gradient in ipairs(HubUI.GroupGradients or {}) do if Gradient and Gradient.Parent then Gradient.Enabled=InterfaceConfig.PanelGradients~=false end end
+if ShouldSave~=false then SaveInterfaceConfig() end
+end
+function HubUI.RefreshBorderStyle(Now,Force)
+local Style=tostring(InterfaceConfig.BorderStyle or 'Silver Sweep')
+local ThemeKey=Style=='Theme Pulse' and table.concat({tostring(Theme.Accent),tostring(Theme.AccentBright)},'|') or ''
+local Key=Style..'|'..ThemeKey
+if not Force and HubUI.LastBorderStyleKey==Key then return end
+HubUI.LastBorderStyleKey=Key
+if Style=='Theme Pulse' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Theme.Accent),ColorSequenceKeypoint.new(.5,Theme.AccentBright),ColorSequenceKeypoint.new(1,Theme.Accent)})
+elseif Style=='Prism' then
+-- A fixed rainbow sequence rotates smoothly; changing the sequence itself at
+-- frame rate produced stepping/flicker around UIStroke corners.
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromHSV(0,1,1)),ColorSequenceKeypoint.new(.17,Color3.fromHSV(.17,1,1)),ColorSequenceKeypoint.new(.33,Color3.fromHSV(.33,1,1)),ColorSequenceKeypoint.new(.5,Color3.fromHSV(.5,1,1)),ColorSequenceKeypoint.new(.67,Color3.fromHSV(.67,1,1)),ColorSequenceKeypoint.new(.83,Color3.fromHSV(.83,1,1)),ColorSequenceKeypoint.new(1,Color3.fromHSV(1,1,1))})
+else
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(112,122,134)),ColorSequenceKeypoint.new(.18,Color3.fromRGB(242,246,250)),ColorSequenceKeypoint.new(.38,Color3.fromRGB(174,184,195)),ColorSequenceKeypoint.new(.58,Color3.new(1,1,1)),ColorSequenceKeypoint.new(.78,Color3.fromRGB(145,155,168)),ColorSequenceKeypoint.new(1,Color3.fromRGB(236,241,246))})
+end
+end
+
 CreateSectionHeader(InterfaceLayoutGroup, 340, 'Mobile action buttons')
 HubUI.Controls.MobileQuickVisible = CreateCheckbox(
 InterfaceLayoutGroup, 360, 'Show on-screen buttons', InterfaceConfig.MobileQuickVisible ~= false,
@@ -30403,6 +30754,26 @@ HubUI.KeybindManager:RefreshMobileQuick(true)
 end
 end
 )
+
+CreateSectionHeader(InterfaceLayoutGroup,482,'Shape and corners')
+HubUI.Controls.InterfaceRoundedUI=CreateCheckbox(InterfaceLayoutGroup,502,'Rounded UI',InterfaceConfig.RoundedUI~=false,function(Value) InterfaceConfig.RoundedUI=Value==true; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceButtonStyle=CreateDropdown(InterfaceLayoutGroup,532,'Button shape',{'Rounded','Pill','Square'},InterfaceConfig.ButtonStyle,function(Value) InterfaceConfig.ButtonStyle=Value; HubUI.ApplyCustomization(true) end,128)
+HubUI.Controls.InterfaceWindowRadius=CreateNumberInput(InterfaceLayoutGroup,562,'Window corner radius',InterfaceConfig.WindowRadius,0,30,0,function(Value) InterfaceConfig.WindowRadius=Value; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfacePanelRadius=CreateNumberInput(InterfaceLayoutGroup,592,'Panel corner radius',InterfaceConfig.PanelRadius,0,24,0,function(Value) InterfaceConfig.PanelRadius=Value; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceButtonRadius=CreateNumberInput(InterfaceLayoutGroup,622,'Button corner radius',InterfaceConfig.ButtonRadius,0,24,0,function(Value) InterfaceConfig.ButtonRadius=Value; HubUI.ApplyCustomization(true) end)
+CreateSectionHeader(InterfaceLayoutGroup,654,'Animated border')
+HubUI.Controls.InterfaceAnimatedBorder=CreateCheckbox(InterfaceLayoutGroup,674,'Silver / white animated border',InterfaceConfig.AnimatedBorder~=false,function(Value) InterfaceConfig.AnimatedBorder=Value==true; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceBorderStyle=CreateDropdown(InterfaceLayoutGroup,704,'Border style',{'Silver Sweep','Theme Pulse','Prism','Static'},InterfaceConfig.BorderStyle,function(Value) InterfaceConfig.BorderStyle=Value; HubUI.ApplyCustomization(true) end,128)
+HubUI.Controls.InterfaceBorderThickness=CreateNumberInput(InterfaceLayoutGroup,734,'Border thickness',InterfaceConfig.BorderThickness,.5,8,1,function(Value) InterfaceConfig.BorderThickness=Value; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceBorderSpeed=CreateNumberInput(InterfaceLayoutGroup,764,'Border animation speed',InterfaceConfig.BorderSpeed,.05,5,2,function(Value) InterfaceConfig.BorderSpeed=Value; SaveInterfaceConfig() end)
+HubUI.Controls.InterfaceBorderGlow=CreateNumberInput(InterfaceLayoutGroup,794,'Border transparency',InterfaceConfig.BorderGlow,0,.9,2,function(Value) InterfaceConfig.BorderGlow=Value; HubUI.ApplyCustomization(true) end)
+CreateSectionHeader(InterfaceLayoutGroup,826,'Panels and scrolling')
+HubUI.Controls.InterfacePanelGradients=CreateCheckbox(InterfaceLayoutGroup,846,'Animated panel gradients',InterfaceConfig.PanelGradients~=false,function(Value) InterfaceConfig.PanelGradients=Value==true; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceAccentLine=CreateCheckbox(InterfaceLayoutGroup,876,'Top accent line',InterfaceConfig.AccentLine~=false,function(Value) InterfaceConfig.AccentLine=Value==true; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceScrollbarWidth=CreateNumberInput(InterfaceLayoutGroup,906,'Scrollbar width',InterfaceConfig.ScrollbarWidth,0,10,0,function(Value) InterfaceConfig.ScrollbarWidth=Value; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceHoverAnimations=CreateCheckbox(InterfaceLayoutGroup,936,'Hover animations',InterfaceConfig.HoverAnimations~=false,function(Value) InterfaceConfig.HoverAnimations=Value==true; SaveInterfaceConfig() end)
+CreateParagraph(InterfaceLayoutGroup,UDim2.fromOffset(8,970),UDim2.new(1,-16,0,70),'Every feature panel now scrolls independently.\nMouse wheel, trackpad, and touch drag keep\nall controls inside their panel on every tab.')
+HubUI.ApplyCustomization(false)
 
 CreateSectionHeader(HubUI.HumanizerGroup, 307, 'How it works')
 CreateParagraph(
@@ -32443,6 +32814,7 @@ SilentMode = KeyCodeToken(CONFIG.SilentModeToggleKey),
 AutoGuard = KeyCodeToken(CONFIG.AutoGuardOnBallKey),
 AutoGetOpen = KeyCodeToken(CONFIG.AutoGetOpenKey),
 AutoMix = KeyCodeToken(CONFIG.AutoMixKey),
+Freecam = KeyCodeToken(CONFIG.FreecamKey),
 BallColliders = KeyCodeToken(Enum.KeyCode.B),
 }
 local ControlEntries = {}
@@ -33497,11 +33869,14 @@ CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.SprintKeyEnabled, CONFIG.SprintKeyEnabled == true },
 { HubUI.Controls.SlowKeyEnabled, CONFIG.SlowKeyEnabled == true },
 { HubUI.Controls.IcePhysics, CONFIG.IcePhysics == true },
+{ HubUI.Controls.IceAirMomentum, CONFIG.IceAirMomentum ~= false },
 { HubUI.Controls.SpeedProfiles, CONFIG.SpeedProfiles },
 { HubUI.Controls.InfiniteJump, State.Movement.InfiniteJumpEnabled },
 { HubUI.Controls.JumpPower, State.Movement.JumpPowerEnabled },
 { HubUI.Controls.Noclip, State.Movement.NoclipEnabled },
 { HubUI.Controls.Flight, State.Movement.FlightEnabled },
+{ HubUI.Controls.FreecamVelocityFlight, State.Movement.FlightEnabled },
+{ HubUI.Controls.Freecam, State.Freecam.Enabled },
 { HubUI.Controls.AirWalk, State.Movement.AirWalkEnabled },
 { HubUI.Controls.AutoDailySpin, State.AutoDailySpinEnabled },
 { HubUI.Controls.AutoServerHop, State.AutoServerHopEnabled },
@@ -33570,9 +33945,18 @@ local NumberValues = {
 { HubUI.Controls.SprintSpeed, CONFIG.SprintSpeed },
 { HubUI.Controls.SlowSpeed, CONFIG.SlowSpeed },
 { HubUI.Controls.IceGlide, CONFIG.IceGlide },
+{ HubUI.Controls.IceRetentionMirror, CONFIG.IceGlide },
+{ HubUI.Controls.IceAcceleration, CONFIG.IceAcceleration },
+{ HubUI.Controls.IceTurnGrip, CONFIG.IceTurnGrip },
 { HubUI.Controls.OutOfMatchSpeed, CONFIG.OutOfMatchSpeed },
 { HubUI.Controls.JumpPowerValue, State.Movement.JumpPowerValue },
 { HubUI.Controls.FlightSpeed, State.Movement.FlightSpeed },
+{ HubUI.Controls.FreecamFlightSpeed, State.Movement.FlightSpeed },
+{ HubUI.Controls.FreecamSpeed, CONFIG.FreecamSpeed },
+{ HubUI.Controls.FreecamSensitivity, CONFIG.FreecamSensitivity },
+{ HubUI.Controls.FreecamFOV, CONFIG.FreecamFOV },
+{ HubUI.Controls.FreecamBoost, CONFIG.FreecamBoost },
+{ HubUI.Controls.FreecamTeleportDistance, CONFIG.FreecamTeleportDistance },
 { HubUI.Controls.BallReachRadius, State.BallAssist.ReachRadius },
 { HubUI.Controls.AntiReachNoStealRange,
 CONFIG.AntiReachNoStealRange },
@@ -33954,7 +34338,19 @@ AntiReachCounterWindow = 'Time window after a steal attempt where the counter st
 AntiReachNoStealRange = 'Range of the no-steal protection bubble.',
 WalkSpeedValue = 'Movement speed applied while the override is on. Game default is 16.',
 JumpPowerValue = 'Jump strength applied while the override is on. Game default is 50.',
-FlightSpeed = 'Movement speed while flight is active.',
+Freecam = 'Scriptable free camera. P toggles it; WASD flies, mouse looks, Space/E rises, Ctrl/Q descends, and Shift boosts.',
+FreecamSpeed = 'Independent camera movement speed.',
+FreecamSensitivity = 'Mouse-look sensitivity while freecam is active.',
+FreecamFOV = 'Live freecam field of view.',
+FreecamBoost = 'Multiplier applied to camera speed while Shift is held.',
+FreecamTeleportDistance = 'Maximum distance for the freecam center-screen teleport ray.',
+Flight = 'Velocity flight. Uses AssemblyLinearVelocity with camera-relative WASD, Space to rise, and Ctrl to descend.',
+IcePhysics = 'Physics-timed ice movement. Uses low friction and persistent momentum instead of letting Humanoid braking cancel the slide.',
+IceGlide = 'Momentum retention per frame. Higher values slide farther after releasing movement.',
+IceAcceleration = 'How quickly you gain or lose speed while pushing across the ice.',
+IceTurnGrip = 'How quickly momentum bends toward your new input direction without instantly snapping.',
+IceAirMomentum = 'Preserves horizontal ice momentum through jumps and while airborne.',
+FlightSpeed = 'Live velocity-flight speed. You can change it while flying.',
 SpeedProfiles = 'Uses different speeds on-ball, off-ball, and on defense so the override looks natural.',
 OutOfMatchSpeed = 'Separate speed override that only applies in lobbies, never in a match.',
 NoJumpMode = 'Disables jumping so pump fakes can never bait you into the air.',
@@ -35125,16 +35521,14 @@ and Color3.fromHSV(MotionEnabled and ((Now * GradientSpeed * 0.16) % 1) or 0.86,
 or (MotionEnabled and Theme.Accent:Lerp(Theme.AccentBright, GoldAlpha) or Theme.Accent)
 local Pulse = MotionEnabled and (math.sin(Now * 4.2) + 1) * 0.5 or 0.5
 
-MainBorder.Thickness = LinoriaStatic and 1 or 2
-MainBorder.Transparency = LinoriaStatic and 0.12 or 0.02
-MainBorder.Color = LinoriaStatic and Theme.Border or MainBorder.Color
-MainFlameGradient.Enabled = not LinoriaStatic
+MainBorder.Thickness = math.clamp(tonumber(InterfaceConfig.BorderThickness) or 2.5,.5,8)
+MainBorder.Transparency = math.clamp(tonumber(InterfaceConfig.BorderGlow) or .08,0,.9)
+MainBorder.Color = InterfaceConfig.BorderStyle=='Static' and Color3.fromRGB(226,231,236) or Color3.new(1,1,1)
+MainFlameGradient.Enabled = InterfaceConfig.AnimatedBorder~=false and InterfaceConfig.BorderStyle~='Static'
+if HubUI.RefreshBorderStyle then HubUI.RefreshBorderStyle(Now,false) end
 BackgroundGradient.Enabled = not LinoriaStatic
-MainFlameGradient.Rotation = MotionEnabled and ((Now * 34 * GradientSpeed) % 360) or 0
-MainFlameGradient.Offset = MotionEnabled and Vector2.new(
-math.sin(Now * GradientSpeed * 2.4) * 0.34,
-math.cos(Now * GradientSpeed * 1.7) * 0.16
-) or Vector2.zero
+MainFlameGradient.Rotation = MotionEnabled and ((Now * 52 * math.clamp(tonumber(InterfaceConfig.BorderSpeed) or 1,.05,5)) % 360) or 0
+MainFlameGradient.Offset = Vector2.zero
 BackgroundGradient.Rotation = MotionEnabled and (18 + math.sin(Now * 0.45) * 20) or 18
 BackgroundGradient.Offset = MotionEnabled and Vector2.new(
 math.sin(Now * 0.30) * 0.42,
@@ -35156,7 +35550,7 @@ local RainbowPhase = MotionEnabled and ((Now * GradientSpeed * 0.10) % 1) or 0
 local function Rainbow(Offset, Value)
 return Color3.fromHSV((RainbowPhase + Offset) % 1, 0.96, Value or 1)
 end
-MainFlameGradient.Color = ColorSequence.new({
+HubUI.LegacyBorderColor = ColorSequence.new({
 ColorSequenceKeypoint.new(0.00, Rainbow(0.00)),
 ColorSequenceKeypoint.new(0.17, Rainbow(0.17)),
 ColorSequenceKeypoint.new(0.33, Rainbow(0.33)),
@@ -35206,7 +35600,7 @@ local function CycleGold(Offset, LowColor, HighColor)
 local Alpha = (math.sin(GoldPhase + Offset) + 1) * 0.5
 return LowColor:Lerp(HighColor, Alpha)
 end
-MainFlameGradient.Color = ColorSequence.new({
+HubUI.LegacyBorderColor = ColorSequence.new({
 ColorSequenceKeypoint.new(0.00, Theme.Background),
 ColorSequenceKeypoint.new(0.14, Theme.Background),
 ColorSequenceKeypoint.new(0.27, CycleGold(0.00, DarkGold, DeepGold)),
@@ -36618,6 +37012,8 @@ State.AutoHeadRide.Enabled = false
 CONFIG.AutoHeadRide = false
 State.AutoHeadRide.Reset('OFF')
 end)
+pcall(function() State.Freecam.SetEnabled(false) end)
+pcall(function() State.Movement.SetIcePhysics(false) end)
 pcall(function() State.Movement.SetFlight(false) end)
 pcall(function() State.Movement.SetAirWalk(false) end)
 pcall(function() State.Movement.SetNoclip(false) end)
@@ -36683,6 +37079,7 @@ State.AutoDunk and State.AutoDunk.BindName,
 State.AutoOffense and State.AutoOffense.BindName,
 State.Outline and State.Outline.BindName,
 State.Movement and State.Movement.FlightRenderName,
+State.Freecam and State.Freecam.BindName,
 State.AutoMix and State.AutoMix.ShiftLockBindName,
 'SilverSurferProfileStatsLock',
 }) do
