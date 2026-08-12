@@ -213,6 +213,15 @@ AutoGuardDefenseMode = 'Normal',
 AutoGuardDefenseSpinSpeed = 540,
 AutoGuardDefenseJitterSpeed = 14,
 AutoGuardDefenseJitterAngle = 35,
+AutoGuardForceDirection = 'Any Direction',
+AutoGuardForceOffset = 2.0,
+AutoGuardCutoffLead = 0.24,
+AutoGuardSmotherGap = 0.8,
+AutoGuardLegitReactionDelay = 0.12,
+AutoGuardLegitSmoothing = 7,
+AutoGuardMovementPattern = 'Direct',
+AutoGuardZigzagWidth = 1.6,
+AutoGuardZigzagSpeed = 2.4,
 AutoDefense = false,
 AutoDefenseNoclip = true,
 
@@ -16294,6 +16303,129 @@ local Desired = TargetPosition
 return Vector3.new(Desired.X, TargetPosition.Y, Desired.Z)
 end
 
+State.AutoGuardStyles = State.AutoGuardStyles or {
+Legit = { Target = nil, Sample = nil, Display = nil, LastSampleAt = 0 },
+}
+
+function State.AutoGuardStyles.GetBasis(Target)
+if not (Target and Target.Character) then return nil end
+local TargetRoot = safe_find(Target.Character, 'HumanoidRootPart')
+local TargetHumanoid = safe_find(Target.Character, 'Humanoid')
+local MyRoot = LP.Character and safe_find(LP.Character, 'HumanoidRootPart')
+if not (TargetRoot and TargetHumanoid and MyRoot) then return nil end
+local TargetPosition = TargetRoot.Position
+local MoveDirection = Vector3.new(TargetHumanoid.MoveDirection.X, 0, TargetHumanoid.MoveDirection.Z)
+local Velocity = Vector3.new(TargetRoot.AssemblyLinearVelocity.X, 0, TargetRoot.AssemblyLinearVelocity.Z)
+local Goal = FindPlayerScoringGoal(Target)
+local BlockDirection
+if Goal then
+local ToGoal = Vector3.new(Goal.Position.X - TargetPosition.X, 0, Goal.Position.Z - TargetPosition.Z)
+if ToGoal.Magnitude > 0.01 then BlockDirection = ToGoal.Unit end
+end
+if not BlockDirection then
+local Look = Vector3.new(TargetRoot.CFrame.LookVector.X, 0, TargetRoot.CFrame.LookVector.Z)
+BlockDirection = MoveDirection.Magnitude > 0.01 and MoveDirection.Unit
+or (Look.Magnitude > 0.01 and Look.Unit or Vector3.new(0, 0, 1))
+end
+local SideDirection = Vector3.new(-BlockDirection.Z, 0, BlockDirection.X)
+return TargetRoot, TargetHumanoid, MyRoot, TargetPosition, BlockDirection, SideDirection, Velocity, MoveDirection
+end
+
+function State.AutoGuardStyles.Cutoff(Target)
+local TargetRoot, TargetHumanoid, MyRoot, TargetPosition, BlockDirection, SideDirection, Velocity, MoveDirection =
+State.AutoGuardStyles.GetBasis(Target)
+if not TargetRoot then return nil end
+local Travel = MoveDirection * TargetHumanoid.WalkSpeed + Velocity * 0.45
+local DriveDirection = Travel.Magnitude > 0.1 and Travel.Unit or BlockDirection
+local CutoffDirection = BlockDirection * 0.68 + DriveDirection * 0.32
+if CutoffDirection.Magnitude > 0.01 then CutoffDirection = CutoffDirection.Unit else CutoffDirection = BlockDirection end
+local Lead = math.clamp(tonumber(CONFIG.AutoGuardCutoffLead) or 0.24, 0.05, 0.65)
+local Predicted = TargetPosition + Travel * Lead
+local Gap = 2.35 + math.clamp(Velocity.Magnitude * 0.07, 0, 1.35)
+local LateralLead = math.clamp(Velocity:Dot(SideDirection) * 0.08, -1.4, 1.4)
+local Desired = Predicted + CutoffDirection * Gap + SideDirection * LateralLead
+return Vector3.new(Desired.X, TargetPosition.Y, Desired.Z)
+end
+
+function State.AutoGuardStyles.Smother(Target)
+local TargetRoot, TargetHumanoid, MyRoot, TargetPosition, BlockDirection, SideDirection, Velocity =
+State.AutoGuardStyles.GetBasis(Target)
+if not TargetRoot then return nil end
+local Gap = math.clamp(tonumber(CONFIG.AutoGuardSmotherGap) or 0.8, 0.25, 1.8)
+local Lateral = math.clamp(Velocity:Dot(SideDirection) * 0.035, -0.45, 0.45)
+local Desired = TargetPosition + BlockDirection * Gap + SideDirection * Lateral
+return Vector3.new(Desired.X, TargetPosition.Y, Desired.Z)
+end
+
+function State.AutoGuardStyles.Force(Target)
+local TargetRoot, TargetHumanoid, MyRoot, TargetPosition, BlockDirection, SideDirection, Velocity, MoveDirection =
+State.AutoGuardStyles.GetBasis(Target)
+if not TargetRoot then return nil end
+local Forward = Vector3.new(TargetRoot.CFrame.LookVector.X, 0, TargetRoot.CFrame.LookVector.Z)
+if Forward.Magnitude <= 0.01 then Forward = BlockDirection else Forward = Forward.Unit end
+local Right = Vector3.new(-Forward.Z, 0, Forward.X)
+local Mode = tostring(CONFIG.AutoGuardForceDirection or 'Any Direction')
+local ForcedDirection
+if Mode == 'Left' then
+ForcedDirection = -Right
+elseif Mode == 'Right' then
+ForcedDirection = Right
+elseif Mode == 'Forward' then
+ForcedDirection = Forward
+elseif Mode == 'Backward' then
+ForcedDirection = -Forward
+else
+local Motion = MoveDirection * TargetHumanoid.WalkSpeed + Velocity
+if Motion.Magnitude > 1 then
+ForcedDirection = Motion.Unit
+else
+local Pick = math.floor(os.clock() * 0.8) % 4
+ForcedDirection = Pick == 0 and Forward or (Pick == 1 and Right or (Pick == 2 and -Forward or -Right))
+end
+end
+local Offset = math.clamp(tonumber(CONFIG.AutoGuardForceOffset) or 2, 0.5, 4)
+local Desired = TargetPosition - ForcedDirection * Offset + BlockDirection * 0.65
+return Vector3.new(Desired.X, TargetPosition.Y, Desired.Z)
+end
+
+function State.AutoGuardStyles.LegitPosition(Target, DeltaTime)
+local Raw = GetNearestGuardPosition(Target)
+if not Raw then return nil end
+local Legit = State.AutoGuardStyles.Legit
+local Now = os.clock()
+local Delay = math.clamp(tonumber(CONFIG.AutoGuardLegitReactionDelay) or 0.12, 0.02, 0.5)
+if Legit.Target ~= Target then
+Legit.Target, Legit.Sample, Legit.Display = Target, Raw, Raw
+Legit.LastSampleAt = Now
+elseif Now - Legit.LastSampleAt >= Delay then
+Legit.Sample = Raw
+Legit.LastSampleAt = Now
+end
+Legit.Sample = Legit.Sample or Raw
+Legit.Display = Legit.Display or Legit.Sample
+local Smoothing = math.clamp(tonumber(CONFIG.AutoGuardLegitSmoothing) or 7, 1, 20)
+local Alpha = 1 - math.exp(-Smoothing * math.max(tonumber(DeltaTime) or 0.016, 0.001))
+Legit.Display = Legit.Display:Lerp(Legit.Sample, math.clamp(Alpha, 0.01, 1))
+return Legit.Display
+end
+
+function State.AutoGuardStyles.ApplyMovementPattern(GuardPosition, Target, LocalRoot)
+if not GuardPosition or tostring(CONFIG.AutoGuardMovementPattern or 'Direct') ~= 'Zigzag' then return GuardPosition end
+if not (Target and Target.Character and LocalRoot) then return GuardPosition end
+local TargetRoot = safe_find(Target.Character, 'HumanoidRootPart')
+local TargetHumanoid = safe_find(Target.Character, 'Humanoid')
+if not TargetRoot then return GuardPosition end
+local ToGuard = Vector3.new(GuardPosition.X - LocalRoot.Position.X, 0, GuardPosition.Z - LocalRoot.Position.Z)
+if ToGuard.Magnitude < 1.75 then return GuardPosition end
+local Travel = TargetHumanoid and Vector3.new(TargetHumanoid.MoveDirection.X, 0, TargetHumanoid.MoveDirection.Z) or Vector3.zero
+if Travel.Magnitude <= 0.05 then Travel = ToGuard.Unit else Travel = Travel.Unit end
+local Side = Vector3.new(-Travel.Z, 0, Travel.X)
+local Width = math.clamp(tonumber(CONFIG.AutoGuardZigzagWidth) or 1.6, 0.25, 4)
+local Speed = math.clamp(tonumber(CONFIG.AutoGuardZigzagSpeed) or 2.4, 0.25, 8)
+local Offset = math.sin(os.clock() * Speed * math.pi * 2) * Width
+return GuardPosition + Side * Offset
+end
+
 local function ApplyGuardDefenseRotation(LocalRoot, Target)
 if not (LocalRoot and LocalRoot.Parent and Target and Target.Character) then return end
 local Mode = tostring(CONFIG.AutoGuardDefenseMode or 'Normal')
@@ -16330,6 +16462,11 @@ local Speed = math.clamp(tonumber(CONFIG.AutoGuardDefenseJitterSpeed) or 14, 1, 
 local Angle = math.clamp(tonumber(CONFIG.AutoGuardDefenseJitterAngle) or 35, 5, 90)
 local Sign = math.floor(os.clock() * Speed) % 2 == 0 and -1 or 1
 Direction = CFrame.Angles(0, math.rad(Angle * Sign), 0):VectorToWorldSpace(Direction)
+elseif Mode == 'Zigzag Defense' then
+local Speed = math.clamp(tonumber(CONFIG.AutoGuardZigzagSpeed) or 2.4, 0.25, 8)
+local Angle = math.clamp(tonumber(CONFIG.AutoGuardDefenseJitterAngle) or 35, 5, 90)
+local Sweep = math.sin(os.clock() * Speed * math.pi * 2) * Angle
+Direction = CFrame.Angles(0, math.rad(Sweep), 0):VectorToWorldSpace(Direction)
 end
 
 pcall(function()
@@ -16436,11 +16573,20 @@ TargetWasJumping = TargetIsJumping
 
 if State.AutoGuardStyle == 'Blatant Mirror' then
 GuardPosition = GetMirrorGuardPosition(Target)
+elseif State.AutoGuardStyle == 'Cutoff' then
+GuardPosition = State.AutoGuardStyles.Cutoff(Target)
+elseif State.AutoGuardStyle == 'Smother' then
+GuardPosition = State.AutoGuardStyles.Smother(Target)
+elseif State.AutoGuardStyle == 'Force Mode' then
+GuardPosition = State.AutoGuardStyles.Force(Target)
+elseif State.AutoGuardStyle == 'Legit' then
+GuardPosition = State.AutoGuardStyles.LegitPosition(Target, DeltaTime)
 elseif EffectiveMode ~= 'On-Ball Player' then
 GuardPosition = GetNearestGuardPosition(Target)
 elseif Target.Character:FindFirstChild('Basketball') then
 GuardPosition = GetBallHandlerGuardPosition(Target)
 end
+GuardPosition = State.AutoGuardStyles.ApplyMovementPattern(GuardPosition, Target, LocalRoot)
 else
 JumpTarget = nil
 TargetWasJumping = false
@@ -16450,7 +16596,10 @@ if GuardPosition then
 if State.Runtime.AcquireMovement('Guard') then
 local Difference = GuardPosition - LocalRoot.Position
 local Horizontal = Vector3.new(Difference.X, 0, Difference.Z)
-local StopDistance = State.AutoGuardStyle == 'Blatant Mirror' and 0.35 or 1.5
+local StopDistance = State.AutoGuardStyle == 'Blatant Mirror' and 0.35
+or (State.AutoGuardStyle == 'Smother' and 0.3
+or (State.AutoGuardStyle == 'Legit' and 1.8
+or ((State.AutoGuardStyle == 'Cutoff' or State.AutoGuardStyle == 'Force Mode') and 1.0 or 1.5)))
 local GuardMethod = State.Movement.AutoGuardMethod or 'MoveTo'
 if GuardMethod == 'CFrame Offset' then
 -- Directly reposition the character at the defensive offset each frame.
@@ -29045,27 +29194,22 @@ State.AutoGuardEffectiveMode = 'Adaptive'
 CONFIG.AutoGuardMode = 'Adaptive'
 SetAutoGuardEnabled(Value, true)
 end)
-HubUI.Controls.GuardMode = CreateSelector(
-GuardGroup, 61, 'Target mode',
-{ 'Adaptive' },
-'Adaptive',
-function()
-State.AutoGuardMode = 'Adaptive'
-State.AutoGuardEffectiveMode = 'Adaptive'
-CONFIG.AutoGuardMode = 'Adaptive'
-State.AutoGuardTarget = nil
-end,
+HubUI.Controls.AutoGuardForceDirection = CreateSelector(
+GuardGroup, 57, 'Force direction',
+{ 'Any Direction', 'Left', 'Right', 'Forward', 'Backward' },
+CONFIG.AutoGuardForceDirection or 'Any Direction',
+function(Value) CONFIG.AutoGuardForceDirection = Value end,
 150
 )
 HubUI.Controls.AutoGuardMethod = CreateSelector(
-GuardGroup, 91, 'Guard method', { 'MoveTo', 'Humanoid Move', 'CFrame Offset', 'Velocity Match' },
+GuardGroup, 83, 'Guard method', { 'MoveTo', 'Humanoid Move', 'CFrame Offset', 'Velocity Match' },
 State.Movement.AutoGuardMethod or 'MoveTo',
 function(Value) State.Movement.SetAutoGuardMethod(Value) end,
 118
 )
 HubUI.Controls.AutoGuardStyle = CreateSelector(
-GuardGroup, 121, 'Guard style',
-{ 'Predictive', 'Blatant Mirror' },
+GuardGroup, 109, 'Guard style',
+{ 'Predictive', 'Blatant Mirror', 'Cutoff', 'Smother', 'Force Mode', 'Legit' },
 State.AutoGuardStyle,
 function(Value)
 State.AutoGuardStyle = Value
@@ -29074,48 +29218,62 @@ end,
 150
 )
 HubUI.Controls.AutoGuardNoJump = CreateCheckbox(
-GuardGroup, 151, 'No auto jump (stay grounded)',
+GuardGroup, 135, 'Stay grounded (no jump)',
 CONFIG.AutoGuardNoJump,
 function(Value) CONFIG.AutoGuardNoJump = Value end
 )
 HubUI.Controls.AutoGuardBallCheckOnly = CreateCheckbox(
-GuardGroup, 181, 'Guard only when opponent has ball',
+GuardGroup, 161, 'Only guard ball carrier',
 CONFIG.AutoGuardBallCheckOnly,
 function(Value) CONFIG.AutoGuardBallCheckOnly = Value end
 )
 
-CreateSectionHeader(GuardGroup, 213, 'Defense preset')
+CreateSectionHeader(GuardGroup, 190, 'Defense preset')
 HubUI.Controls.AutoDefense = CreateCheckbox(
-GuardGroup, 233, 'Auto Defense', State.AutoDefense.Enabled,
+GuardGroup, 210, 'Auto Defense', State.AutoDefense.Enabled,
 function(Value) State.AutoDefense.SetEnabled(Value) end
 )
 HubUI.Controls.AutoDefenseNoclip = CreateCheckbox(
-GuardGroup, 263, 'Defense auto Noclip', CONFIG.AutoDefenseNoclip,
+GuardGroup, 236, 'Defense Noclip', CONFIG.AutoDefenseNoclip,
 function(Value)
 CONFIG.AutoDefenseNoclip = Value
 if State.AutoDefense.Enabled then State.Movement.SetNoclip(Value) end
 end
 )
 
-CreateSectionHeader(GuardGroup, 295, 'Defense rotation')
+CreateSectionHeader(GuardGroup, 264, 'Rotation / movement')
 HubUI.Controls.AutoGuardDefenseMode = CreateSelector(
-GuardGroup, 315, 'Rotation mode',
-{ 'Normal', 'Backwards Defense', 'Spin Defense', 'Jitter Defense', 'Ball Defense', 'Carrier Defense' },
+GuardGroup, 284, 'Rotation mode',
+{ 'Normal', 'Backwards Defense', 'Spin Defense', 'Jitter Defense', 'Zigzag Defense', 'Ball Defense', 'Carrier Defense' },
 CONFIG.AutoGuardDefenseMode or 'Normal',
 function(Value) CONFIG.AutoGuardDefenseMode = Value end,
 142
 )
 HubUI.Controls.AutoGuardDefenseSpinSpeed = CreateNumberInput(
-GuardGroup, 345, 'Spin speed (deg/sec)', CONFIG.AutoGuardDefenseSpinSpeed, 45, 1440, 0,
+GuardGroup, 310, 'Spin speed', CONFIG.AutoGuardDefenseSpinSpeed, 45, 1440, 0,
 function(Value) CONFIG.AutoGuardDefenseSpinSpeed = Value end
 )
 HubUI.Controls.AutoGuardDefenseJitterSpeed = CreateNumberInput(
-GuardGroup, 375, 'Jitter speed', CONFIG.AutoGuardDefenseJitterSpeed, 1, 40, 0,
+GuardGroup, 336, 'Jitter speed', CONFIG.AutoGuardDefenseJitterSpeed, 1, 40, 0,
 function(Value) CONFIG.AutoGuardDefenseJitterSpeed = Value end
 )
 HubUI.Controls.AutoGuardDefenseJitterAngle = CreateNumberInput(
-GuardGroup, 405, 'Jitter angle', CONFIG.AutoGuardDefenseJitterAngle, 5, 90, 0,
+GuardGroup, 362, 'Jitter angle', CONFIG.AutoGuardDefenseJitterAngle, 5, 90, 0,
 function(Value) CONFIG.AutoGuardDefenseJitterAngle = Value end
+)
+HubUI.Controls.AutoGuardMovementPattern = CreateSelector(
+GuardGroup, 390, 'Movement pattern', { 'Direct', 'Zigzag' },
+CONFIG.AutoGuardMovementPattern or 'Direct',
+function(Value) CONFIG.AutoGuardMovementPattern = Value end,
+110
+)
+HubUI.Controls.AutoGuardZigzagWidth = CreateNumberInput(
+GuardGroup, 416, 'Zigzag width', CONFIG.AutoGuardZigzagWidth, 0.25, 4, 2,
+function(Value) CONFIG.AutoGuardZigzagWidth = Value end
+)
+HubUI.Controls.AutoGuardZigzagSpeed = CreateNumberInput(
+GuardGroup, 442, 'Zigzag speed', CONFIG.AutoGuardZigzagSpeed, 0.25, 8, 2,
+function(Value) CONFIG.AutoGuardZigzagSpeed = Value end
 )
 
 CreateSectionHeader(GuardRideGroup, 11, 'Off-ball Head Ride')
@@ -31792,6 +31950,8 @@ State.Movement.BodyColliderIncludeSelf },
 { HubUI.Controls.AutoGuard, State.AutoGuardEnabled },
 { HubUI.Controls.AutoGuardNoJump, CONFIG.AutoGuardNoJump },
 { HubUI.Controls.AutoGuardBallCheckOnly, CONFIG.AutoGuardBallCheckOnly },
+{ HubUI.Controls.AutoGuardZigzagWidth, CONFIG.AutoGuardZigzagWidth },
+{ HubUI.Controls.AutoGuardZigzagSpeed, CONFIG.AutoGuardZigzagSpeed },
 { HubUI.Controls.AutoDefense, State.AutoDefense.Enabled },
 { HubUI.Controls.AutoDefenseNoclip, CONFIG.AutoDefenseNoclip },
 { HubUI.Controls.AutoHeadRide, State.AutoHeadRide.Enabled },
@@ -31896,8 +32056,10 @@ State.AutoGetOpen.NormalizeSpot(CONFIG.AutoGetOpenPreferredSpot) },
 { HubUI.Controls.QuickTravelDestination, CONFIG.QuickTravelDestination },
 { HubUI.Controls.QuickTravelPlayer, CONFIG.QuickTravelPlayer },
 { HubUI.Controls.DeviceSpoofType, CONFIG.DeviceSpoofType },
-{ HubUI.Controls.GuardMode, State.AutoGuardMode },
-{ HubUI.Controls.GuardStyle, State.AutoGuardStyle },
+{ HubUI.Controls.AutoGuardForceDirection, CONFIG.AutoGuardForceDirection },
+{ HubUI.Controls.AutoGuardStyle, State.AutoGuardStyle },
+{ HubUI.Controls.AutoGuardMovementPattern, CONFIG.AutoGuardMovementPattern },
+{ HubUI.Controls.AutoGuardDefenseMode, CONFIG.AutoGuardDefenseMode },
 { HubUI.Controls.QueueMode, CONFIG.AutoQueueMode },
 { HubUI.Controls.TargetMode, CONFIG.AimTargetMode },
 { HubUI.Controls.ReleaseMode, CONFIG.AimReleaseMode },
