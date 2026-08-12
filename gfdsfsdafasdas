@@ -48,6 +48,44 @@ FadeawayDistance = 4.5,
 FadeawayDuration = 0.28,
 AutoStop = false,
 RandomTrickshotMode = false,
+AutoStepback = false,
+StepbackActivation = 'Every shot',
+StepbackDirection = 'Away from defender',
+StepbackEasing = 'Linear',
+StepbackDistance = 5,
+StepbackDuration = 0.12,
+StepbackWalkSpeed = 42,
+StepbackVelocityAssist = true,
+StepbackDelay = 0,
+StepbackCooldown = 0.65,
+StepbackRandomVariance = 15,
+StepbackRandomChance = 50,
+StepbackWaitForRelease = true, -- legacy profile compatibility; ground stepback always completes first
+StepbackJumpDelay = 0.04,
+StepbackFaceRim = true,
+StepbackAutoStopBefore = true,
+StepbackAutoStopAfter = true,
+StepbackRequireDefender = false,
+StepbackDefenderRange = 14,
+StepbackCollisionCheck = true,
+StepbackEdgeSafety = true,
+StepbackEdgeMargin = 2.5,
+StepbackManualCancel = false,
+StepbackAllowFadeaway = true,
+StepbackAllowTrickshot = true,
+SmartShotSelector = false,
+SmartShotStrategy = 'Balanced',
+SmartShotOpenBehavior = 'Normal',
+SmartShotAirborneReaction = 'High Arc',
+SmartShotCloseDistance = 6,
+SmartShotPressureDistance = 11,
+SmartShotOpenDistance = 16,
+SmartShotRushSpeed = 5,
+SmartShotAllowStepback = true,
+SmartShotAllowFadeaway = true,
+SmartShotAllowQuickStop = true,
+SmartShotAllowTrickshot = true,
+SmartShotAllowBank = true,
 HumanizeEnabled = false,
 HumanizeAccuracy = 92,
 HumanizeMaxAngle = 25,
@@ -168,6 +206,16 @@ SpeedPreset = 'Custom',
 FlightDoubleTap = false,
 SpeedProfiles = false,
 OutOfMatchSpeed = 24,
+InstantDirectionSwitch = false,
+OOBGuard = false,
+OOBGuardLookAhead = 7,
+SprintKeyEnabled = false,
+SprintSpeed = 38,
+SlowKeyEnabled = false,
+SlowSpeed = 8,
+IcePhysics = false,
+IceAcceleration = 9,
+IceGlide = 0.965,
 InfiniteJump = false,
 InfiniteJumpMethod = 'JumpRequest',
 JumpPower = false,
@@ -272,9 +320,10 @@ AutoMixKey = nil, -- assign one in Keybinds; Auto Mix claims no key by default
 AutoMixMode = 'Smart Mix',
 AutoMixRange = 12,
 AutoMixManualOverride = true,
+AutoMixManualHandles = true, -- F/G stay native and only trigger the matching manual spin
 AutoMixSpinCombos = false,
 AutoMixRotateSpins = true,
-AutoMixSpinDegrees = 240,
+AutoMixSpinDegrees = 360,
 AutoMixMovement = true,
 AutoMixManualInfluence = 0.72,
 AutoMixThreatSteerMax = 0.72,
@@ -608,6 +657,21 @@ DesyncVisualizer = false,
 DesyncVisualizerTransparency = 0.8,
 Outline = false,
 OutlineMode = 'both',
+ESPEnabled = false,
+ESPTeamCheck = false,
+ESPShowName = true,
+ESPShowDistance = true,
+ESPShowHealth = true,
+ESPShowRank = true,
+ESPShowRecord = true,
+ESPShowTracer = false,
+ESPShowHighlight = false,
+ESPSkeleton = false,
+ESPHOFBeams = false,
+ESPHighestELOTracer = false,
+ESPTopELOCount = 3,
+ESPMaxDistance = 1000,
+ESPScale = 1,
 JumpBeforePass = true,
 JumpPassDelay = 0.25,
 SelfPassDelay = 0.25,
@@ -1270,6 +1334,9 @@ AirWalkY = nil,
 FlightRenderName = 'SilverSurferFlight',
 MatchCheckAt = 0,
 MatchCached = false,
+LastManualDirection = Vector3.zero,
+TransientSpeedActive = false,
+AdvancedStatus = 'READY',
 }
 
 function State.Movement.GetRig()
@@ -1387,6 +1454,86 @@ end
 -- Default: CFrame Step — reposition the root each frame.
 local StepTime = math.clamp(tonumber(DeltaTime) or (1 / 60), 0, 0.10)
 Root.CFrame = Root.CFrame + Horizontal.Unit * (Value * StepTime)
+end
+
+
+function State.Movement.AdvancedFeaturesEnabled()
+return CONFIG.InstantDirectionSwitch or CONFIG.OOBGuard or CONFIG.SprintKeyEnabled
+or CONFIG.SlowKeyEnabled or CONFIG.IcePhysics or State.Movement.TransientSpeedActive
+end
+function State.Movement.RestoreTransientSpeed(HumanoidObject)
+if not State.Movement.TransientSpeedActive then return end
+State.Movement.TransientSpeedActive = false
+if HumanoidObject and HumanoidObject.Parent and not State.Movement.WalkSpeedEnabled then
+local Original = State.Movement.OriginalWalkSpeed
+if Original then pcall(function() HumanoidObject.WalkSpeed = Original end) end
+end
+end
+function State.Movement.ApplyGroundFeatures(DeltaTime)
+local _, HumanoidObject, Root = State.Movement.GetRig()
+if not (HumanoidObject and Root) or HumanoidObject.Health <= 0 then return end
+if State.Stepback and State.Stepback.Active then return end
+if State.Runtime and State.Runtime.MovementOwner
+and os.clock() < (State.Runtime.MovementLeaseUntil or 0) then return end
+local DT=math.clamp(tonumber(DeltaTime) or 1/60,0,0.05)
+local Raw=HumanoidObject.MoveDirection
+local Direction=Vector3.new(Raw.X,0,Raw.Z)
+if Direction.Magnitude>0.001 then Direction=Direction.Unit else Direction=Vector3.zero end
+local Base=State.Movement.WalkSpeedEnabled and State.Movement.WalkSpeedValue
+or (State.Movement.OriginalWalkSpeed or HumanoidObject.WalkSpeed or 16)
+if CONFIG.SpeedProfiles and not State.Movement.IsInMatch() then Base=CONFIG.OutOfMatchSpeed end
+local SprintHeld=CONFIG.SprintKeyEnabled and UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+local SlowHeld=CONFIG.SlowKeyEnabled and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+local Speed=SlowHeld and CONFIG.SlowSpeed or (SprintHeld and CONFIG.SprintSpeed or Base)
+Speed=math.clamp(tonumber(Speed) or 16,1,250)
+if SprintHeld or SlowHeld then
+State.Movement.TransientSpeedActive=true
+if HumanoidObject.WalkSpeed~=Speed then pcall(function() HumanoidObject.WalkSpeed=Speed end) end
+else State.Movement.RestoreTransientSpeed(HumanoidObject) end
+
+if CONFIG.OOBGuard and Direction.Magnitude>0.001 and State.AutoOffense then
+local Court=State.AutoOffense.GetCourt and State.AutoOffense.GetCourt() or nil
+if Court and State.AutoOffense.GetBoundarySafeDirection then
+local Safe,Avoiding=State.AutoOffense.GetBoundarySafeDirection(Root,Direction,Court)
+if Avoiding and Safe and Safe.Magnitude>0.001 then
+Direction=Safe.Unit
+HumanoidObject:Move(Direction,false)
+local Existing=Root.AssemblyLinearVelocity
+local ExistingFlat=Vector3.new(Existing.X,0,Existing.Z)
+local GuardSpeed=math.min(math.max(ExistingFlat.Magnitude,Speed),60)
+Root.AssemblyLinearVelocity=Vector3.new(Direction.X*GuardSpeed,Existing.Y,Direction.Z*GuardSpeed)
+State.Movement.AdvancedStatus='OOB GUARD'
+end
+end
+end
+
+local Current=Root.AssemblyLinearVelocity
+local Flat=Vector3.new(Current.X,0,Current.Z)
+if CONFIG.InstantDirectionSwitch and Direction.Magnitude>0.001
+and State.Movement.LastManualDirection.Magnitude>0.001
+and Direction:Dot(State.Movement.LastManualDirection)<-0.20 then
+Flat=Direction*Speed
+Root.AssemblyLinearVelocity=Vector3.new(Flat.X,Current.Y,Flat.Z)
+State.Movement.AdvancedStatus='INSTANT SWITCH'
+end
+if Direction.Magnitude>0.001 then State.Movement.LastManualDirection=Direction end
+
+if CONFIG.IcePhysics then
+local Desired=Direction*Speed
+local NewFlat
+if Direction.Magnitude>0.001 then
+local Alpha=1-math.exp(-math.clamp(tonumber(CONFIG.IceAcceleration) or 9,1,30)*DT)
+NewFlat=Flat:Lerp(Desired,Alpha)
+else
+local Glide=math.clamp(tonumber(CONFIG.IceGlide) or 0.965,0.80,0.995)
+NewFlat=Flat*(Glide^(DT*60))
+if NewFlat.Magnitude<0.08 then NewFlat=Vector3.zero end
+end
+Root.AssemblyLinearVelocity=Vector3.new(NewFlat.X,Current.Y,NewFlat.Z)
+State.Movement.AdvancedStatus='ICE ' .. (Direction.Magnitude>0.001 and 'ACCEL' or 'GLIDE')
+elseif not (SprintHeld or SlowHeld) and State.Movement.AdvancedStatus~='OOB GUARD' then
+State.Movement.AdvancedStatus='READY'
+end
 end
 
 function State.Movement.SetWalkSpeed(Enabled)
@@ -3095,7 +3242,8 @@ end)))
 
 GiveSignal(RunService.Heartbeat:Connect(WYNF_JIT(function(DeltaTime)
 if not State.Active then return end
-if State.Movement.WalkSpeedEnabled then pcall(State.Movement.ApplyWalkSpeed, DeltaTime) end
+if State.Movement.WalkSpeedEnabled and not CONFIG.IcePhysics then pcall(State.Movement.ApplyWalkSpeed, DeltaTime) end
+if State.Movement.AdvancedFeaturesEnabled() then pcall(State.Movement.ApplyGroundFeatures, DeltaTime) end
 if State.Movement.JumpPowerEnabled then pcall(State.Movement.ApplyJumpPower) end
 if State.Movement.AirWalkEnabled then pcall(State.Movement.RefreshAirWalk) end
 if State.Movement.BodyCollidersEnabled
@@ -12746,6 +12894,616 @@ end
 return Target, nil
 end)
 
+State.SmartShot = {
+Active = false, Generation = 0, Status = 'OFF', Decision = 'NORMAL', Reason = '--',
+Defender = nil, Distance = math.huge, ClosingSpeed = 0, Side = 'CENTER', Saved = nil,
+}
+function State.SmartShot.Restore(Status)
+local Saved = State.SmartShot.Saved
+if Saved then for Key, Value in pairs(Saved) do CONFIG[Key] = Value end end
+State.SmartShot.Generation += 1
+State.SmartShot.Active, State.SmartShot.Saved = false, nil
+State.SmartShot.Status = Status or (CONFIG.SmartShotSelector and 'READY' or 'OFF')
+end
+function State.SmartShot.Apply(Name, Reason, Root, DefenderRoot)
+local Saved = {}
+for _, Key in ipairs({ 'AutoStepback','StepbackActivation','StepbackDirection','AutoFadeaway','FadeawayDirection','AutoStop','TrickshotEnabled','TrickshotRotationMode','RandomTrickshotMode','MatchArcEnabled','MatchArcAngle','BackboardEnabled' }) do Saved[Key] = CONFIG[Key] end
+State.SmartShot.Saved, State.SmartShot.Active = Saved, true
+State.SmartShot.Decision, State.SmartShot.Reason = Name, Reason
+State.SmartShot.Status = 'SELECTED ' .. Name
+CONFIG.AutoStepback, CONFIG.AutoFadeaway, CONFIG.AutoStop = false, false, false
+CONFIG.TrickshotEnabled, CONFIG.MatchArcEnabled, CONFIG.BackboardEnabled = false, false, false
+if Name == 'STEPBACK' and CONFIG.SmartShotAllowStepback then
+CONFIG.AutoStepback, CONFIG.StepbackActivation = true, 'Every shot'
+CONFIG.StepbackDirection = 'Away from defender'
+elseif Name == 'SIDESTEP LEFT' and CONFIG.SmartShotAllowStepback then
+CONFIG.AutoStepback, CONFIG.StepbackActivation, CONFIG.StepbackDirection = true, 'Every shot', 'Left'
+elseif Name == 'SIDESTEP RIGHT' and CONFIG.SmartShotAllowStepback then
+CONFIG.AutoStepback, CONFIG.StepbackActivation, CONFIG.StepbackDirection = true, 'Every shot', 'Right'
+elseif Name == 'FADEAWAY' and CONFIG.SmartShotAllowFadeaway then
+CONFIG.AutoFadeaway, CONFIG.FadeawayDirection = true, 'Away from defender'
+elseif Name == 'QUICK STOP' and CONFIG.SmartShotAllowQuickStop then
+CONFIG.AutoStop = true
+elseif Name == 'TRICKSHOT' and CONFIG.SmartShotAllowTrickshot then
+CONFIG.TrickshotEnabled, CONFIG.TrickshotRotationMode, CONFIG.RandomTrickshotMode = true, 'Spin', true
+elseif Name == 'HIGH ARC' then
+CONFIG.MatchArcEnabled, CONFIG.MatchArcAngle = true, 76
+elseif Name == 'BANK SHOT' and CONFIG.SmartShotAllowBank then
+CONFIG.BackboardEnabled = true
+end
+State.SmartShot.Generation += 1
+local G=State.SmartShot.Generation
+State.Lifecycle:Delay(8,function() if State.SmartShot.Generation==G and State.SmartShot.Active then State.SmartShot.Restore('TIMEOUT') end end)
+end
+function State.SmartShot.Select(Root)
+if not CONFIG.SmartShotSelector then State.SmartShot.Status='OFF'; return false end
+if State.SmartShot.Active then return true end
+local Player, Distance
+pcall(function() Player, Distance = State.AutoBody.FindDefender(Root) end)
+local Character=Player and Player.Character
+local DefenderRoot=Character and safe_find(Character,'HumanoidRootPart')
+Distance=DefenderRoot and (DefenderRoot.Position-Root.Position).Magnitude or math.huge
+local Closing, Side, Airborne=0,'CENTER',false
+if DefenderRoot then
+local Delta=DefenderRoot.Position-Root.Position
+local Flat=Vector3.new(Delta.X,0,Delta.Z)
+if Flat.Magnitude>0.01 then Closing=-(DefenderRoot.AssemblyLinearVelocity-Root.AssemblyLinearVelocity):Dot(Flat.Unit) end
+local LocalPos=Root.CFrame:PointToObjectSpace(DefenderRoot.Position)
+Side=LocalPos.X>1.5 and 'RIGHT' or (LocalPos.X < -1.5 and 'LEFT' or 'CENTER')
+local H=Character:FindFirstChildOfClass('Humanoid'); Airborne=H and H.FloorMaterial==Enum.Material.Air or false
+end
+State.SmartShot.Defender,State.SmartShot.Distance,State.SmartShot.ClosingSpeed,State.SmartShot.Side=Player,Distance,Closing,Side
+local Close=math.clamp(tonumber(CONFIG.SmartShotCloseDistance) or 6,2,15)
+local Pressure=math.clamp(tonumber(CONFIG.SmartShotPressureDistance) or 11,Close,25)
+local Open=math.clamp(tonumber(CONFIG.SmartShotOpenDistance) or 16,Pressure,40)
+local Rush=math.clamp(tonumber(CONFIG.SmartShotRushSpeed) or 5,0,25)
+local Decision,Reason='NORMAL','OPEN LOOK'
+if not DefenderRoot or Distance>=Open then
+local Behavior=tostring(CONFIG.SmartShotOpenBehavior or 'Normal')
+if Behavior=='Trickshot' then Decision='TRICKSHOT' elseif Behavior=='Quick Stop' then Decision='QUICK STOP' elseif Behavior=='Random' then local A={'NORMAL','QUICK STOP','TRICKSHOT'}; Decision=A[math.random(1,#A)] end
+elseif Airborne then
+local Reaction=tostring(CONFIG.SmartShotAirborneReaction or 'High Arc')
+Decision=Reaction=='Stepback' and 'STEPBACK' or (Reaction=='Fadeaway' and 'FADEAWAY' or (Reaction=='Bank Shot' and 'BANK SHOT' or 'HIGH ARC')); Reason='DEFENDER AIRBORNE'
+elseif Closing>=Rush and Distance<=Pressure then Decision='STEPBACK'; Reason='DEFENDER RUSHING'
+elseif Distance<=Close then Decision='FADEAWAY'; Reason='CLOSE CONTEST'
+elseif Distance<=Pressure and Side=='LEFT' then Decision='SIDESTEP RIGHT'; Reason='LEFT PRESSURE'
+elseif Distance<=Pressure and Side=='RIGHT' then Decision='SIDESTEP LEFT'; Reason='RIGHT PRESSURE'
+elseif Distance<=Pressure then Decision='QUICK STOP'; Reason='FRONT PRESSURE'
+end
+if CONFIG.SmartShotStrategy=='Conservative' and (Decision=='TRICKSHOT' or Decision=='STEPBACK') then Decision='QUICK STOP'; Reason='CONSERVATIVE CONTROL'
+elseif CONFIG.SmartShotStrategy=='Aggressive' and Decision=='NORMAL' and Distance<Open then Decision='STEPBACK'; Reason='AGGRESSIVE SPACE'
+elseif CONFIG.SmartShotStrategy=='Highlight' and Decision=='NORMAL' then Decision='TRICKSHOT'; Reason='HIGHLIGHT OPEN' end
+State.SmartShot.Apply(Decision,Reason,Root,DefenderRoot)
+return true
+end
+function State.SmartShot.MarkFired()
+if not State.SmartShot.Active then return end
+local G=State.SmartShot.Generation
+State.SmartShot.Status='SHOT FIRED - RESTORING'
+State.Lifecycle:Delay(0.45,function() if State.SmartShot.Generation==G then State.SmartShot.Restore('READY') end end)
+end
+
+State.Stepback = {
+Active = false,
+Generation = 0,
+Status = 'OFF',
+StartedAt = 0,
+EndsAt = 0,
+LastStartedAt = 0,
+LastDirection = '--',
+LastDistance = 0,
+LastRequestedDistance = 0,
+LastDefender = nil,
+LastDefenderDistance = math.huge,
+PendingFaceRim = false,
+BlockedReason = nil,
+JumpPhase = 'READY',
+JumpGeneration = 0,
+ChainedShot = false,
+}
+
+function State.Stepback.Cancel(Status)
+State.Stepback.Generation += 1
+State.Stepback.JumpGeneration += 1
+State.Stepback.Active = false
+State.Stepback.PendingFaceRim = false
+State.Stepback.JumpPhase = 'READY'
+State.Stepback.ChainedShot = false
+State.Stepback.Status = Status or (CONFIG.AutoStepback and 'READY' or 'OFF')
+end
+
+function State.Stepback.GetDefender(Root)
+local Player, Distance
+pcall(function()
+if State.AutoBody and State.AutoBody.FindDefender then
+Player, Distance = State.AutoBody.FindDefender(Root)
+end
+end)
+local Character = Player and Player.Character
+local DefenderRoot = Character and safe_find(Character, 'HumanoidRootPart')
+Distance = DefenderRoot and (DefenderRoot.Position - Root.Position).Magnitude or math.huge
+return Player, DefenderRoot, Distance
+end
+
+function State.Stepback.GetOpenDirection(Root, Character)
+local Candidates = {
+{ Name = 'BACKWARD', Vector = -Root.CFrame.LookVector },
+{ Name = 'LEFT', Vector = -Root.CFrame.RightVector },
+{ Name = 'RIGHT', Vector = Root.CFrame.RightVector },
+}
+local Best, BestScore
+local ProbeDistance = math.clamp(tonumber(CONFIG.StepbackDistance) or 5, 1, 15)
+for _, Candidate in ipairs(Candidates) do
+local Flat = Vector3.new(Candidate.Vector.X, 0, Candidate.Vector.Z)
+if Flat.Magnitude > 0.01 then
+Flat = Flat.Unit
+local Destination = Root.Position + Flat * ProbeDistance
+local Clearance = math.huge
+for _, Player in ipairs(Players:GetPlayers()) do
+-- Open-space scoring intentionally considers every other avatar. This avoids
+-- depending on the later Auto Guard local and also keeps spacing from teammates.
+if Player ~= LP then
+local TheirCharacter = Player.Character
+local TheirRoot = TheirCharacter and safe_find(TheirCharacter, 'HumanoidRootPart')
+if TheirRoot then
+local Delta = Vector3.new(
+Destination.X - TheirRoot.Position.X, 0,
+Destination.Z - TheirRoot.Position.Z)
+Clearance = math.min(Clearance, Delta.Magnitude)
+end
+end
+end
+local BackwardBias = Candidate.Name == 'BACKWARD' and 0.35 or 0
+local Score = (Clearance == math.huge and 100 or Clearance) + BackwardBias
+if not BestScore or Score > BestScore then
+BestScore = Score
+Best = { Name = Candidate.Name, Vector = Flat }
+end
+end
+end
+return Best and Best.Vector or -Root.CFrame.LookVector,
+Best and Best.Name or 'BACKWARD'
+end
+
+function State.Stepback.ResolveDirection(Root, Character, DefenderRoot)
+local Mode = tostring(CONFIG.StepbackDirection or 'Away from defender')
+local Direction, Label
+if Mode == 'Left' then
+Direction, Label = -Root.CFrame.RightVector, 'LEFT'
+elseif Mode == 'Right' then
+Direction, Label = Root.CFrame.RightVector, 'RIGHT'
+elseif Mode == 'Random' then
+local Pick = math.random(1, 3)
+Direction = Pick == 1 and -Root.CFrame.LookVector
+or (Pick == 2 and -Root.CFrame.RightVector or Root.CFrame.RightVector)
+Label = Pick == 1 and 'BACKWARD' or (Pick == 2 and 'LEFT' or 'RIGHT')
+elseif Mode == 'Toward open space' then
+Direction, Label = State.Stepback.GetOpenDirection(Root, Character)
+elseif Mode == 'Away from defender' and DefenderRoot then
+Direction = Root.Position - DefenderRoot.Position
+Label = 'AWAY FROM DEFENDER'
+else
+Direction, Label = -Root.CFrame.LookVector, 'BACKWARD'
+end
+Direction = Vector3.new(Direction.X, 0, Direction.Z)
+if Direction.Magnitude <= 0.01 then
+Direction, Label = Vector3.new(0, 0, 1), 'WORLD BACK'
+end
+return Direction.Unit, Label
+end
+
+function State.Stepback.Ease(Alpha)
+Alpha = math.clamp(Alpha, 0, 1)
+local Mode = tostring(CONFIG.StepbackEasing or 'Smooth')
+if Mode == 'Linear' then return Alpha end
+if Mode == 'Ease out' then return 1 - (1 - Alpha) * (1 - Alpha) end
+if Mode == 'Sharp' then return Alpha ^ 0.45 end
+return Alpha * Alpha * (3 - 2 * Alpha)
+end
+
+function State.Stepback.ClampDistance(Character, Root, Direction, Requested)
+local Distance = math.max(0, Requested)
+local Params = RaycastParams.new()
+Params.FilterType = Enum.RaycastFilterType.Exclude
+Params.FilterDescendantsInstances = { Character }
+Params.IgnoreWater = true
+if CONFIG.StepbackCollisionCheck then
+local Hit = Workspace:Raycast(Root.Position, Direction * Distance, Params)
+if Hit then Distance = math.max(0, Hit.Distance - 1.25) end
+end
+if CONFIG.StepbackEdgeSafety and Distance > 0 then
+local Margin = math.clamp(tonumber(CONFIG.StepbackEdgeMargin) or 2.5, 0, 8)
+local SafeDistance = Distance
+local FoundGround = false
+for Index = 0, 12 do
+local ProbeDistance = Distance * (1 - Index / 12)
+local Destination = Root.Position + Direction * ProbeDistance
+local Ground = Workspace:Raycast(
+Destination + Vector3.new(0, 3, 0),
+Vector3.new(0, -(10 + Margin), 0), Params)
+if Ground then
+SafeDistance = ProbeDistance
+FoundGround = true
+break
+end
+end
+Distance = FoundGround and SafeDistance or 0
+end
+return Distance
+end
+
+function State.Stepback.FaceRim(Character, Root)
+Character = Character or LP.Character
+Root = Root or (Character and safe_find(Character, 'HumanoidRootPart'))
+if not Root then return false end
+local Rim = select(1, FindConfiguredGoal())
+if not Rim then return false end
+local Target = Vector3.new(Rim.Position.X, Root.Position.Y, Rim.Position.Z)
+if (Target - Root.Position).Magnitude <= 0.01 then return false end
+pcall(function() Root.CFrame = CFrame.lookAt(Root.Position, Target, Vector3.yAxis) end)
+return true
+end
+
+function State.Stepback.CanStart(Root)
+if not CONFIG.AutoStepback then return false, 'OFF' end
+if State.Stepback.Active then return false, 'ALREADY RUNNING' end
+local Now = os.clock()
+local Cooldown = math.clamp(tonumber(CONFIG.StepbackCooldown) or 0.65, 0, 4)
+if Now - (State.Stepback.LastStartedAt or 0) < Cooldown then
+return false, 'COOLDOWN'
+end
+local Player, DefenderRoot, DefenderDistance = State.Stepback.GetDefender(Root)
+State.Stepback.LastDefender = Player
+State.Stepback.LastDefenderDistance = DefenderDistance
+local Activation = tostring(CONFIG.StepbackActivation or 'Every shot')
+local EBLPhase = State.Trickshot and State.Trickshot.EBLPhase or 'READY'
+local EBLShot = CONFIG.AutoEBL
+and (EBLPhase == 'SECOND_JUMP' or EBLPhase == 'SHOOTING')
+if Activation == 'EBL second jump only' and not EBLShot then
+return false, 'WAITING FOR EBL', Player, DefenderRoot, DefenderDistance
+elseif Activation == 'Non-EBL shots only' and EBLShot then
+return false, 'SKIPPED EBL', Player, DefenderRoot, DefenderDistance
+elseif Activation == 'Defender close' and DefenderDistance > math.clamp(tonumber(CONFIG.StepbackDefenderRange) or 14, 2, 35) then
+return false, 'DEFENDER OUT OF RANGE', Player, DefenderRoot, DefenderDistance
+elseif Activation == 'Random chance' then
+local Chance = math.clamp(tonumber(CONFIG.StepbackRandomChance) or 50, 0, 100)
+if math.random() * 100 > Chance then
+return false, 'RANDOM SKIP', Player, DefenderRoot, DefenderDistance
+end
+end
+if CONFIG.StepbackRequireDefender and not DefenderRoot then
+return false, 'NO DEFENDER', Player, DefenderRoot, DefenderDistance
+end
+if CONFIG.StepbackRequireDefender
+and DefenderDistance > math.clamp(tonumber(CONFIG.StepbackDefenderRange) or 14, 2, 35) then
+return false, 'DEFENDER OUT OF RANGE', Player, DefenderRoot, DefenderDistance
+end
+return true, nil, Player, DefenderRoot, DefenderDistance
+end
+
+function State.Stepback.Start(Character, Root)
+Character = Character or LP.Character
+Root = Root or (Character and safe_find(Character, 'HumanoidRootPart'))
+local HumanoidObject = Character and Character:FindFirstChildOfClass('Humanoid')
+if not (Character and Root and HumanoidObject and HumanoidObject.Health > 0) then
+State.Stepback.Status = 'CHARACTER NOT READY'
+return false
+end
+local Allowed, Reason, Defender, DefenderRoot, DefenderDistance = State.Stepback.CanStart(Root)
+if not Allowed then
+State.Stepback.Status = Reason or 'SKIPPED'
+State.Stepback.BlockedReason = Reason
+return false
+end
+local Direction, DirectionLabel = State.Stepback.ResolveDirection(Root, Character, DefenderRoot)
+local Requested = math.clamp(tonumber(CONFIG.StepbackDistance) or 5, 0, 15)
+local Variance = math.clamp(tonumber(CONFIG.StepbackRandomVariance) or 0, 0, 75) / 100
+if Variance > 0 then Requested *= 1 + ((math.random() * 2 - 1) * Variance) end
+local Distance = State.Stepback.ClampDistance(Character, Root, Direction, Requested)
+if Distance < 0.15 then
+State.Stepback.Status = 'BLOCKED BY SAFETY'
+State.Stepback.BlockedReason = 'COLLISION OR EDGE'
+return false
+end
+local Delay = math.clamp(tonumber(CONFIG.StepbackDelay) or 0, 0, 0.8)
+local Duration = math.clamp(tonumber(CONFIG.StepbackDuration) or 0.24, 0.06, 0.8)
+local WalkSpeedCap = math.clamp(math.max(tonumber(CONFIG.StepbackWalkSpeed) or 42, 32), 32, 60)
+local TargetWalkSpeed = math.clamp(math.max(Distance / Duration, 32), 32, WalkSpeedCap)
+local EstimatedWalkTime = Distance / math.max(TargetWalkSpeed, 0.01)
+State.Stepback.Generation += 1
+local Generation = State.Stepback.Generation
+State.Stepback.Active = true
+State.Stepback.StartedAt = os.clock()
+State.Stepback.EndsAt = State.Stepback.StartedAt + Delay + EstimatedWalkTime + 0.75
+State.Stepback.LastStartedAt = State.Stepback.StartedAt
+State.Stepback.LastDirection = DirectionLabel
+State.Stepback.LastRequestedDistance = Requested
+State.Stepback.LastDistance = Distance
+State.Stepback.LastDefender = Defender
+State.Stepback.LastDefenderDistance = DefenderDistance
+State.Stepback.BlockedReason = nil
+State.Stepback.PendingFaceRim = false
+State.Stepback.Status = Delay > 0 and 'DELAYING' or ('STEPPING ' .. DirectionLabel)
+
+State.Lifecycle:Spawn(function()
+local DelayEnds = os.clock() + Delay
+while State.Active and State.Stepback.Active
+and State.Stepback.Generation == Generation and os.clock() < DelayEnds do
+RunService.Heartbeat:Wait()
+end
+if not (State.Active and State.Stepback.Active
+and State.Stepback.Generation == Generation and Root and Root.Parent) then return end
+
+local OriginalWalkSpeed = HumanoidObject.WalkSpeed
+local OriginalAutoRotate = HumanoidObject.AutoRotate
+local StepbackActionName = 'SilverSurferStepbackWalk'
+local ContextActionService = game:GetService('ContextActionService')
+local Cleaned = false
+local function RestoreWalking()
+if Cleaned then return end
+Cleaned = true
+pcall(function()
+HumanoidObject:Move(Vector3.zero, false)
+HumanoidObject:MoveTo(Root.Position)
+pcall(function() ContextActionService:UnbindAction(StepbackActionName) end)
+HumanoidObject.WalkSpeed = OriginalWalkSpeed
+HumanoidObject.AutoRotate = OriginalAutoRotate
+if State.Runtime then State.Runtime.ReleaseMovement('Stepback') end
+end)
+end
+
+pcall(function()
+ContextActionService:BindActionAtPriority(
+StepbackActionName,
+function() return Enum.ContextActionResult.Sink end,
+false, 10000,
+Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D,
+Enum.KeyCode.Up, Enum.KeyCode.Left, Enum.KeyCode.Down, Enum.KeyCode.Right,
+Enum.KeyCode.Thumbstick1)
+end)
+
+if CONFIG.StepbackAutoStopBefore then
+pcall(function()
+local Velocity = Root.AssemblyLinearVelocity
+Root.AssemblyLinearVelocity = Vector3.new(0, Velocity.Y, 0)
+HumanoidObject:Move(Vector3.zero, false)
+end)
+end
+-- Face the basket first and disable AutoRotate so backward/side directions
+-- animate as a real backpedal or strafe instead of turning into a forward run.
+if CONFIG.StepbackFaceRim then
+State.Stepback.FaceRim(Character, Root)
+pcall(function() HumanoidObject.AutoRotate = false end)
+end
+pcall(function() HumanoidObject.WalkSpeed = TargetWalkSpeed end)
+State.Stepback.Status = 'WALKING ' .. DirectionLabel
+local Started = os.clock()
+local StartPosition = Root.Position
+local Destination = StartPosition + Direction * Distance
+local Travelled = 0
+local ExpectedTime = Distance / math.max(TargetWalkSpeed, 0.01)
+local Deadline = Started + math.max(Duration, ExpectedTime) + 0.75
+local StepSignal = RunService.PreSimulation or RunService.Heartbeat
+pcall(function() HumanoidObject:MoveTo(Destination) end)
+
+local function HasManualMovementInput()
+for _, Key in ipairs({
+Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D,
+Enum.KeyCode.Up, Enum.KeyCode.Left, Enum.KeyCode.Down, Enum.KeyCode.Right,
+}) do
+if UserInputService:IsKeyDown(Key) then return true end
+end
+local Ok, Inputs = pcall(function()
+return UserInputService:GetGamepadState(Enum.UserInputType.Gamepad1)
+end)
+if Ok then
+for _, Input in ipairs(Inputs) do
+if Input.KeyCode == Enum.KeyCode.Thumbstick1
+and Vector2.new(Input.Position.X, Input.Position.Y).Magnitude > 0.35 then
+return true
+end
+end
+end
+return false
+end
+
+while State.Active and State.Stepback.Active
+and State.Stepback.Generation == Generation
+and Root and Root.Parent and HumanoidObject and HumanoidObject.Parent
+and os.clock() < Deadline do
+StepSignal:Wait()
+if State.Stepback.Generation ~= Generation or not State.Stepback.Active then
+RestoreWalking()
+return
+end
+if CONFIG.StepbackManualCancel and os.clock() - Started > 0.06
+and HasManualMovementInput() then
+RestoreWalking()
+State.Stepback.Cancel('CANCELLED BY INPUT')
+return
+end
+-- Keep the intercepted takeoff cancelled while Humanoid:Move drives genuine
+-- grounded locomotion and the game's normal walk animation.
+pcall(function()
+HumanoidObject.Jump = false
+local Velocity = Root.AssemblyLinearVelocity
+Root.AssemblyLinearVelocity = Vector3.new(Velocity.X, 0, Velocity.Z)
+if HumanoidObject.FloorMaterial == Enum.Material.Air then
+HumanoidObject:ChangeState(Enum.HumanoidStateType.Running)
+end
+end)
+
+local Alpha = math.clamp((os.clock() - Started) / math.max(ExpectedTime, 0.06), 0, 1)
+local Curve = tostring(CONFIG.StepbackEasing or 'Smooth')
+local SpeedScale = 1
+if Curve == 'Smooth' then
+SpeedScale = 0.90 + math.sin(Alpha * math.pi) * 0.10
+elseif Curve == 'Ease out' then
+SpeedScale = 1 - Alpha * 0.12
+elseif Curve == 'Sharp' then
+SpeedScale = Alpha < 0.14 and 1.08 or 0.98
+end
+pcall(function()
+local LiveWalkSpeed = math.clamp(TargetWalkSpeed * SpeedScale, 4, WalkSpeedCap)
+HumanoidObject.WalkSpeed = LiveWalkSpeed
+-- MoveTo was issued once above; repeatedly resetting it caused hitching.
+-- Move keeps the normal walking animation active while physics provides a
+-- stable, constant-speed burst on games that suppress local walk commands.
+if not State.Runtime or State.Runtime.AcquireMovement('Stepback', 0.12) then
+HumanoidObject:Move(Direction, false)
+if CONFIG.StepbackVelocityAssist then
+-- Some experiences overwrite Humanoid movement after local controls run.
+-- Horizontal assembly velocity guarantees progress while Humanoid:Move keeps
+-- the result visibly animated as walking rather than a CFrame glide.
+Root.AssemblyLinearVelocity = Vector3.new(
+Direction.X * LiveWalkSpeed, 0, Direction.Z * LiveWalkSpeed)
+end
+end
+end)
+local Offset = Root.Position - StartPosition
+local FlatOffset = Vector3.new(Offset.X, 0, Offset.Z)
+Travelled = math.max(0, FlatOffset:Dot(Direction))
+State.Stepback.LastDistance = math.min(Travelled, Distance)
+if Travelled >= Distance - 0.10 then break end
+end
+
+RestoreWalking()
+if State.Stepback.Generation ~= Generation then return end
+if CONFIG.StepbackAutoStopAfter and Root and Root.Parent then
+pcall(function()
+local Velocity = Root.AssemblyLinearVelocity
+Root.AssemblyLinearVelocity = Vector3.new(0, Velocity.Y, 0)
+HumanoidObject:Move(Vector3.zero, false)
+end)
+end
+State.Stepback.Active = false
+State.Stepback.LastDistance = math.min(Travelled, Distance)
+State.Stepback.Status = Travelled >= Distance - 0.20
+and ('WALK COMPLETE ' .. DirectionLabel)
+or string.format('WALK PARTIAL %.1f/%.1f', Travelled, Distance)
+State.Stepback.PendingFaceRim = false
+if CONFIG.StepbackFaceRim then State.Stepback.FaceRim(Character, Root) end
+end)
+return true
+end
+
+-- Intercepts the player's jump, performs the full stepback while grounded,
+-- then creates a fresh Jump edge. The forced jump is allowed through exactly
+-- once, so Auto EBL and the normal shot controller continue afterward.
+function State.Stepback.HandleJumpAttempt(HumanoidObject, Character, Root)
+if not CONFIG.AutoStepback then
+if State.Stepback.JumpPhase ~= 'READY' then
+State.Stepback.JumpGeneration += 1
+State.Stepback.JumpPhase = 'READY'
+State.Stepback.ChainedShot = false
+end
+return false
+end
+if not (HumanoidObject and Character and Root) then return false end
+local Phase = State.Stepback.JumpPhase
+if Phase == 'FORCED_JUMP' then
+State.Stepback.JumpPhase = 'IN_SHOT'
+State.Stepback.ChainedShot = true
+return false
+end
+if Phase == 'STEPPING' then
+pcall(function() HumanoidObject.Jump = false end)
+return true
+end
+if Phase == 'IN_SHOT' then return false end
+
+local Allowed = select(1, State.Stepback.CanStart(Root))
+if not Allowed then return false end
+
+-- Cancel the original takeoff before moving. ChangeState plus zero vertical
+-- velocity keeps the character on the floor even when Jump toggled this frame.
+State.Stepback.JumpGeneration += 1
+local JumpGeneration = State.Stepback.JumpGeneration
+State.Stepback.JumpPhase = 'STEPPING'
+State.Stepback.ChainedShot = false
+pcall(function()
+HumanoidObject.Jump = false
+HumanoidObject:ChangeState(Enum.HumanoidStateType.Running)
+local Velocity = Root.AssemblyLinearVelocity
+Root.AssemblyLinearVelocity = Vector3.new(Velocity.X, 0, Velocity.Z)
+end)
+
+local Started = State.Stepback.Start(Character, Root)
+if not Started then
+State.Stepback.JumpPhase = 'FORCED_JUMP'
+State.Lifecycle:Spawn(function()
+RunService.Heartbeat:Wait()
+if State.Active and State.Stepback.JumpGeneration == JumpGeneration
+and HumanoidObject and HumanoidObject.Parent then
+pcall(function()
+HumanoidObject.Jump = true
+HumanoidObject:ChangeState(Enum.HumanoidStateType.Jumping)
+end)
+end
+end)
+return true
+end
+
+State.Lifecycle:Spawn(function()
+local Deadline = math.max(State.Stepback.EndsAt or 0, os.clock()) + 0.4
+while State.Active and State.Stepback.JumpGeneration == JumpGeneration
+and State.Stepback.Active and os.clock() < Deadline do
+RunService.Heartbeat:Wait()
+end
+if not (State.Active and CONFIG.AutoStepback
+and State.Stepback.JumpGeneration == JumpGeneration
+and HumanoidObject and HumanoidObject.Parent and Root and Root.Parent) then return end
+local JumpDelay = math.clamp(tonumber(CONFIG.StepbackJumpDelay) or 0.04, 0, 0.5)
+local JumpAt = os.clock() + JumpDelay
+State.Stepback.Status = JumpDelay > 0 and 'GROUND HOLD BEFORE JUMP' or 'JUMPING'
+while State.Active and State.Stepback.JumpGeneration == JumpGeneration
+and os.clock() < JumpAt do
+pcall(function()
+HumanoidObject.Jump = false
+local Velocity = Root.AssemblyLinearVelocity
+Root.AssemblyLinearVelocity = Vector3.new(Velocity.X, 0, Velocity.Z)
+end)
+RunService.Heartbeat:Wait()
+end
+if not (State.Active and State.Stepback.JumpGeneration == JumpGeneration
+and HumanoidObject and HumanoidObject.Parent) then return end
+State.Stepback.JumpPhase = 'FORCED_JUMP'
+State.Stepback.Status = 'STEP COMPLETE - JUMPING'
+pcall(function() HumanoidObject.Jump = false end)
+RunService.Heartbeat:Wait()
+if not (State.Active and State.Stepback.JumpGeneration == JumpGeneration
+and State.Stepback.JumpPhase == 'FORCED_JUMP') then return end
+pcall(function()
+HumanoidObject.Jump = true
+HumanoidObject:ChangeState(Enum.HumanoidStateType.Jumping)
+end)
+
+-- Keep the stepback consumed for the entire shot. With EBL enabled this spans
+-- both jumps, preventing the automatic second jump from stepping back again.
+local WasAirborne = false
+local MonitorStarted = os.clock()
+local ResetDeadline = MonitorStarted + 8
+while State.Active and State.Stepback.JumpGeneration == JumpGeneration
+and os.clock() < ResetDeadline do
+if HumanoidObject.FloorMaterial == Enum.Material.Air then WasAirborne = true end
+if CONFIG.AutoEBL then
+if State.Trickshot.EBLPhase == 'READY' and WasAirborne
+and os.clock() - MonitorStarted > 0.25
+and not State.Trickshot.ForceAutoRelease then break end
+elseif WasAirborne and HumanoidObject.FloorMaterial ~= Enum.Material.Air then
+break
+end
+RunService.Heartbeat:Wait()
+end
+if State.Stepback.JumpGeneration == JumpGeneration then
+State.Stepback.JumpPhase = 'READY'
+State.Stepback.ChainedShot = false
+State.Stepback.Status = CONFIG.AutoStepback and 'READY' or 'OFF'
+end
+end)
+return true
+end
+
 State.Trickshot = {
 Active = false, Generation = 0, Status = 'OFF', Angle = 0,
 StartedAt = 0, EndsAt = 0, SavedHumanoid = nil, SavedAutoRotate = nil,
@@ -13143,6 +13901,7 @@ State.Trickshot.EBLPhase, State.Trickshot.EBLStatus = 'COMPLETE', 'SHOT FIRED'
 State.Trickshot.ForceAutoRelease = false
 State.Lifecycle:Delay(0.35, function() if State.Trickshot.EBLGeneration == G then State.Trickshot.ResetAutoEBL('READY') end end)
 end
+if ClickOk then pcall(State.SmartShot.MarkFired) end
 State.silentShootActive = false
 return ClickOk
 end
@@ -13573,15 +14332,26 @@ return
 end
 local Basketball = safe_find(Char, 'Basketball')
 if Basketball or not CONFIG.AimRequireBall then
+if CONFIG.SmartShotSelector then pcall(State.SmartShot.Select, HumanoidRootPart) end
+if State.Stepback.HandleJumpAttempt(Humanoid, Char, HumanoidRootPart) then
+SilentAim.ReleasePredictionDeadline = 0
+SilentAim.ClearActorAim()
+return
+end
 if State.Trickshot.HandleAutoEBLJump(Humanoid) then
 SilentAim.ReleasePredictionDeadline = 0
 SilentAim.ClearActorAim()
 return
 end
-if CONFIG.AutoFadeaway or CONFIG.AutoStop then
+local StepbackUsed = State.Stepback.ChainedShot == true
+if (CONFIG.AutoFadeaway or CONFIG.AutoStop)
+and (not StepbackUsed or CONFIG.StepbackAllowFadeaway) then
 pcall(State.Trickshot.StartShotMovement, Char, HumanoidRootPart)
 end
-if CONFIG.TrickshotEnabled then pcall(State.Trickshot.StartSpin, Char, HumanoidRootPart) end
+if CONFIG.TrickshotEnabled
+and (not StepbackUsed or CONFIG.StepbackAllowTrickshot) then
+pcall(State.Trickshot.StartSpin, Char, HumanoidRootPart)
+end
 local groundRim, groundDist = FindConfiguredGoal()
 if groundRim then
 SilentAim.groundDist = groundDist
@@ -13616,7 +14386,9 @@ local function AttemptPeakShot()
 if PeakHandled then return end
 PeakHandled = true
 if CheckPeakJump then State.Lifecycle:DisconnectConnection(CheckPeakJump); CheckPeakJump = nil end
-if CONFIG.TrickshotEnabled or CONFIG.AutoFadeaway then State.Trickshot.WaitForStyle() end
+if CONFIG.TrickshotEnabled or CONFIG.AutoFadeaway then
+State.Trickshot.WaitForStyle()
+end
 
 local PeakShotAttempted = false
 local Rim, Dist = FindConfiguredGoal()
@@ -14034,7 +14806,7 @@ State.Runtime = {
 MovementOwner = nil,
 MovementPriority = 0,
 MovementLeaseUntil = 0,
-MovementPriorities = { Guard = 30, GetOpen = 40, Offense = 50, AutoMix = 60, Dunk = 70, TipOff = 80 },
+MovementPriorities = { Guard = 30, GetOpen = 40, Offense = 50, AutoMix = 60, Dunk = 70, TipOff = 80, Stepback = 90 },
 }
 function State.Runtime.HasManualInput(Enabled)
 if Enabled == false then return false end
@@ -15299,6 +16071,33 @@ end
 return false
 end
 
+function State.AutoMix.HandleManualSpinInput(Input)
+if not (State.Active and State.AutoMix.Enabled and CONFIG.AutoMixManualHandles) then return end
+if UserInputService:GetFocusedTextBox() then return end
+local Character=LP.Character
+local Root=Character and safe_find(Character,'HumanoidRootPart')
+local HumanoidObject=Character and safe_find(Character,'Humanoid')
+if not Character or not Root or not HumanoidObject or not safe_find(Character,'Basketball') then return end
+if State.AutoMix.IsShotBusy(Character,HumanoidObject,Root) then return end
+local LeftKey=State.AutoMix.RawKey('Behind_the_back_left') or Enum.KeyCode.F
+local RightKey=State.AutoMix.RawKey('Behind_the_back_right') or Enum.KeyCode.G
+local MoveName
+if Input.KeyCode==LeftKey or Input.KeyCode==Enum.KeyCode.F then MoveName='BehindLeft'
+elseif Input.KeyCode==RightKey or Input.KeyCode==Enum.KeyCode.G then MoveName='BehindRight' end
+if not MoveName then return end
+local Move=State.AutoMix.Moves[MoveName]
+State.AutoMix.Generation+=1
+State.AutoMix.Sequence={}; State.AutoMix.SequenceIndex=1
+State.AutoMix.LastMoveName=MoveName
+State.AutoMix.LastMove=Move.Label
+State.AutoMix.Status='MANUAL '..Move.Label
+State.AutoMix.BodyPauseUntil=os.clock()+(Move.Timeout or .42)
+State.AutoMix.StartSpin(Move)
+end
+GiveSignal(UserInputService.InputBegan:Connect(function(Input)
+State.AutoMix.HandleManualSpinInput(Input)
+end))
+
 function State.AutoMix.IsShiftLockActive()
 local Camera = Workspace.CurrentCamera
 if not Camera or UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then return false end
@@ -15358,7 +16157,7 @@ State.AutoMix.SpinHumanoid = HumanoidObject
 State.AutoMix.SpinOriginalAutoRotate = HumanoidObject.AutoRotate
 State.AutoMix.SpinStartedAt = os.clock()
 State.AutoMix.SpinDuration = math.max(0.25, Move.Timeout or 0.42)
-State.AutoMix.SpinRadians = math.rad(math.clamp(tonumber(CONFIG.AutoMixSpinDegrees) or 240, 90, 360)) * Move.SpinSign
+State.AutoMix.SpinRadians = math.rad(math.clamp(tonumber(CONFIG.AutoMixSpinDegrees) or 360, 90, 1080)) * Move.SpinSign
 State.AutoMix.SpinApplied = 0
 State.AutoMix.SpinTarget = 0
 State.AutoMix.ShiftLockActive = State.AutoMix.IsShiftLockActive()
@@ -16277,7 +17076,7 @@ State.AutoMix.StopMovement()
 State.AutoMix.ReleaseBodyControl()
 State.AutoMix.Sequence = {}
 State.AutoMix.NextAt = os.clock() + 0.12
-elseif State.AutoMix.HasManualDribbleInput() then
+elseif not CONFIG.AutoMixManualHandles and State.AutoMix.HasManualDribbleInput() then
 State.AutoMix.Status = 'MANUAL OVERRIDE'
 State.AutoMix.Generation += 1
 State.AutoMix.Busy = false
@@ -16301,6 +17100,14 @@ else
 State.AutoMix.AttachAnimator(Character, HumanoidObject)
 local Hand = State.AutoMix.ReadHand(Character, HumanoidObject, Root)
 local Mode = tostring(CONFIG.AutoMixMode or 'Smart Mix')
+if CONFIG.AutoMixManualHandles then
+State.AutoMix.SetSequence({})
+State.AutoMix.SelectSmartMove(Root, Hand)
+if not State.AutoMix.Rotating then
+State.AutoMix.Status = 'MANUAL HANDLES - F / G'
+end
+State.AutoMix.NextAt = os.clock() + 0.08
+else
 -- Strategic cooldowns prevent spam, but an actual steal emergency can break
 -- the cooldown and react on the first available frame.
 if not State.AutoMix.Busy and os.clock() < State.AutoMix.NextAt then
@@ -16346,6 +17153,7 @@ State.AutoMix.SequenceIndex += 1
 State.AutoMix.Perform(Name)
 elseif State.AutoMix.NextAt <= os.clock() then
 State.AutoMix.NextAt = os.clock() + 0.12
+end
 end
 end
 end
@@ -22454,6 +23262,189 @@ warn('[SILVER SURFER] Desync visualizer update failed: ' .. tostring(Err))
 end
 end)))
 
+State.ESP = { Records = {}, LastScan = 0, BindName = 'SilverSurferESP', Status = 'OFF', LastError = nil, StatsCache = {}, StatsPending = {}, StatsQueueAt = 0 }
+function State.ESP.GetNumber(Player, Names)
+for _,Name in ipairs(Names) do local V=Player:GetAttribute(Name); if tonumber(V) then return math.floor(tonumber(V)) end end
+local Stats=Player:FindFirstChild('leaderstats')
+if Stats then for _,Name in ipairs(Names) do local O=Stats:FindFirstChild(Name); if O and tonumber(O.Value) then return math.floor(tonumber(O.Value)) end end end
+return 0
+end
+function State.ESP.HideStatsPopup()
+local PG=LP:FindFirstChildOfClass('PlayerGui'); if not PG then return end
+for _,Object in ipairs(PG:GetDescendants()) do
+if Object:IsA('GuiObject') and Object.Visible and (string.find(string.lower(Object.Name),'statsv2',1,true) or string.lower(Object.Name)=='stats') then pcall(function() Object.Visible=false end) end
+end
+end
+function State.ESP.RequestRecord(Player)
+if not Player or State.ESP.StatsCache[Player.UserId] or State.ESP.StatsPending[Player.UserId] then return end
+local Remote=ReplicatedStorage:FindFirstChild('Remotes') and ReplicatedStorage.Remotes:FindFirstChild('viewStatsEvent')
+if not Remote then return end
+State.ESP.StatsPending[Player.UserId]=true
+local WaitFor=math.max(0,State.ESP.StatsQueueAt-os.clock()); State.ESP.StatsQueueAt=math.max(State.ESP.StatsQueueAt,os.clock())+.75
+State.Lifecycle:Delay(WaitFor,function() if State.Active and Player.Parent then pcall(function() Remote:FireServer(Player) end) end end)
+end
+pcall(function()
+local Remote=ReplicatedStorage:WaitForChild('Remotes',3) and ReplicatedStorage.Remotes:WaitForChild('viewStatsEvent',3)
+if Remote then State.Lifecycle:Connect(Remote.OnClientEvent,function(Data,Info)
+local Id=type(Info)=='table' and tonumber(Info.UserId) or nil
+if not Id or type(Data)~='table' then return end
+local Stats=Data.Stats or Data.Stats_Arena or {}
+local Arena=Data.Stats_Arena
+local Target=Players:GetPlayerByUserId(Id); local LiveELO=Target and tonumber(Target:GetAttribute('ELO'))
+if type(Arena)=='table' and LiveELO and math.abs((tonumber(Arena.ELO) or 0)-LiveELO)<math.abs((tonumber(Stats.ELO) or 0)-LiveELO) then Stats=Arena end
+State.ESP.StatsCache[Id]={Wins=tonumber(Stats.Wins) or 0,Losses=tonumber(Stats.Losses) or 0,At=os.clock()}
+State.ESP.StatsPending[Id]=nil
+State.Lifecycle:Defer(State.ESP.HideStatsPopup)
+end,'SilverSurferESPStatsResponse') end
+end)
+function State.ESP.GetRecord(Player)
+local Cached=State.ESP.StatsCache[Player.UserId]
+if Cached then return Cached.Wins,Cached.Losses end
+local W=State.ESP.GetNumber(Player,{'Wins','Win','TotalWins','CareerWins'})
+local L=State.ESP.GetNumber(Player,{'Losses','Loss','TotalLosses','CareerLosses'})
+if W==0 and L==0 then
+for _,Object in ipairs(Player:GetDescendants()) do
+if Object:IsA('ValueBase') then
+local N=string.lower(Object.Name)
+if (N=='wins' or N=='win' or N=='totalwins') and tonumber(Object.Value) then W=math.floor(tonumber(Object.Value)) end
+if (N=='losses' or N=='loss' or N=='totallosses') and tonumber(Object.Value) then L=math.floor(tonumber(Object.Value)) end
+end
+end
+end
+if W==0 and L==0 then
+local Raw=Player:GetAttribute('Record') or Player:GetAttribute('WinLoss') or Player:GetAttribute('W-L')
+local A,B=tostring(Raw or ''):match('(%d+)%s*[-–/:]%s*(%d+)')
+if A then W,L=tonumber(A) or 0,tonumber(B) or 0 end
+end
+if W==0 and L==0 and Player.Character then
+for _,Object in ipairs(Player.Character:GetDescendants()) do
+if Object:IsA('TextLabel') or Object:IsA('TextButton') then
+local A,B=tostring(Object.Text or ''):match('(%d+)%s*[-–/:]%s*(%d+)')
+if A then W,L=tonumber(A) or 0,tonumber(B) or 0; break end
+end
+end
+end
+if W==0 and L==0 then State.ESP.RequestRecord(Player); return nil,nil end
+State.ESP.StatsCache[Player.UserId]={Wins=W,Losses=L,At=os.clock()}
+return W,L
+end
+function State.ESP.GetRank(Player)
+local ELO=State.ESP.GetNumber(Player,{'ELO','Elo','Rating','RankPoints'})
+local Best='ROOKIE 1'; local BestValue=-math.huge
+if State.LocalSpoofs and State.LocalSpoofs.RankImageELO then
+for Name,Value in pairs(State.LocalSpoofs.RankImageELO) do if Value<=ELO and Value>BestValue then Best,BestValue=string.upper(Name),Value end end
+else
+local T={{0,'ROOKIE'},{100,'VETERAN'},{500,'ELITE'},{1500,'PRO'},{3000,'SUPERSTAR'},{6000,'LEGEND'}}
+for _,Entry in ipairs(T) do if ELO>=Entry[1] then Best=Entry[2] end end
+end
+return Best,ELO
+end
+function State.ESP.Destroy(Player)
+local R=State.ESP.Records[Player]; if not R then return end
+if R.Skeleton then for _,Line in ipairs(R.Skeleton) do pcall(function() Line.Visible=false; Line:Remove() end) end end
+if R.Tracer then pcall(function() R.Tracer.Visible=false; R.Tracer:Remove() end) end
+for Key,O in pairs(R) do if Key~='Character' and Key~='Skeleton' and Key~='Tracer' and typeof(O)=='Instance' then pcall(function() O:Destroy() end) end end
+State.ESP.Records[Player]=nil
+end
+function State.ESP.Clear() for P in pairs(State.ESP.Records) do State.ESP.Destroy(P) end end
+function State.ESP.Ensure(Player,Character,Root)
+local R=State.ESP.Records[Player]
+if R and R.Character==Character and R.Gui and R.Gui.Parent then R.Gui.Adornee=Root; return R end
+State.ESP.Destroy(Player)
+local PlayerGui=LP:FindFirstChildOfClass('PlayerGui') or LP:WaitForChild('PlayerGui',3)
+if not PlayerGui then State.ESP.Status='NO PLAYERGUI'; return nil end
+local Adornee=Character:FindFirstChild('Head') or Root
+local Gui=Instance.new('BillboardGui'); Gui.Name='SilverSurferCircleESP'; Gui.Adornee=Adornee; Gui.AlwaysOnTop=true; Gui.LightInfluence=0; Gui.MaxDistance=10000; Gui.Size=UDim2.fromOffset(190,110); Gui.StudsOffset=Adornee==Root and Vector3.new(0,2.7,0) or Vector3.new(0,1.8,0); Gui.Enabled=true; Gui.Parent=PlayerGui
+local Ring=Instance.new('Frame'); Ring.Name='Ring'; Ring.AnchorPoint=Vector2.new(.5,.5); Ring.Position=UDim2.fromScale(.5,.53); Ring.Size=UDim2.fromOffset(66,66); Ring.BackgroundTransparency=1; Ring.Parent=Gui
+local Corner=Instance.new('UICorner'); Corner.CornerRadius=UDim.new(1,0); Corner.Parent=Ring
+local Stroke=Instance.new('UIStroke'); Stroke.Thickness=2; Stroke.Transparency=.08; Stroke.Color=Visuals.Theme.Accent; Stroke.Parent=Ring
+local Inner=Instance.new('Frame'); Inner.AnchorPoint=Vector2.new(.5,.5); Inner.Position=UDim2.fromScale(.5,.5); Inner.Size=UDim2.fromOffset(54,54); Inner.BackgroundColor3=Visuals.Theme.Background; Inner.BackgroundTransparency=.82; Inner.Parent=Ring; local IC=Instance.new('UICorner'); IC.CornerRadius=UDim.new(1,0); IC.Parent=Inner
+local Name=Instance.new('TextLabel'); Name.BackgroundTransparency=1; Name.Size=UDim2.new(1,0,0,18); Name.Position=UDim2.fromOffset(0,-2); Name.Font=Enum.Font.Code; Name.TextSize=12; Name.TextColor3=(Visuals.Theme.Text or Visuals.Theme.AccentBright or Color3.new(1,1,1)); Name.TextStrokeTransparency=.45; Name.Parent=Gui
+local Rank=Name:Clone(); Rank.Position=UDim2.fromOffset(0,83); Rank.TextSize=10; Rank.TextColor3=Visuals.Theme.AccentBright; Rank.Parent=Gui
+local Record=Name:Clone(); Record.Position=UDim2.fromOffset(0,97); Record.TextSize=9; Record.TextColor3=Visuals.Theme.Muted; Record.Parent=Gui
+local Health=Instance.new('Frame'); Health.AnchorPoint=Vector2.new(.5,0); Health.Position=UDim2.new(.5,0,0,19); Health.Size=UDim2.fromOffset(74,3); Health.BackgroundColor3=(Visuals.Theme.Surface or Visuals.Theme.Muted or Color3.fromRGB(45,45,48)); Health.BorderSizePixel=0; Health.Parent=Gui
+local Fill=Instance.new('Frame'); Fill.Size=UDim2.fromScale(1,1); Fill.BackgroundColor3=Color3.fromRGB(70,220,130); Fill.BorderSizePixel=0; Fill.Parent=Health
+local Highlight=Instance.new('Highlight'); Highlight.Name='SilverSurferESPHighlight'; Highlight.Adornee=Character; Highlight.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop; Highlight.FillColor=Visuals.Theme.Accent; Highlight.FillTransparency=.88; Highlight.OutlineColor=Visuals.Theme.AccentBright; Highlight.OutlineTransparency=.08; Highlight.Enabled=false; Highlight.Parent=Character
+local Skeleton={}
+for I=1,14 do local Line=DrawingApi.new('Line'); Line.Visible=false; Line.Thickness=1.5; Line.Transparency=.92; Line.Color=Visuals.Theme.AccentBright; Skeleton[I]=Line end
+local Tracer=DrawingApi.new('Line'); Tracer.Visible=false; Tracer.Thickness=2; Tracer.Transparency=.94; Tracer.Color=Visuals.Theme.AccentBright
+local LowerAttachment=Instance.new('Attachment'); LowerAttachment.Name='SilverSurferBeaconLower'; LowerAttachment.Parent=Root
+local BeaconTop=Instance.new('Part'); BeaconTop.Name='SilverSurferBeaconTop'; BeaconTop.Size=Vector3.new(.1,.1,.1); BeaconTop.Transparency=1; BeaconTop.Anchored=true; BeaconTop.CanCollide=false; BeaconTop.CanTouch=false; BeaconTop.CanQuery=false; BeaconTop.Parent=Workspace.CurrentCamera
+local UpperAttachment=Instance.new('Attachment'); UpperAttachment.Parent=BeaconTop
+local Beacon=Instance.new('Beam'); Beacon.Name='SilverSurferHOFBeacon'; Beacon.Attachment0=LowerAttachment; Beacon.Attachment1=UpperAttachment; Beacon.FaceCamera=true; Beacon.Width0=1.5; Beacon.Width1=.35; Beacon.LightEmission=1; Beacon.Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,.08),NumberSequenceKeypoint.new(1,.55)}); Beacon.Enabled=false; Beacon.Parent=BeaconTop
+R={Gui=Gui,Ring=Ring,Stroke=Stroke,Name=Name,Rank=Rank,Record=Record,Health=Health,Fill=Fill,Highlight=Highlight,Skeleton=Skeleton,Tracer=Tracer,LowerAttachment=LowerAttachment,BeaconTop=BeaconTop,UpperAttachment=UpperAttachment,Beacon=Beacon,Character=Character}; State.ESP.Records[Player]=R; return R
+end
+function State.ESP.UpdateSkeleton(R,Character,Camera)
+if not R.Skeleton then return end
+local Torso=Character:FindFirstChild('UpperTorso') or Character:FindFirstChild('Torso')
+local Lower=Character:FindFirstChild('LowerTorso') or Torso
+local Pairs={{'Head',Torso and Torso.Name},{Torso and Torso.Name,Lower and Lower.Name},{Torso and Torso.Name,'LeftUpperArm'},{'LeftUpperArm','LeftLowerArm'},{'LeftLowerArm','LeftHand'},{Torso and Torso.Name,'RightUpperArm'},{'RightUpperArm','RightLowerArm'},{'RightLowerArm','RightHand'},{Lower and Lower.Name,'LeftUpperLeg'},{'LeftUpperLeg','LeftLowerLeg'},{'LeftLowerLeg','LeftFoot'},{Lower and Lower.Name,'RightUpperLeg'},{'RightUpperLeg','RightLowerLeg'},{'RightLowerLeg','RightFoot'}}
+if Character:FindFirstChild('Torso') then Pairs={{'Head','Torso'},{'Torso','Left Arm'},{'Torso','Right Arm'},{'Torso','Left Leg'},{'Torso','Right Leg'}} end
+for I,Line in ipairs(R.Skeleton) do
+local Pair=Pairs[I]; local A=Pair and Character:FindFirstChild(Pair[1]); local B=Pair and Character:FindFirstChild(Pair[2])
+if CONFIG.ESPSkeleton and A and B then local SA,OA=Camera:WorldToViewportPoint(A.Position); local SB,OB=Camera:WorldToViewportPoint(B.Position); Line.From=Vector2.new(SA.X,SA.Y); Line.To=Vector2.new(SB.X,SB.Y); Line.Color=Visuals.Theme.AccentBright; Line.Visible=OA and OB else Line.Visible=false end
+end
+end
+
+function State.ESP.Update()
+if not CONFIG.ESPEnabled then return end
+local Camera=Workspace.CurrentCamera; local LocalRoot=LP.Character and LP.Character:FindFirstChild('HumanoidRootPart'); if not (Camera and LocalRoot) then return end
+local Seen={}
+local HOFCandidates={}
+for _,Player in ipairs(Players:GetPlayers()) do
+if Player~=LP and (not CONFIG.ESPTeamCheck or not LP.Team or Player.Team~=LP.Team) then
+local Character=Player.Character; local Root=Character and Character:FindFirstChild('HumanoidRootPart'); local H=Character and Character:FindFirstChildOfClass('Humanoid')
+if Root and H and H.Health>0 then
+local Distance=(Root.Position-LocalRoot.Position).Magnitude
+if Distance<=math.clamp(tonumber(CONFIG.ESPMaxDistance) or 350,25,2000) then
+local R=State.ESP.Ensure(Player,Character,Root); if R then Seen[Player]=true; R.Gui.Enabled=true; R.Gui.Size=UDim2.fromOffset(190*(CONFIG.ESPScale or 1),110*(CONFIG.ESPScale or 1))
+local Rank,ELO=State.ESP.GetRank(Player); local W,L=State.ESP.GetRecord(Player)
+State.ESP.UpdateSkeleton(R,Character,Camera)
+HOFCandidates[#HOFCandidates+1]={Player=Player,ELO=ELO,Root=Root,Record=R}
+R.Name.Visible=CONFIG.ESPShowName; R.Name.Text=Player.DisplayName .. (CONFIG.ESPShowDistance and string.format('  [%.0fm]',Distance) or '')
+R.Rank.Visible=CONFIG.ESPShowRank; R.Rank.Text=Rank .. '  •  ' .. tostring(ELO) .. ' ELO'
+R.Record.Visible=CONFIG.ESPShowRecord; R.Record.Text=(W and L) and string.format('%dW  /  %dL',W,L) or 'RECORD  LOADING...'
+R.Health.Visible=CONFIG.ESPShowHealth; R.Fill.Size=UDim2.fromScale(math.clamp(H.Health/math.max(H.MaxHealth,1),0,1),1)
+R.Stroke.Color=Visuals.Theme.Accent; R.Highlight.Enabled=CONFIG.ESPShowHighlight
+end
+end end end
+end
+table.sort(HOFCandidates,function(A,B) return A.ELO>B.ELO end)
+local BeamCount=math.clamp(math.floor(tonumber(CONFIG.ESPTopELOCount) or 3),1,5)
+local BeamTargets={}
+local Eligible=0
+for _,C in ipairs(HOFCandidates) do if C.ELO>=10000 and Eligible<BeamCount then Eligible+=1; BeamTargets[C.Player]=true end end
+local Highest=HOFCandidates[1]
+for P,R in pairs(State.ESP.Records) do
+local Data=nil; for _,C in ipairs(HOFCandidates) do if C.Player==P then Data=C; break end end
+if R.Tracer then
+if CONFIG.ESPHighestELOTracer and Highest and Highest.Player==P then local V,On=Camera:WorldToViewportPoint(Highest.Root.Position); R.Tracer.From=Vector2.new(Camera.ViewportSize.X*.5,Camera.ViewportSize.Y-35); R.Tracer.To=Vector2.new(V.X,V.Y); R.Tracer.Color=Visuals.Theme.AccentBright; R.Tracer.Visible=On else R.Tracer.Visible=false end
+end
+if R.Beacon then
+local Active=CONFIG.ESPHOFBeams and BeamTargets[P] and Data and Data.ELO>=10000
+R.Beacon.Enabled=Active==true
+if Active then if R.BeaconTop.Parent~=Camera then R.BeaconTop.Parent=Camera end; R.BeaconTop.CFrame=CFrame.new(Data.Root.Position+Vector3.new(0,125,0)); R.Beacon.Color=ColorSequence.new(Visuals.Theme.AccentBright,Visuals.Theme.Accent) end
+end
+if not Seen[P] then if R.Skeleton then for _,Line in ipairs(R.Skeleton) do Line.Visible=false end end; if R.Tracer then R.Tracer.Visible=false end; if R.Beacon then R.Beacon.Enabled=false end; if P.Parent then R.Gui.Enabled=false; R.Highlight.Enabled=false else State.ESP.Destroy(P) end end
+end
+end
+function State.ESP.SetEnabled(Value)
+CONFIG.ESPEnabled=Value==true
+pcall(function() State.Lifecycle:UnbindFromRenderStep(State.ESP.BindName) end)
+if not CONFIG.ESPEnabled then State.ESP.Clear(); State.ESP.Status='OFF'; return end
+State.ESP.Status='STARTING'; State.ESP.LastError=nil
+local FirstOk,FirstErr=pcall(State.ESP.Update)
+if not FirstOk then State.ESP.Status='ERROR'; State.ESP.LastError=tostring(FirstErr); warn('[SILVER SURFER ESP] '..tostring(FirstErr)) else State.ESP.Status='ACTIVE' end
+State.Lifecycle:BindToRenderStep(State.ESP.BindName,Enum.RenderPriority.Camera.Value+60,function()
+if not State.Active then return end
+local Ok,Err=pcall(State.ESP.Update)
+if not Ok then
+State.ESP.Status='ERROR'
+if State.ESP.LastError~=tostring(Err) then State.ESP.LastError=tostring(Err); warn('[SILVER SURFER ESP] '..tostring(Err)) end
+end
+end)
+end
+
 State.Outline = {
 Enabled = CONFIG.Outline == true,
 Mode = CONFIG.OutlineMode or 'both',
@@ -24738,6 +25729,18 @@ GroupTransparency = 1,
 Visible = false,
 ZIndex = 4,
 }, Content)
+Pages.SmartShot = New('CanvasGroup', {
+Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+BorderSizePixel = 0, GroupTransparency = 1, Visible = false, ZIndex = 4,
+}, Content)
+Pages.Stepback = New('CanvasGroup', {
+Size = UDim2.fromScale(1, 1),
+BackgroundTransparency = 1,
+BorderSizePixel = 0,
+GroupTransparency = 1,
+Visible = false,
+ZIndex = 4,
+}, Content)
 Pages.Pass = New('CanvasGroup', {
 Size = UDim2.fromScale(1, 1),
 BackgroundTransparency = 1,
@@ -24801,6 +25804,10 @@ BorderSizePixel = 0,
 GroupTransparency = 1,
 Visible = false,
 ZIndex = 4,
+}, Content)
+Pages.ESP = New('CanvasGroup', {
+Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+BorderSizePixel = 0, GroupTransparency = 1, Visible = false, ZIndex = 4,
 }, Content)
 Pages.Status = New('CanvasGroup', {
 Size = UDim2.fromScale(1, 1),
@@ -24872,6 +25879,8 @@ HubUI.TabButtons = {}
 local TabDefinitions = {
 { Name = 'Aim', Category = 'GAMEPLAY', Search = 'aim silent aim shooting shot release target goal range trajectory' },
 { Name = 'Humanizer', Category = 'GAMEPLAY', Search = 'humanizer humanize legit accuracy miss error spread cone angle camera limit shot variants backboard bank no jump match arc click to shoot manual release timing' },
+{ Name = 'SmartShot', DisplayName = 'Smart Shot', Category = 'GAMEPLAY', Search = 'smart shot selector defender pressure rush open airborne contest stepback fadeaway sidestep quick stop trickshot high arc bank' },
+{ Name = 'Stepback', DisplayName = 'Stepback', Category = 'GAMEPLAY', Search = 'auto stepback hop retreat side hop defender open space distance duration easing delay cooldown stop collision edge chain trickshot fadeaway ebl' },
 { Name = 'Pass', Category = 'GAMEPLAY', Search = 'pass passing teammate self pass jump pass' },
 { Name = 'Dunk', Category = 'GAMEPLAY', Search = 'dunk auto dunk animation lane' },
 { Name = 'Offense', Category = 'AUTOMATION', Search = 'offense auto offense backdown drive cutoff pull up shoot chance steal threat lane room strafe custom tuning' },
@@ -24892,12 +25901,15 @@ local TabDefinitions = {
 { Name = 'QuickTravel', DisplayName = 'Quick Travel', Category = 'TOOLS', Search = 'quick travel teleport destination court queue practice spin donation leaderboard player server park arena' },
 { Name = 'Utilities', Category = 'TOOLS', Search = 'utilities daily spin server hop streamer reconnect performance anti afk fall safety recovery' },
 { Name = 'Replay', Category = 'TOOLS', Search = 'replay ghost record playback loop pose movement training route' },
+{ Name = 'ESP', Category = 'TOOLS', Search = 'esp player overlay name rank record wins losses health distance tracer highlight preview circle' },
 { Name = 'Status', Category = 'TOOLS', Search = 'status diagnostics actor hooks power distance range debug' },
 }
 local TabOrder = {}
 local TabDescriptions = {
 Aim = 'AIM  /  SHOOTING', Pass = 'PASS  /  PLAYMAKING', Dunk = 'DUNK  /  FINISHING',
 Humanizer = 'HUMANIZER  /  LEGIT LIMITS + SHOT VARIANTS',
+SmartShot = 'SMART SHOT  /  DEFENDER-REACTIVE SELECTION',
+Stepback = 'STEPBACK  /  AUTOMATIC SHOT CREATION',
 Offense = 'OFFENSE  /  AUTO BALL HANDLING',
 GetOpen = 'GET OPEN  /  OFF-BALL',
 Guard = 'GUARD  /  DEFENSE', Body = 'BODY  /  BALL PROTECTION',
@@ -24909,7 +25921,8 @@ Interface = 'INTERFACE  /  THEME + LAYOUT', Keybinds = 'KEYBINDS  /  HOTKEYS + M
 Configs = 'CONFIGS  /  PROFILES + UNLOAD',
 Watch = 'WATCH  /  MATCH SPECTATOR + 50 CAMERAS',
 QuickTravel = 'QUICK TRAVEL  /  DESTINATIONS + PLAYERS',
-Utilities = 'UTILITIES  /  AUTOMATION + SAFETY', Replay = 'REPLAY  /  RECORDING + GHOST', Status = 'STATUS  /  DIAGNOSTICS',
+Utilities = 'UTILITIES  /  AUTOMATION + SAFETY', Replay = 'REPLAY  /  RECORDING + GHOST', ESP = 'ESP  /  PLAYER INTELLIGENCE',
+Status = 'STATUS  /  DIAGNOSTICS',
 }
 
 -- Dear ImGui tree navigation preserves functional category order.
@@ -25605,6 +26618,10 @@ local LeftGroup = CreateGroup('Silent Aim', Pages.Aim, UDim2.fromOffset(PageMarg
 local MiddleGroup = CreateGroup('Target & Visuals', Pages.Aim, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 HubUI.HumanizerGroup = CreateGroup('Legit Humanizer', Pages.Humanizer, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 HubUI.ShotVariantGroup = CreateGroup('Shot Variants & Release', Pages.Humanizer, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.SmartShotControlGroup = CreateGroup('Smart Shot Selector', Pages.SmartShot, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.SmartShotRulesGroup = CreateGroup('Decision Rules', Pages.SmartShot, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.StepbackControlGroup = CreateGroup('Auto Stepback', Pages.Stepback, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.StepbackSettingsGroup = CreateGroup('Stepback Behavior', Pages.Stepback, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local PassGroup = CreateGroup('Passing', Pages.Pass, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
 local DunkGroup = CreateGroup('Auto Dunk', Pages.Dunk, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
 local GetOpenGroup = CreateGroup('Auto Get Open', Pages.GetOpen, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
@@ -25615,6 +26632,8 @@ local BodySettingsGroup = CreateGroup('Body Settings', Pages.Body, UDim2.fromOff
 local AutoMixControlGroup = CreateGroup('Mix Controls', Pages.AutoMix, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local AutoMixStrategyGroup = CreateGroup('Threat Strategy', Pages.AutoMix, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local QueueGroup = CreateGroup('Auto Queue', Pages.Queue, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
+HubUI.ESPControlGroup = CreateGroup('ESP Controls', Pages.ESP, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.ESPPreviewGroup = CreateGroup('Circular ESP Preview', Pages.ESP, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local StatusGroup = CreateGroup('Shot Status', Pages.Status, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 HubUI.SyncGroup = CreateGroup('Desync & Outlines', Pages.Status, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 HubUI.WatchMatchGroup = CreateGroup('Match Spectator', Pages.Watch, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
@@ -27452,11 +28471,15 @@ MovementFlightGroup, 233, 'Lobby speed', CONFIG.OutOfMatchSpeed, 1, 250, 0,
 function(Value) CONFIG.OutOfMatchSpeed = Value; State.Movement.ApplyWalkSpeed() end
 )
 
-CreateSectionHeader(MovementFlightGroup, 265, 'Extras')
-HubUI.Controls.Spinbot = CreateCheckbox(
-MovementFlightGroup, 285, 'Spinbot', State.Extras.SpinbotEnabled,
-function(Value) State.Extras.SetSpinbot(Value) end
-)
+CreateSectionHeader(MovementFlightGroup, 265, 'Ground control')
+HubUI.Controls.InstantDirectionSwitch = CreateCheckbox(MovementFlightGroup, 285, 'Instant direction switch', CONFIG.InstantDirectionSwitch == true, function(Value) CONFIG.InstantDirectionSwitch = Value == true end)
+HubUI.Controls.OOBGuard = CreateCheckbox(MovementFlightGroup, 315, 'Edge / OOB guard', CONFIG.OOBGuard == true, function(Value) CONFIG.OOBGuard = Value == true end)
+HubUI.Controls.SprintKeyEnabled = CreateCheckbox(MovementFlightGroup, 345, 'Sprint key [LEFT SHIFT]', CONFIG.SprintKeyEnabled == true, function(Value) CONFIG.SprintKeyEnabled = Value == true end)
+HubUI.Controls.SprintSpeed = CreateNumberInput(MovementFlightGroup, 375, 'Sprint speed', CONFIG.SprintSpeed, 16, 100, 0, function(Value) CONFIG.SprintSpeed = Value end)
+HubUI.Controls.SlowKeyEnabled = CreateCheckbox(MovementFlightGroup, 405, 'Slow key [LEFT CTRL]', CONFIG.SlowKeyEnabled == true, function(Value) CONFIG.SlowKeyEnabled = Value == true end)
+HubUI.Controls.SlowSpeed = CreateNumberInput(MovementFlightGroup, 435, 'Slow speed', CONFIG.SlowSpeed, 1, 20, 0, function(Value) CONFIG.SlowSpeed = Value end)
+HubUI.Controls.IcePhysics = CreateCheckbox(MovementFlightGroup, 465, 'Ice physics', CONFIG.IcePhysics == true, function(Value) CONFIG.IcePhysics = Value == true end)
+HubUI.Controls.IceGlide = CreateNumberInput(MovementFlightGroup, 495, 'Ice glide', CONFIG.IceGlide, 0.80, 0.995, 3, function(Value) CONFIG.IceGlide = Value end)
 
 State.Movement.LastFlightTapAt = 0
 GiveSignal(UserInputService.InputBegan:Connect(function(Input, GameProcessed)
@@ -29013,12 +30036,44 @@ GiveSignal(State.LogoBadges.ClearButton.MouseButton1Click:Connect(State.LogoBadg
 HubUI.Controls.AddCustomLogoAction = { SearchRoot = State.LogoBadges.AddButton, SearchParent = CosmeticsGroup, SearchLabel = 'Add custom logo', Kind = 'Action', Trigger = State.LogoBadges.AddFromBox }
 HubUI.Controls.ClearCustomLogoAction = { SearchRoot = State.LogoBadges.ClearButton, SearchParent = CosmeticsGroup, SearchLabel = 'Clear custom logos', Kind = 'Action', Trigger = State.LogoBadges.ClearCustomFromUI }
 
+do
+CreateSectionHeader(HubUI.ESPControlGroup, 11, 'Player ESP')
+HubUI.Controls.ESPEnabled=CreateCheckbox(HubUI.ESPControlGroup,31,'Enable circular ESP',CONFIG.ESPEnabled==true,function(V) State.ESP.SetEnabled(V) end)
+HubUI.Controls.ESPTeamCheck=CreateCheckbox(HubUI.ESPControlGroup,61,'Team check',CONFIG.ESPTeamCheck~=false,function(V) CONFIG.ESPTeamCheck=V==true end)
+HubUI.Controls.ESPShowName=CreateCheckbox(HubUI.ESPControlGroup,91,'Player names',CONFIG.ESPShowName~=false,function(V) CONFIG.ESPShowName=V==true end)
+HubUI.Controls.ESPShowDistance=CreateCheckbox(HubUI.ESPControlGroup,121,'Distance',CONFIG.ESPShowDistance~=false,function(V) CONFIG.ESPShowDistance=V==true end)
+HubUI.Controls.ESPShowHealth=CreateCheckbox(HubUI.ESPControlGroup,151,'Health bar',CONFIG.ESPShowHealth~=false,function(V) CONFIG.ESPShowHealth=V==true end)
+HubUI.Controls.ESPShowRank=CreateCheckbox(HubUI.ESPControlGroup,181,'Rank + ELO',CONFIG.ESPShowRank~=false,function(V) CONFIG.ESPShowRank=V==true end)
+HubUI.Controls.ESPShowRecord=CreateCheckbox(HubUI.ESPControlGroup,211,'Win / loss record',CONFIG.ESPShowRecord~=false,function(V) CONFIG.ESPShowRecord=V==true end)
+HubUI.Controls.ESPShowHighlight=CreateCheckbox(HubUI.ESPControlGroup,241,'Character highlight',CONFIG.ESPShowHighlight==true,function(V) CONFIG.ESPShowHighlight=V==true end)
+HubUI.Controls.ESPSkeleton=CreateCheckbox(HubUI.ESPControlGroup,271,'Skeleton ESP',CONFIG.ESPSkeleton==true,function(V) CONFIG.ESPSkeleton=V==true end)
+HubUI.Controls.ESPHOFBeams=CreateCheckbox(HubUI.ESPControlGroup,301,'HOF+ overhead beacons',CONFIG.ESPHOFBeams==true,function(V) CONFIG.ESPHOFBeams=V==true end)
+HubUI.Controls.ESPHighestELOTracer=CreateCheckbox(HubUI.ESPControlGroup,331,'Highest-ELO tracer',CONFIG.ESPHighestELOTracer==true,function(V) CONFIG.ESPHighestELOTracer=V==true end)
+HubUI.Controls.ESPTopELOCount=CreateNumberInput(HubUI.ESPControlGroup,361,'Top players to beam',CONFIG.ESPTopELOCount,1,5,0,function(V) CONFIG.ESPTopELOCount=V end)
+CreateSectionHeader(HubUI.ESPControlGroup,393,'Range and scale')
+HubUI.Controls.ESPMaxDistance=CreateNumberInput(HubUI.ESPControlGroup,413,'Maximum distance',CONFIG.ESPMaxDistance,25,5000,0,function(V) CONFIG.ESPMaxDistance=V end)
+HubUI.Controls.ESPScale=CreateNumberInput(HubUI.ESPControlGroup,443,'Overlay scale',CONFIG.ESPScale,0.6,1.8,2,function(V) CONFIG.ESPScale=V end)
+CreateParagraph(HubUI.ESPControlGroup,UDim2.fromOffset(8,479),UDim2.new(1,-16,0,28),'Circular player card with live rank,\nELO, record, distance, and health.\n\nUses PlayerGui billboards for reliability.\nTeam check starts off so nobody is hidden.')
+
+CreateSectionHeader(HubUI.ESPPreviewGroup,11,'Live style preview')
+local ESPPreview=New('Frame',{Position=UDim2.fromOffset(8,34),Size=UDim2.new(1,-16,0,365),BackgroundColor3=Theme.Background,BackgroundTransparency=.08,BorderSizePixel=0},HubUI.ESPPreviewGroup); New('UICorner',{CornerRadius=UDim.new(0,16)},ESPPreview); DarkStroke(ESPPreview)
+local PreviewRing=New('Frame',{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.48),Size=UDim2.fromOffset(154,154),BackgroundTransparency=1},ESPPreview); New('UICorner',{CornerRadius=UDim.new(1,0)},PreviewRing); AccentStroke(PreviewRing,3,.04)
+local PreviewInner=New('Frame',{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.5),Size=UDim2.fromOffset(130,130),BackgroundColor3=Theme.Surface,BackgroundTransparency=.18,BorderSizePixel=0},PreviewRing); New('UICorner',{CornerRadius=UDim.new(1,0)},PreviewInner)
+New('TextLabel',{Position=UDim2.fromOffset(0,23),Size=UDim2.new(1,0,0,24),BackgroundTransparency=1,Font=Enum.Font.Code,Text='SILVER SURFER',TextColor3=Theme.Text,TextSize=14},ESPPreview)
+New('TextLabel',{Position=UDim2.new(0,0,1,-72),Size=UDim2.new(1,0,0,20),BackgroundTransparency=1,Font=Enum.Font.Code,Text='LEGEND 3  •  9485 ELO',TextColor3=Theme.AccentBright,TextSize=12},ESPPreview)
+New('TextLabel',{Position=UDim2.new(0,0,1,-49),Size=UDim2.new(1,0,0,18),BackgroundTransparency=1,Font=Enum.Font.Code,Text='948W  /  517L   •   24m',TextColor3=Theme.Muted,TextSize=11},ESPPreview)
+local PreviewHealth=New('Frame',{AnchorPoint=Vector2.new(.5,0),Position=UDim2.new(.5,0,1,-25),Size=UDim2.fromOffset(170,4),BackgroundColor3=Theme.Surface,BorderSizePixel=0},ESPPreview); New('Frame',{Size=UDim2.fromScale(.82,1),BackgroundColor3=Theme.Success,BorderSizePixel=0},PreviewHealth)
+CreateParagraph(HubUI.ESPPreviewGroup,UDim2.fromOffset(8,416),UDim2.new(1,-16,0,78),'Theme-synced circular design.\nNo square IMGUI box around players.')
+
+end
+
 CreateSectionHeader(LeftGroup, 9, 'Core')
 HubUI.Controls.Desync = CreateCheckbox(HubUI.SyncGroup, 17, 'Desync Detection', State.Desync.Enabled, function(Value) State.Desync.SetEnabled(Value) end)
 HubUI.Controls.DesyncVisualizer = CreateCheckbox(HubUI.SyncGroup, 47, 'Position Visualizer', State.DesyncVisualizer.Enabled, function(Value) State.DesyncVisualizer.SetEnabled(Value) end)
 HubUI.Controls.Outline = CreateCheckbox(HubUI.SyncGroup, 77, 'Position Outlines', State.Outline.Enabled, function(Value) State.Outline.SetEnabled(Value) end)
 HubUI.Controls.OutlineMode = CreateSelector(HubUI.SyncGroup, 107, 'Show outlines for', { 'both', 'self', 'enemies' }, State.Outline.Mode, function(Value) State.Outline.SetMode(Value) end, 135)
 HubUI.DesyncStatusText = CreateParagraph(HubUI.SyncGroup, UDim2.fromOffset(8, 138), UDim2.new(1, -16, 0, 82), 'status  off\noffset  --\navg offset  --\nsamples  0')
+if CONFIG.ESPEnabled then State.Lifecycle:Defer(function() State.ESP.SetEnabled(true) end) end
 if CONFIG.DesyncVisualizer then State.Lifecycle:Defer(function() State.DesyncVisualizer.SetEnabled(true) end) end
 
 HubUI.Controls.SilentAim = CreateCheckbox(LeftGroup, 29, 'Silent Aim', State.RequestedEnabled, function(Value)
@@ -29083,6 +30138,75 @@ end,
 118,
 true
 )
+
+CreateSectionHeader(HubUI.SmartShotControlGroup, 11, 'Selector')
+HubUI.Controls.SmartShotSelector=CreateCheckbox(HubUI.SmartShotControlGroup,31,'Enable Smart Shot Selector',CONFIG.SmartShotSelector==true,function(V) CONFIG.SmartShotSelector=V==true;if not V then State.SmartShot.Restore('OFF') else State.SmartShot.Status='READY' end end)
+HubUI.Controls.SmartShotStrategy=CreateSelector(HubUI.SmartShotControlGroup,61,'Strategy',{'Conservative','Balanced','Aggressive','Highlight'},CONFIG.SmartShotStrategy or 'Balanced',function(V) CONFIG.SmartShotStrategy=V end,130)
+HubUI.Controls.SmartShotOpenBehavior=CreateSelector(HubUI.SmartShotControlGroup,91,'Wide-open behavior',{'Normal','Quick Stop','Trickshot','Random'},CONFIG.SmartShotOpenBehavior or 'Normal',function(V) CONFIG.SmartShotOpenBehavior=V end,130)
+HubUI.Controls.SmartShotAirborneReaction=CreateSelector(HubUI.SmartShotControlGroup,121,'Jumping defender reaction',{'High Arc','Stepback','Fadeaway','Bank Shot'},CONFIG.SmartShotAirborneReaction or 'High Arc',function(V) CONFIG.SmartShotAirborneReaction=V end,130)
+CreateSectionHeader(HubUI.SmartShotControlGroup,153,'Live decision')
+HubUI.SmartShotStatusText=CreateParagraph(HubUI.SmartShotControlGroup,UDim2.fromOffset(8,173),UDim2.new(1,-16,0,170),'STATUS  OFF\nDECISION NORMAL\nREASON --\nDEFENDER --\nDISTANCE --\nCLOSING --\nSIDE --')
+CreateParagraph(HubUI.SmartShotControlGroup,UDim2.fromOffset(8,357),UDim2.new(1,-16,0,130),'The selector reads defender distance,\nclosing speed, side pressure, and\nairborne contests before each shot.\n\nTemporary choices restore after firing.')
+
+CreateSectionHeader(HubUI.SmartShotRulesGroup,11,'Distance rules')
+HubUI.Controls.SmartShotCloseDistance=CreateNumberInput(HubUI.SmartShotRulesGroup,31,'Close contest range',CONFIG.SmartShotCloseDistance,2,15,1,function(V) CONFIG.SmartShotCloseDistance=V end)
+HubUI.Controls.SmartShotPressureDistance=CreateNumberInput(HubUI.SmartShotRulesGroup,61,'Pressure range',CONFIG.SmartShotPressureDistance,4,25,1,function(V) CONFIG.SmartShotPressureDistance=V end)
+HubUI.Controls.SmartShotOpenDistance=CreateNumberInput(HubUI.SmartShotRulesGroup,91,'Wide-open range',CONFIG.SmartShotOpenDistance,8,40,1,function(V) CONFIG.SmartShotOpenDistance=V end)
+HubUI.Controls.SmartShotRushSpeed=CreateNumberInput(HubUI.SmartShotRulesGroup,121,'Rush speed threshold',CONFIG.SmartShotRushSpeed,0,25,1,function(V) CONFIG.SmartShotRushSpeed=V end)
+CreateSectionHeader(HubUI.SmartShotRulesGroup,153,'Allowed reactions')
+HubUI.Controls.SmartShotAllowStepback=CreateCheckbox(HubUI.SmartShotRulesGroup,173,'Allow Stepback / Sidestep',CONFIG.SmartShotAllowStepback~=false,function(V) CONFIG.SmartShotAllowStepback=V==true end)
+HubUI.Controls.SmartShotAllowFadeaway=CreateCheckbox(HubUI.SmartShotRulesGroup,203,'Allow Fadeaway',CONFIG.SmartShotAllowFadeaway~=false,function(V) CONFIG.SmartShotAllowFadeaway=V==true end)
+HubUI.Controls.SmartShotAllowQuickStop=CreateCheckbox(HubUI.SmartShotRulesGroup,233,'Allow Quick Stop',CONFIG.SmartShotAllowQuickStop~=false,function(V) CONFIG.SmartShotAllowQuickStop=V==true end)
+HubUI.Controls.SmartShotAllowTrickshot=CreateCheckbox(HubUI.SmartShotRulesGroup,263,'Allow Trickshot',CONFIG.SmartShotAllowTrickshot~=false,function(V) CONFIG.SmartShotAllowTrickshot=V==true end)
+HubUI.Controls.SmartShotAllowBank=CreateCheckbox(HubUI.SmartShotRulesGroup,293,'Allow Bank Shot',CONFIG.SmartShotAllowBank~=false,function(V) CONFIG.SmartShotAllowBank=V==true end)
+CreateSectionHeader(HubUI.SmartShotRulesGroup,325,'Decision map')
+CreateParagraph(HubUI.SmartShotRulesGroup,UDim2.fromOffset(8,345),UDim2.new(1,-16,0,145),'RUSHING  -> STEPBACK\nCLOSE    -> FADEAWAY\nLEFT     -> SIDESTEP RIGHT\nRIGHT    -> SIDESTEP LEFT\nAIRBORNE -> HIGH ARC / REACTION\nOPEN     -> SELECTED OPEN STYLE')
+
+CreateSectionHeader(HubUI.StepbackControlGroup, 11, 'Control')
+HubUI.Controls.AutoStepback = CreateCheckbox(HubUI.StepbackControlGroup, 31, 'Enable Auto Stepback', CONFIG.AutoStepback == true, function(Value)
+CONFIG.AutoStepback = Value == true
+if not Value then State.Stepback.Cancel('OFF') else State.Stepback.Status = 'READY' end
+Notify('SILVER SURFER', Value and 'Auto Stepback armed for jump shots.' or 'Auto Stepback disabled.')
+end)
+HubUI.Controls.StepbackActivation = CreateSelector(HubUI.StepbackControlGroup, 61, 'Activation',
+{ 'Every shot', 'Defender close', 'EBL second jump only', 'Non-EBL shots only', 'Random chance' },
+CONFIG.StepbackActivation or 'Every shot', function(Value) CONFIG.StepbackActivation = Value end, 142)
+HubUI.Controls.StepbackDirection = CreateSelector(HubUI.StepbackControlGroup, 91, 'Direction',
+{ 'Away from defender', 'Toward open space', 'Backward', 'Left', 'Right', 'Random' },
+CONFIG.StepbackDirection or 'Away from defender', function(Value) CONFIG.StepbackDirection = Value end, 142)
+HubUI.Controls.StepbackEasing = CreateSelector(HubUI.StepbackControlGroup, 121, 'Movement curve',
+{ 'Smooth', 'Linear', 'Ease out', 'Sharp' }, CONFIG.StepbackEasing or 'Smooth',
+function(Value) CONFIG.StepbackEasing = Value end, 118)
+CreateSectionHeader(HubUI.StepbackControlGroup, 153, 'Distance and timing')
+HubUI.Controls.StepbackDistance = CreateNumberInput(HubUI.StepbackControlGroup, 173, 'Distance (studs)', CONFIG.StepbackDistance, 0, 15, 1, function(Value) CONFIG.StepbackDistance = Value end)
+HubUI.Controls.StepbackDuration = CreateNumberInput(HubUI.StepbackControlGroup, 203, 'Burst time (sec)', CONFIG.StepbackDuration, 0.06, 0.5, 2, function(Value) CONFIG.StepbackDuration = Value end)
+HubUI.Controls.StepbackDelay = CreateNumberInput(HubUI.StepbackControlGroup, 233, 'Start delay (sec)', CONFIG.StepbackDelay, 0, 0.8, 2, function(Value) CONFIG.StepbackDelay = Value end)
+HubUI.Controls.StepbackCooldown = CreateNumberInput(HubUI.StepbackControlGroup, 263, 'Cooldown (sec)', CONFIG.StepbackCooldown, 0, 4, 2, function(Value) CONFIG.StepbackCooldown = Value end)
+HubUI.Controls.StepbackRandomVariance = CreateNumberInput(HubUI.StepbackControlGroup, 293, 'Distance variance %', CONFIG.StepbackRandomVariance, 0, 75, 0, function(Value) CONFIG.StepbackRandomVariance = Value end)
+HubUI.Controls.StepbackRandomChance = CreateNumberInput(HubUI.StepbackControlGroup, 323, 'Random activation %', CONFIG.StepbackRandomChance, 0, 100, 0, function(Value) CONFIG.StepbackRandomChance = Value end)
+CreateSectionHeader(HubUI.StepbackControlGroup, 355, 'Live status')
+HubUI.StepbackStatusText = CreateParagraph(HubUI.StepbackControlGroup, UDim2.fromOffset(8, 375), UDim2.new(1, -16, 0, 126),
+'STATUS    OFF\nDIRECTION --\nDISTANCE  --\nDEFENDER  --\nCOOLDOWN  --')
+
+CreateSectionHeader(HubUI.StepbackSettingsGroup, 11, 'Chaining and release')
+HubUI.Controls.StepbackJumpDelay = CreateNumberInput(HubUI.StepbackSettingsGroup, 31, 'Delay after step before jump', CONFIG.StepbackJumpDelay, 0, 0.5, 2, function(Value) CONFIG.StepbackJumpDelay = Value end)
+HubUI.Controls.StepbackAllowFadeaway = CreateCheckbox(HubUI.StepbackSettingsGroup, 61, 'Chain Auto Fadeaway', CONFIG.StepbackAllowFadeaway ~= false, function(Value) CONFIG.StepbackAllowFadeaway = Value == true end)
+HubUI.Controls.StepbackAllowTrickshot = CreateCheckbox(HubUI.StepbackSettingsGroup, 91, 'Chain Trickshot rotation', CONFIG.StepbackAllowTrickshot ~= false, function(Value) CONFIG.StepbackAllowTrickshot = Value == true end)
+HubUI.Controls.StepbackFaceRim = CreateCheckbox(HubUI.StepbackSettingsGroup, 121, 'Face rim after movement', CONFIG.StepbackFaceRim ~= false, function(Value) CONFIG.StepbackFaceRim = Value == true end)
+CreateSectionHeader(HubUI.StepbackSettingsGroup, 153, 'Momentum control')
+HubUI.Controls.StepbackAutoStopBefore = CreateCheckbox(HubUI.StepbackSettingsGroup, 173, 'Quick stop before step', CONFIG.StepbackAutoStopBefore ~= false, function(Value) CONFIG.StepbackAutoStopBefore = Value == true end)
+HubUI.Controls.StepbackAutoStopAfter = CreateCheckbox(HubUI.StepbackSettingsGroup, 203, 'Quick stop after step', CONFIG.StepbackAutoStopAfter ~= false, function(Value) CONFIG.StepbackAutoStopAfter = Value == true end)
+HubUI.Controls.StepbackManualCancel = CreateCheckbox(HubUI.StepbackSettingsGroup, 233, 'Cancel on manual movement', CONFIG.StepbackManualCancel == true, function(Value) CONFIG.StepbackManualCancel = Value == true end)
+CreateSectionHeader(HubUI.StepbackSettingsGroup, 265, 'Defender and safety')
+HubUI.Controls.StepbackRequireDefender = CreateCheckbox(HubUI.StepbackSettingsGroup, 285, 'Require nearby defender', CONFIG.StepbackRequireDefender == true, function(Value) CONFIG.StepbackRequireDefender = Value == true end)
+HubUI.Controls.StepbackDefenderRange = CreateNumberInput(HubUI.StepbackSettingsGroup, 315, 'Defender range', CONFIG.StepbackDefenderRange, 2, 35, 1, function(Value) CONFIG.StepbackDefenderRange = Value end)
+HubUI.Controls.StepbackCollisionCheck = CreateCheckbox(HubUI.StepbackSettingsGroup, 345, 'Stop before walls', CONFIG.StepbackCollisionCheck ~= false, function(Value) CONFIG.StepbackCollisionCheck = Value == true end)
+HubUI.Controls.StepbackEdgeSafety = CreateCheckbox(HubUI.StepbackSettingsGroup, 375, 'Prevent court-edge falls', CONFIG.StepbackEdgeSafety ~= false, function(Value) CONFIG.StepbackEdgeSafety = Value == true end)
+HubUI.Controls.StepbackEdgeMargin = CreateNumberInput(HubUI.StepbackSettingsGroup, 405, 'Ground-check depth', CONFIG.StepbackEdgeMargin, 0, 8, 1, function(Value) CONFIG.StepbackEdgeMargin = Value end)
+HubUI.Controls.StepbackWalkSpeed = CreateNumberInput(HubUI.StepbackSettingsGroup, 435, 'Burst speed', CONFIG.StepbackWalkSpeed, 32, 60, 0, function(Value) CONFIG.StepbackWalkSpeed = Value end)
+HubUI.Controls.StepbackVelocityAssist = CreateCheckbox(HubUI.StepbackSettingsGroup, 465, 'Reliable walk assist', CONFIG.StepbackVelocityAssist ~= false, function(Value) CONFIG.StepbackVelocityAssist = Value == true end)
+CreateParagraph(HubUI.StepbackSettingsGroup, UDim2.fromOffset(8, 493), UDim2.new(1, -16, 0, 16),
+'Fast constant burst; no repeated path resets.')
 
 CreateSectionHeader(HubUI.ShotVariantGroup, 11, 'Shot variants')
 HubUI.Controls.Backboard = CreateCheckbox(
@@ -29795,22 +30919,30 @@ CONFIG.AutoMixRotateSpins = Value
 if not Value then State.AutoMix.StopSpin() end
 end
 )
-CreateSectionHeader(AutoMixControlGroup, 183, 'Decision timing')
+HubUI.Controls.AutoMixManualHandles = CreateCheckbox(
+AutoMixControlGroup, 181, 'Manual handles only (F / G)', CONFIG.AutoMixManualHandles ~= false,
+function(Value) CONFIG.AutoMixManualHandles = Value == true; State.AutoMix.SetSequence({}) end
+)
+HubUI.Controls.AutoMixSpinDegrees = CreateNumberInput(
+AutoMixControlGroup, 211, 'Manual spin angle', CONFIG.AutoMixSpinDegrees, 90, 1080, 0,
+function(Value) CONFIG.AutoMixSpinDegrees = Value end
+)
+CreateSectionHeader(AutoMixControlGroup, 243, 'Decision timing')
 HubUI.Controls.AutoMixDecisionHold = CreateNumberInput(
-AutoMixControlGroup, 203, 'Threat confirmation', CONFIG.AutoMixDecisionHold, 0.04, 0.35, 2,
+AutoMixControlGroup, 323, 'Threat confirmation', CONFIG.AutoMixDecisionHold, 0.04, 0.35, 2,
 function(Value) CONFIG.AutoMixDecisionHold = Value end
 )
 HubUI.Controls.AutoMixPostMoveCooldown = CreateNumberInput(
-AutoMixControlGroup, 233, 'Post-move cooldown', CONFIG.AutoMixPostMoveCooldown, 0.08, 0.8, 2,
+AutoMixControlGroup, 293, 'Post-move cooldown', CONFIG.AutoMixPostMoveCooldown, 0.08, 0.8, 2,
 function(Value) CONFIG.AutoMixPostMoveCooldown = Value end
 )
 HubUI.Controls.AutoMixEmergencyDistance = CreateNumberInput(
 AutoMixControlGroup, 263, 'Emergency distance', CONFIG.AutoMixEmergencyDistance, 3.5, 9, 1,
 function(Value) CONFIG.AutoMixEmergencyDistance = Value end
 )
-CreateSectionHeader(AutoMixControlGroup, 295, 'Protection')
+CreateSectionHeader(AutoMixControlGroup, 355, 'Protection')
 HubUI.Controls.AutoMixUseAntiReach = CreateCheckbox(
-AutoMixControlGroup, 315, 'Use Anti Reach while active', CONFIG.AutoMixUseAntiReach,
+AutoMixControlGroup, 375, 'Use Anti Reach while active', CONFIG.AutoMixUseAntiReach,
 function(Value)
 CONFIG.AutoMixUseAntiReach = Value
 if State.AutoMix.Enabled then
@@ -29823,17 +30955,17 @@ end
 end
 )
 HubUI.Controls.AutoMixMoveVariety = CreateCheckbox(
-AutoMixControlGroup, 345, 'Allow safe move variety', CONFIG.AutoMixMoveVariety,
+AutoMixControlGroup, 405, 'Allow safe move variety', CONFIG.AutoMixMoveVariety,
 function(Value) CONFIG.AutoMixMoveVariety = Value end
 )
 
-CreateSectionHeader(AutoMixControlGroup, 377, 'Intelligence')
+CreateSectionHeader(AutoMixControlGroup, 437, 'Intelligence')
 HubUI.Controls.AutoMixPredictiveReach = CreateCheckbox(
-AutoMixControlGroup, 397, 'Predict incoming swipes', CONFIG.AutoMixPredictiveReach,
+AutoMixControlGroup, 517, 'Predict incoming swipes', CONFIG.AutoMixPredictiveReach,
 function(Value) CONFIG.AutoMixPredictiveReach = Value end
 )
 HubUI.Controls.AutoMixAdaptive = CreateCheckbox(
-AutoMixControlGroup, 427, 'Learn defender habits', CONFIG.AutoMixAdaptive,
+AutoMixControlGroup, 487, 'Learn defender habits', CONFIG.AutoMixAdaptive,
 function(Value)
 CONFIG.AutoMixAdaptive = Value
 if not Value then
@@ -32294,6 +33426,7 @@ CONFIG.AutoBodyAdaptiveSmoothing },
 { HubUI.Controls.AutoMix, State.AutoMix.Enabled },
 { HubUI.Controls.AutoMixMovement, CONFIG.AutoMixMovement },
 { HubUI.Controls.AutoMixRotateSpins, CONFIG.AutoMixRotateSpins },
+{ HubUI.Controls.AutoMixManualHandles, CONFIG.AutoMixManualHandles ~= false },
 { HubUI.Controls.AutoMixUseAntiReach, CONFIG.AutoMixUseAntiReach },
 { HubUI.Controls.AutoMixMoveVariety, CONFIG.AutoMixMoveVariety },
 { HubUI.Controls.AutoMixBodyFirst, CONFIG.AutoMixBodyFirst },
@@ -32312,6 +33445,23 @@ CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.MatchArcAngle, CONFIG.MatchArcAngle },
 { HubUI.Controls.TrickshotRotationMode, CONFIG.TrickshotEnabled and (CONFIG.TrickshotRotationMode or 'Spin') or 'Off' },
 { HubUI.Controls.RandomTrickshotMode, CONFIG.RandomTrickshotMode == true },
+{ HubUI.Controls.SmartShotSelector, CONFIG.SmartShotSelector == true },
+{ HubUI.Controls.SmartShotAllowStepback, CONFIG.SmartShotAllowStepback ~= false },
+{ HubUI.Controls.SmartShotAllowFadeaway, CONFIG.SmartShotAllowFadeaway ~= false },
+{ HubUI.Controls.SmartShotAllowQuickStop, CONFIG.SmartShotAllowQuickStop ~= false },
+{ HubUI.Controls.SmartShotAllowTrickshot, CONFIG.SmartShotAllowTrickshot ~= false },
+{ HubUI.Controls.SmartShotAllowBank, CONFIG.SmartShotAllowBank ~= false },
+{ HubUI.Controls.AutoStepback, CONFIG.AutoStepback == true },
+{ HubUI.Controls.StepbackAllowFadeaway, CONFIG.StepbackAllowFadeaway ~= false },
+{ HubUI.Controls.StepbackAllowTrickshot, CONFIG.StepbackAllowTrickshot ~= false },
+{ HubUI.Controls.StepbackFaceRim, CONFIG.StepbackFaceRim ~= false },
+{ HubUI.Controls.StepbackAutoStopBefore, CONFIG.StepbackAutoStopBefore ~= false },
+{ HubUI.Controls.StepbackAutoStopAfter, CONFIG.StepbackAutoStopAfter ~= false },
+{ HubUI.Controls.StepbackManualCancel, CONFIG.StepbackManualCancel == true },
+{ HubUI.Controls.StepbackRequireDefender, CONFIG.StepbackRequireDefender == true },
+{ HubUI.Controls.StepbackCollisionCheck, CONFIG.StepbackCollisionCheck ~= false },
+{ HubUI.Controls.StepbackEdgeSafety, CONFIG.StepbackEdgeSafety ~= false },
+{ HubUI.Controls.StepbackVelocityAssist, CONFIG.StepbackVelocityAssist ~= false },
 { HubUI.Controls.AutoFadeaway, CONFIG.AutoFadeaway == true },
 { HubUI.Controls.AutoStop, CONFIG.AutoStop == true },
 { HubUI.Controls.AutoEBL, CONFIG.AutoEBL == true },
@@ -32342,6 +33492,11 @@ CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.LogoTester, State.LocalLogos.Tester },
 { HubUI.Controls.LogoStaff, State.LocalLogos.Staff },
 { HubUI.Controls.WalkSpeed, State.Movement.WalkSpeedEnabled },
+{ HubUI.Controls.InstantDirectionSwitch, CONFIG.InstantDirectionSwitch == true },
+{ HubUI.Controls.OOBGuard, CONFIG.OOBGuard == true },
+{ HubUI.Controls.SprintKeyEnabled, CONFIG.SprintKeyEnabled == true },
+{ HubUI.Controls.SlowKeyEnabled, CONFIG.SlowKeyEnabled == true },
+{ HubUI.Controls.IcePhysics, CONFIG.IcePhysics == true },
 { HubUI.Controls.SpeedProfiles, CONFIG.SpeedProfiles },
 { HubUI.Controls.InfiniteJump, State.Movement.InfiniteJumpEnabled },
 { HubUI.Controls.JumpPower, State.Movement.JumpPowerEnabled },
@@ -32361,6 +33516,17 @@ CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.AntiFall, State.AntiFallEnabled },
 { HubUI.Controls.Desync, State.Desync.Enabled },
 { HubUI.Controls.DesyncVisualizer, State.DesyncVisualizer.Enabled },
+{ HubUI.Controls.ESPEnabled, CONFIG.ESPEnabled == true },
+{ HubUI.Controls.ESPTeamCheck, CONFIG.ESPTeamCheck ~= false },
+{ HubUI.Controls.ESPShowName, CONFIG.ESPShowName ~= false },
+{ HubUI.Controls.ESPShowDistance, CONFIG.ESPShowDistance ~= false },
+{ HubUI.Controls.ESPShowHealth, CONFIG.ESPShowHealth ~= false },
+{ HubUI.Controls.ESPShowRank, CONFIG.ESPShowRank ~= false },
+{ HubUI.Controls.ESPShowRecord, CONFIG.ESPShowRecord ~= false },
+{ HubUI.Controls.ESPShowHighlight, CONFIG.ESPShowHighlight == true },
+{ HubUI.Controls.ESPSkeleton, CONFIG.ESPSkeleton == true },
+{ HubUI.Controls.ESPHOFBeams, CONFIG.ESPHOFBeams == true },
+{ HubUI.Controls.ESPHighestELOTracer, CONFIG.ESPHighestELOTracer == true },
 { HubUI.Controls.Outline, State.Outline.Enabled },
 }
 for _, Data in ipairs(SyncValues) do
@@ -32385,13 +33551,25 @@ State.AutoGetOpen.NormalizeSpot(CONFIG.AutoGetOpenPreferredSpot) },
 { HubUI.Controls.SilentMode, CONFIG.SilentMode },
 { HubUI.Controls.AimMode, CONFIG.AimMode },
 { HubUI.Controls.FadeawayDirection, CONFIG.FadeawayDirection },
+{ HubUI.Controls.SmartShotStrategy, CONFIG.SmartShotStrategy },
+{ HubUI.Controls.SmartShotOpenBehavior, CONFIG.SmartShotOpenBehavior },
+{ HubUI.Controls.SmartShotAirborneReaction, CONFIG.SmartShotAirborneReaction },
+{ HubUI.Controls.StepbackActivation, CONFIG.StepbackActivation },
+{ HubUI.Controls.StepbackDirection, CONFIG.StepbackDirection },
+{ HubUI.Controls.StepbackEasing, CONFIG.StepbackEasing },
 { HubUI.Controls.OutlineMode, State.Outline.Mode },
 }
 for _, Data in ipairs(SelectValues) do
 if Data[1] and Data[1].Value ~= Data[2] then Data[1]:Set(Data[2], false) end
 end
 local NumberValues = {
+{ HubUI.Controls.ESPMaxDistance, CONFIG.ESPMaxDistance },
+{ HubUI.Controls.ESPTopELOCount, CONFIG.ESPTopELOCount },
+{ HubUI.Controls.ESPScale, CONFIG.ESPScale },
 { HubUI.Controls.WalkSpeedValue, State.Movement.WalkSpeedValue },
+{ HubUI.Controls.SprintSpeed, CONFIG.SprintSpeed },
+{ HubUI.Controls.SlowSpeed, CONFIG.SlowSpeed },
+{ HubUI.Controls.IceGlide, CONFIG.IceGlide },
 { HubUI.Controls.OutOfMatchSpeed, CONFIG.OutOfMatchSpeed },
 { HubUI.Controls.JumpPowerValue, State.Movement.JumpPowerValue },
 { HubUI.Controls.FlightSpeed, State.Movement.FlightSpeed },
@@ -32418,6 +33596,7 @@ CONFIG.AntiReachCounterRadius },
 { HubUI.Controls.AutoBodyHandRevertDeadzone,
 CONFIG.AutoBodyHandRevertDeadzone },
 { HubUI.Controls.AutoMixRange, CONFIG.AutoMixRange },
+{ HubUI.Controls.AutoMixSpinDegrees, CONFIG.AutoMixSpinDegrees },
 { HubUI.Controls.AutoMixDecisionHold, CONFIG.AutoMixDecisionHold },
 { HubUI.Controls.AutoMixPostMoveCooldown, CONFIG.AutoMixPostMoveCooldown },
 { HubUI.Controls.AutoMixEmergencyDistance, CONFIG.AutoMixEmergencyDistance },
@@ -32435,6 +33614,20 @@ CONFIG.AutoBodyHandRevertDeadzone },
 { HubUI.Controls.TrickshotAngle, CONFIG.TrickshotAngle },
 { HubUI.Controls.TrickshotDuration, CONFIG.TrickshotDuration },
 { HubUI.Controls.FadeawayDistance, CONFIG.FadeawayDistance },
+{ HubUI.Controls.SmartShotCloseDistance, CONFIG.SmartShotCloseDistance },
+{ HubUI.Controls.SmartShotPressureDistance, CONFIG.SmartShotPressureDistance },
+{ HubUI.Controls.SmartShotOpenDistance, CONFIG.SmartShotOpenDistance },
+{ HubUI.Controls.SmartShotRushSpeed, CONFIG.SmartShotRushSpeed },
+{ HubUI.Controls.StepbackDistance, CONFIG.StepbackDistance },
+{ HubUI.Controls.StepbackDuration, CONFIG.StepbackDuration },
+{ HubUI.Controls.StepbackWalkSpeed, CONFIG.StepbackWalkSpeed },
+{ HubUI.Controls.StepbackJumpDelay, CONFIG.StepbackJumpDelay },
+{ HubUI.Controls.StepbackDelay, CONFIG.StepbackDelay },
+{ HubUI.Controls.StepbackCooldown, CONFIG.StepbackCooldown },
+{ HubUI.Controls.StepbackRandomVariance, CONFIG.StepbackRandomVariance },
+{ HubUI.Controls.StepbackRandomChance, CONFIG.StepbackRandomChance },
+{ HubUI.Controls.StepbackDefenderRange, CONFIG.StepbackDefenderRange },
+{ HubUI.Controls.StepbackEdgeMargin, CONFIG.StepbackEdgeMargin },
 }
 for _, Data in ipairs(NumberValues) do
 if Data[1] and Data[1].Value ~= Data[2] then Data[1]:Set(Data[2], false) end
@@ -32743,7 +33936,9 @@ GuardStyle = 'How tightly the auto guard presses. Tight denies drives, soft prot
 AutoOffense = 'Offensive autopilot. Drives, spaces, and takes shots automatically.',
 OffenseStyle = 'Shot selection profile the offense autopilot uses.',
 OffenseManualOverride = 'Your own inputs instantly take control back from the offense autopilot.',
-AutoMix = 'Blended autopilot that chains dribble moves based on how defenders react.',
+AutoMix = 'Manual-first mixer: Auto Body stays active while your real F/G inputs perform the handles and spins.',
+AutoMixManualHandles = 'Keeps every handle manual. F and G pass through to Hoopz normally while Silver Surfer rotates your character.',
+AutoMixSpinDegrees = 'Character rotation applied when you manually press F or G.',
 AutoMixMode = 'Overall aggression profile for the auto mixer.',
 AutoBody = 'Automatic body positioning to seal defenders and win driving space.',
 AutoBodyMode = 'Positioning style the auto body system uses.',
@@ -33750,6 +34945,7 @@ table.clear(HubUI.ThemeBindings)
 table.clear(HubUI.FontBindings)
 end
 
+function HubUI.BindGenericButtonPressAnimations()
 for _, Object in ipairs(Main:GetDescendants()) do
 if Object:IsA('TextButton') and Object.Text ~= '' and Object.Size.X.Offset > 0 and Object.Size.Y.Offset > 0 then
 local ExistingScale = Object:FindFirstChildOfClass('UIScale')
@@ -33768,6 +34964,8 @@ end
 end))
 end
 end
+end
+HubUI.BindGenericButtonPressAnimations()
 
 local CloseButtonScale = New('UIScale', { Scale = 1 }, CloseButton)
 local UnloadButtonScale = New('UIScale', { Scale = 1 }, HubUI.UnloadButton)
@@ -34215,6 +35413,24 @@ State.AutoMix.MovementStatus or 'IDLE',
 State.AutoMix.BlendPercent or 0,
 State.AutoMix.SessionSummary or '--'
 )
+end
+if HubUI.SmartShotStatusText then
+HubUI.SmartShotStatusText.Text=string.format('STATUS  %s\nDECISION %s\nREASON %s\nDEFENDER %s\nDISTANCE %s\nCLOSING %.1f\nSIDE %s',CONFIG.SmartShotSelector and (State.SmartShot.Status or 'READY') or 'OFF',State.SmartShot.Decision or 'NORMAL',State.SmartShot.Reason or '--',State.SmartShot.Defender and ('@'..State.SmartShot.Defender.Name) or '--',State.SmartShot.Distance<math.huge and string.format('%.1f',State.SmartShot.Distance) or '--',State.SmartShot.ClosingSpeed or 0,State.SmartShot.Side or 'CENTER')
+end
+if HubUI.StepbackStatusText then
+local Cooldown = math.clamp(tonumber(CONFIG.StepbackCooldown) or 0.65, 0, 4)
+local Remaining = math.max(0, Cooldown - (os.clock() - (State.Stepback.LastStartedAt or 0)))
+HubUI.StepbackStatusText.Text = string.format(
+'STATUS    %s  [%s]\nDIRECTION %s\nDISTANCE  %.1f / %.1f\nDEFENDER  %s  %s\nCOOLDOWN  %.2f SEC',
+CONFIG.AutoStepback and (State.Stepback.Status or 'READY') or 'OFF',
+State.Stepback.JumpPhase or 'READY',
+State.Stepback.LastDirection or '--',
+State.Stepback.LastDistance or 0,
+State.Stepback.LastRequestedDistance or 0,
+State.Stepback.LastDefender and ('@' .. State.Stepback.LastDefender.Name) or '--',
+State.Stepback.LastDefenderDistance < math.huge
+and string.format('%.1f', State.Stepback.LastDefenderDistance) or '--',
+Remaining)
 end
 if HubUI.HumanizeStatusText then
 HubUI.HumanizeStatusText.Text = string.format(
@@ -35368,10 +36584,13 @@ pcall(function() State.Utility.SetStreamerMode(false) end)
 pcall(function() State.Extras.SetSpinbot(false) end)
 pcall(function() State.Trickshot.CancelSpin('OFF') end)
 pcall(function() State.Trickshot.CancelShotMovement('OFF') end)
+pcall(function() State.SmartShot.Restore('OFF') end)
+pcall(function() State.Stepback.Cancel('OFF') end)
 pcall(function() State.Trickshot.ResetAutoEBL('OFF') end)
 pcall(function() State.AutoMix.SetEnabled(false) end)
 pcall(function() State.Desync.SetEnabled(false) end)
 pcall(function() State.DesyncVisualizer.SetEnabled(false) end)
+pcall(function() State.ESP.SetEnabled(false) end)
 pcall(function() State.Outline.SetEnabled(false) end)
 pcall(function() State.Extras.SetAnklesReach(false) end)
 pcall(function() State.Extras.SetLocalUnlock(false) end)
@@ -35403,7 +36622,7 @@ pcall(function() State.Movement.SetFlight(false) end)
 pcall(function() State.Movement.SetAirWalk(false) end)
 pcall(function() State.Movement.SetNoclip(false) end)
 pcall(function() State.Movement.SetJumpPower(false) end)
-pcall(function() State.Movement.SetWalkSpeed(false) end)
+pcall(function() local _,H=State.Movement.GetRig(); State.Movement.RestoreTransientSpeed(H); State.Movement.SetWalkSpeed(false) end)
 pcall(function() State.Movement.SetInfiniteJump(false) end)
 pcall(function() State.BallAssist.SetReach(false) end)
 pcall(function() State.BallAssist.SetAntiReach(false) end)
