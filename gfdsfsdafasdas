@@ -10096,6 +10096,7 @@ end
 
 State.Extras = {
 SpinbotEnabled = CONFIG.Spinbot,
+SpinbotSpeed = math.clamp(tonumber(CONFIG.SpinbotSpeed) or 180, 0, 1440),
 AnklesReachEnabled = CONFIG.AnklesReach,
 LastAnklesTouch = 0,
 LocalUnlockEnabled = false,
@@ -10122,7 +10123,7 @@ local Character = LP.Character
 local Root = Character and safe_find(Character, 'HumanoidRootPart')
 local HumanoidObject = Character and Character:FindFirstChildOfClass('Humanoid')
 if State.Extras.SpinbotEnabled and Root and HumanoidObject and HumanoidObject.Health > 0 then
-Root.CFrame = Root.CFrame * CFrame.Angles(0, math.rad(CONFIG.SpinbotSpeed * DeltaTime), 0)
+Root.CFrame = Root.CFrame * CFrame.Angles(0, math.rad(State.Extras.SpinbotSpeed * DeltaTime), 0)
 end
 if not (State.Extras.AnklesReachEnabled and Root and type(firetouchinterest) == 'function') then return end
 local Now = os.clock()
@@ -10145,6 +10146,12 @@ end
 function State.Extras.SetSpinbot(Enabled)
 State.Extras.SpinbotEnabled = Enabled == true
 CONFIG.Spinbot = State.Extras.SpinbotEnabled
+end
+
+function State.Extras.SetSpinbotSpeed(Value)
+Value = math.clamp(tonumber(Value) or 180, 0, 1440)
+State.Extras.SpinbotSpeed = Value
+CONFIG.SpinbotSpeed = Value
 end
 
 function State.Extras.SetAnklesReach(Enabled)
@@ -29577,10 +29584,18 @@ HubUI.Controls.AnklesReach = CreateCheckbox(
 BallReachGroup, 375, 'Ankles Reach', State.Extras.AnklesReachEnabled,
 function(Value) State.Extras.SetAnklesReach(Value) end
 )
+HubUI.Controls.Spinbot = CreateCheckbox(
+BallReachGroup, 405, 'Spinbot', State.Extras.SpinbotEnabled,
+function(Value) State.Extras.SetSpinbot(Value) end
+)
+HubUI.Controls.SpinbotSpeed = CreateNumberInput(
+BallReachGroup, 435, 'Spin speed (deg/s)', State.Extras.SpinbotSpeed, 0, 1440, 0,
+function(Value) State.Extras.SetSpinbotSpeed(Value) end
+)
 
-CreateSectionHeader(BallReachGroup, 407, 'Live status')
+CreateSectionHeader(BallReachGroup, 467, 'Live status')
 HubUI.AntiReachStatusText = CreateParagraph(
-BallReachGroup, UDim2.fromOffset(8, 427), UDim2.new(1, -16, 0, 74),
+BallReachGroup, UDim2.fromOffset(8, 487), UDim2.new(1, -16, 0, 74),
 'STATUS    --\nNOSTEAL   --\nTHIEF     --\nCOUNTERS  0\nRECOVERED 0'
 )
 
@@ -34660,6 +34675,7 @@ local NumberValues = {
 { HubUI.Controls.ESPTopELOCount, CONFIG.ESPTopELOCount },
 { HubUI.Controls.ESPScale, CONFIG.ESPScale },
 { HubUI.Controls.WalkSpeedValue, State.Movement.WalkSpeedValue },
+{ HubUI.Controls.SpinbotSpeed, State.Extras.SpinbotSpeed },
 { HubUI.Controls.SprintSpeed, CONFIG.SprintSpeed },
 { HubUI.Controls.SlowSpeed, CONFIG.SlowSpeed },
 { HubUI.Controls.IceGlide, CONFIG.IceGlide },
@@ -34991,6 +35007,7 @@ AnklesReach = 'Extended reach for ankle-breaker interactions. Pairs with Ball Re
 AntiReach = 'Blocks reach-extended steal attempts against you. Recommended: ON.',
 AntiReachNoStealKeeper = 'Keeps the no-steal window active while you protect the ball.',
 Spinbot = 'Spins your character so ankle animations whiff. Extremely visible. Rage lobbies only.',
+SpinbotSpeed = 'Controls spinbot rotation speed in degrees per second. Set to 0 to pause rotation without turning spinbot off.',
 WalkSpeed = 'Overrides movement speed. Values above 20 are easy to spot in replays. Default game speed: 16.',
 InfiniteJump = 'Jump again in mid-air. Very visible. Rage lobbies only.',
 JumpPower = 'Overrides jump height. Subtle below 55, obvious above 65.',
