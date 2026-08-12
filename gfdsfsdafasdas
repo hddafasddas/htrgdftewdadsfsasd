@@ -218,6 +218,7 @@ IceAcceleration = 4.5,
 IceTurnGrip = 3.25,
 IceAirMomentum = true,
 IceGlide = 0.994,
+FakeLagMode = 'Off',
 InfiniteJump = false,
 InfiniteJumpMethod = 'JumpRequest',
 JumpPower = false,
@@ -1036,6 +1037,8 @@ NamedTasks = {},
 RenderBindings = {},
 Instances = {},
 Cleanups = {},
+LastPruneAt = 0,
+PruneInterval = 2,
 }
 
 function State.Lifecycle:GiveConnection(Connection, Name)
@@ -1078,6 +1081,28 @@ end
 function State.Lifecycle:DisconnectNamed(Name)
 local Connection = self.NamedConnections[Name]
 if Connection then self:DisconnectConnection(Connection) end
+end
+
+function State.Lifecycle:Prune(Force)
+if not self.Alive then return end
+local Now = os.clock()
+if not Force and Now - (self.LastPruneAt or 0) < (self.PruneInterval or 2) then return end
+self.LastPruneAt = Now
+for Connection in pairs(self.Connections) do
+local Connected
+local ReadOk = pcall(function() Connected = Connection.Connected end)
+if ReadOk and Connected == false then
+self.Connections[Connection] = nil
+for Name, Value in pairs(self.NamedConnections) do
+if Value == Connection then self.NamedConnections[Name] = nil end
+end
+end
+end
+for Thread in pairs(self.Tasks) do
+local Status
+local ReadOk = pcall(function() Status = coroutine.status(Thread) end)
+if ReadOk and Status == 'dead' then self:ForgetTask(Thread) end
+end
 end
 
 function State.Lifecycle:ForgetTask(Thread)
@@ -1228,6 +1253,7 @@ for Object in pairs(self.Instances) do
 pcall(function() Object:Destroy() end)
 end
 table.clear(self.Instances)
+self.LastPruneAt = 0
 end
 
 State.ClientSettings = {
@@ -1353,6 +1379,29 @@ IceOriginalWalkSpeed = nil,
 IceCharacter = nil,
 IceOriginalProperties = setmetatable({}, { __mode = 'k' }),
 IceJumpQueuedUntil = 0,
+FakeLagMode = CONFIG.FakeLagMode or 'Off',
+FakeLagBuffer = 0,
+FakeLagNextPulseAt = 0,
+FakeLagLastPosition = nil,
+FakeLagBlockedUntil = 0,
+FakeLagStatus = (CONFIG.FakeLagMode and CONFIG.FakeLagMode ~= 'Off') and 'ARMED' or 'OFF',
+FakeLagPulses = 0,
+FakeLagBackend = 'UNRESOLVED',
+FakeLagPhase = 'IDLE',
+FakeLagPhaseUntil = 0,
+FakeLagSetHidden = nil,
+FakeLagGetHidden = nil,
+FakeLagSleepRoot = nil,
+FakeLagSleepOriginal = false,
+FakeLagSleeping = false,
+FakeLagSetFlag = nil,
+FakeLagGetFlag = nil,
+FakeLagFlagName = nil,
+FakeLagFlagOriginal = nil,
+FakeLagFlagApplied = false,
+FakeLagHoldPosition = nil,
+FakeLagHoldDirection = nil,
+FakeLagBackendNotified = nil,
 }
 
 function State.Movement.GetRig()
@@ -1360,6 +1409,7 @@ local Character = LP.Character
 local HumanoidObject = Character and safe_find(Character, 'Humanoid')
 local Root = Character and safe_find(Character, 'HumanoidRootPart')
 if HumanoidObject ~= State.Movement.TrackedHumanoid then
+if State.Movement.ResetFakeLag then State.Movement.ResetFakeLag('RESPAWN') end
 for Object, Original in pairs(State.Movement.NoclipOriginals) do
 if Object and Object.Parent then pcall(function() Object.CanCollide = Original end) end
 end
@@ -1424,6 +1474,355 @@ end
 State.Movement.MatchCached = InMatch
 return InMatch
 end
+
+State.Movement.FakeLagProfiles = {
+Subtle = {
+ExtraSpeed = 2.25, ChokeTime = 0.11, ReleaseTime = 0.075,
+Jitter = 0.18, MaxPulse = 0.55, FallbackMaxPulse = 2.8,
+},
+Balanced = {
+ExtraSpeed = 4.00, ChokeTime = 0.17, ReleaseTime = 0.060,
+Jitter = 0.24, MaxPulse = 0.90, FallbackMaxPulse = 4.5,
+},
+Aggressive = {
+ExtraSpeed = 6.25, ChokeTime = 0.24, ReleaseTime = 0.045,
+Jitter = 0.30, MaxPulse = 1.35, FallbackMaxPulse = 6.5,
+},
+}
+
+function State.Movement.SetFakeLagNetworkChoke(Enabled, RestoreOriginal)
+local Backend = State.Movement.FakeLagBackend
+if Backend == 'NETWORK SLEEP' then
+local Setter = State.Movement.FakeLagSetHidden
+local Root = State.Movement.FakeLagSleepRoot
+if type(Setter) ~= 'function' or not (Root and Root.Parent) then return false end
+if Enabled and State.Movement.FakeLagSleeping then return true end
+local Desired = Enabled and true
+or (RestoreOriginal and State.Movement.FakeLagSleepOriginal == true or false)
+local Success = pcall(Setter, Root, 'NetworkIsSleeping', Desired)
+if not Success then
+if Enabled then
+State.Movement.FakeLagSleeping = false
+State.Movement.FakeLagBackend = 'LOCAL CHOKE'
+end
+return false
+end
+State.Movement.FakeLagSleeping = Enabled == true
+return true
+end
+if Backend == 'PHYSICS SENDER' then
+local Setter = State.Movement.FakeLagSetFlag
+local Name = State.Movement.FakeLagFlagName
+if type(Setter) ~= 'function' or not Name then return false end
+if Enabled and State.Movement.FakeLagFlagApplied then return true end
+local Value = Enabled and '1' or tostring(State.Movement.FakeLagFlagOriginal or '15')
+local Success = pcall(Setter, Name, Value)
+if not Success then
+if Enabled then
+State.Movement.FakeLagFlagApplied = false
+State.Movement.FakeLagBackend = 'LOCAL CHOKE'
+end
+return false
+end
+State.Movement.FakeLagFlagApplied = Enabled == true
+return true
+end
+return Backend == 'LOCAL CHOKE'
+end
+
+function State.Movement.RestoreFakeLagNetwork(ClearBackend)
+local Backend = State.Movement.FakeLagBackend
+local Restored = State.Movement.SetFakeLagNetworkChoke(false, true)
+if not Restored and Backend == 'NETWORK SLEEP' then
+local Setter = State.Movement.FakeLagSetHidden
+local Root = State.Movement.FakeLagSleepRoot
+if type(Setter) == 'function' and Root then
+for _ = 1, 3 do
+if pcall(Setter, Root, 'NetworkIsSleeping', State.Movement.FakeLagSleepOriginal == true) then break end
+end
+end
+elseif not Restored and Backend == 'PHYSICS SENDER' then
+local Setter = State.Movement.FakeLagSetFlag
+local Name = State.Movement.FakeLagFlagName
+if type(Setter) == 'function' and Name then
+for _ = 1, 3 do
+if pcall(Setter, Name, tostring(State.Movement.FakeLagFlagOriginal or '15')) then break end
+end
+end
+end
+State.Movement.FakeLagSleeping = false
+State.Movement.FakeLagFlagApplied = false
+State.Movement.FakeLagSleepRoot = nil
+State.Movement.FakeLagSleepOriginal = false
+if ClearBackend then
+State.Movement.FakeLagBackend = 'UNRESOLVED'
+State.Movement.FakeLagSetHidden = nil
+State.Movement.FakeLagGetHidden = nil
+State.Movement.FakeLagSetFlag = nil
+State.Movement.FakeLagGetFlag = nil
+State.Movement.FakeLagFlagName = nil
+State.Movement.FakeLagFlagOriginal = nil
+State.Movement.FakeLagBackendNotified = nil
+end
+end
+
+function State.Movement.ResetFakeLag(Status, ClearBackend)
+State.Movement.RestoreFakeLagNetwork(ClearBackend == true)
+State.Movement.FakeLagBuffer = 0
+State.Movement.FakeLagNextPulseAt = 0
+State.Movement.FakeLagLastPosition = nil
+State.Movement.FakeLagBlockedUntil = 0
+State.Movement.FakeLagPhase = 'IDLE'
+State.Movement.FakeLagPhaseUntil = 0
+State.Movement.FakeLagHoldPosition = nil
+State.Movement.FakeLagHoldDirection = nil
+State.Movement.FakeLagStatus = Status
+or (State.Movement.FakeLagMode == 'Off' and 'OFF' or 'READY')
+end
+
+function State.Movement.SetFakeLagMode(Name)
+Name = tostring(Name or 'Off')
+if Name ~= 'Off' and not State.Movement.FakeLagProfiles[Name] then Name = 'Off' end
+State.Movement.ResetFakeLag(Name == 'Off' and 'OFF' or (string.upper(Name) .. ' READY'), true)
+State.Movement.FakeLagMode = Name
+CONFIG.FakeLagMode = Name
+end
+
+function State.Movement.ResolveFakeLagBackend(Root)
+local Backend = State.Movement.FakeLagBackend
+if Backend == 'NETWORK SLEEP' and type(State.Movement.FakeLagSetHidden) == 'function' then
+if State.Movement.FakeLagSleepRoot ~= Root then
+State.Movement.SetFakeLagNetworkChoke(false, true)
+State.Movement.FakeLagSleepRoot = Root
+State.Movement.FakeLagSleepOriginal = false
+local Getter = State.Movement.FakeLagGetHidden
+if type(Getter) == 'function' then
+local ReadOk, Original = pcall(Getter, Root, 'NetworkIsSleeping')
+if ReadOk then State.Movement.FakeLagSleepOriginal = Original == true end
+end
+end
+return Backend
+end
+if Backend == 'PHYSICS SENDER'
+and type(State.Movement.FakeLagSetFlag) == 'function'
+and State.Movement.FakeLagFlagName then return Backend end
+if Backend == 'LOCAL CHOKE' then return Backend end
+
+local SetHidden = rawget(GlobalEnv, 'sethiddenproperty')
+or rawget(GlobalEnv, 'sethiddenprop')
+local GetHidden = rawget(GlobalEnv, 'gethiddenproperty')
+or rawget(GlobalEnv, 'gethiddenprop')
+if type(SetHidden) == 'function' then
+local OriginalSleeping = false
+if type(GetHidden) == 'function' then
+local ReadOk, Original = pcall(GetHidden, Root, 'NetworkIsSleeping')
+if ReadOk then OriginalSleeping = Original == true end
+end
+local TestOk = pcall(SetHidden, Root, 'NetworkIsSleeping', false)
+if TestOk then
+State.Movement.FakeLagBackend = 'NETWORK SLEEP'
+State.Movement.FakeLagSetHidden = SetHidden
+State.Movement.FakeLagGetHidden = type(GetHidden) == 'function' and GetHidden or nil
+State.Movement.FakeLagSleepRoot = Root
+State.Movement.FakeLagSleepOriginal = OriginalSleeping
+return State.Movement.FakeLagBackend
+end
+end
+
+local SetFlag = rawget(GlobalEnv, 'setfflag')
+local GetFlag = rawget(GlobalEnv, 'getfflag')
+if type(SetFlag) == 'function' and type(GetFlag) == 'function' then
+for _, Name in ipairs({ 'S2PhysicsSenderRate', 'DFIntS2PhysicsSenderRate' }) do
+local ReadOk, Original = pcall(GetFlag, Name)
+if ReadOk and Original ~= nil then
+local TestOk = pcall(SetFlag, Name, tostring(Original))
+if TestOk then
+State.Movement.FakeLagBackend = 'PHYSICS SENDER'
+State.Movement.FakeLagSetFlag = SetFlag
+State.Movement.FakeLagGetFlag = GetFlag
+State.Movement.FakeLagFlagName = Name
+State.Movement.FakeLagFlagOriginal = tostring(Original)
+return State.Movement.FakeLagBackend
+end
+end
+end
+end
+
+State.Movement.FakeLagBackend = 'LOCAL CHOKE'
+return State.Movement.FakeLagBackend
+end
+
+function State.Movement.NotifyFakeLagBackend()
+local Backend = State.Movement.FakeLagBackend
+if State.Movement.FakeLagBackendNotified == Backend then return end
+State.Movement.FakeLagBackendNotified = Backend
+local Toast = rawget(GlobalEnv, '__GEH_TOAST')
+if type(Toast) ~= 'function' then return end
+local Message
+if Backend == 'NETWORK SLEEP' then
+Message = 'Outgoing physics choke: NetworkIsSleeping'
+elseif Backend == 'PHYSICS SENDER' then
+Message = 'Outgoing physics choke: S2PhysicsSenderRate'
+else
+Message = 'Executor lacks network controls; using visible pause/jump fallback'
+end
+pcall(Toast, 'FAKE LAG', Message)
+end
+
+function State.Movement.ReleaseFakeLagPulse(Character, Root, Direction, RequestedDistance)
+local ReleaseDistance = math.max(tonumber(RequestedDistance) or 0, 0)
+if ReleaseDistance < 0.025 then return 0, 'EMPTY' end
+local Params = RaycastParams.new()
+Params.FilterType = Enum.RaycastFilterType.Exclude
+Params.FilterDescendantsInstances = { Character }
+pcall(function() Params.RespectCanCollide = true end)
+local WallResult = Workspace:Raycast(
+Root.Position + Vector3.new(0, 0.25, 0),
+Direction * (ReleaseDistance + 0.55), Params)
+if WallResult then
+ReleaseDistance = math.min(ReleaseDistance, math.max(WallResult.Distance - 0.55, 0))
+end
+if ReleaseDistance < 0.025 then return 0, 'BLOCKED' end
+local Destination = Root.Position + Direction * ReleaseDistance
+local FloorResult = Workspace:Raycast(
+Destination + Vector3.new(0, 2, 0), Vector3.new(0, -8, 0), Params)
+if not FloorResult then return 0, 'EDGE HOLD' end
+local Success = pcall(function()
+Root.CFrame = Root.CFrame + Direction * ReleaseDistance
+end)
+return Success and ReleaseDistance or 0, Success and 'RELEASED' or 'FAILED'
+end
+
+function State.Movement.ApplyFakeLag(DeltaTime)
+local Mode = State.Movement.FakeLagMode or 'Off'
+local Profile = State.Movement.FakeLagProfiles[Mode]
+if not Profile then
+if State.Movement.FakeLagPhase ~= 'IDLE' then State.Movement.ResetFakeLag('OFF', true) end
+return
+end
+local Now = os.clock()
+if Now < (State.Movement.FakeLagBlockedUntil or 0) then return end
+if State.Movement.FlightEnabled or State.Movement.AirWalkEnabled or CONFIG.IcePhysics
+or (State.Stepback and State.Stepback.Active)
+or (State.Runtime and State.Runtime.MovementOwner
+and Now < (State.Runtime.MovementLeaseUntil or 0)) then
+if State.Movement.FakeLagPhase ~= 'IDLE' then State.Movement.ResetFakeLag('PAUSED', false) end
+return
+end
+local Character, HumanoidObject, Root = State.Movement.GetRig()
+if not (Character and HumanoidObject and Root) or HumanoidObject.Health <= 0
+or Root.Anchored or HumanoidObject.Sit
+or HumanoidObject.FloorMaterial == Enum.Material.Air then
+if State.Movement.FakeLagPhase ~= 'IDLE' then
+State.Movement.ResetFakeLag('WAITING FOR GROUND', false)
+end
+return
+end
+local Position = Root.Position
+local LastPosition = State.Movement.FakeLagLastPosition
+if LastPosition and (Position - LastPosition).Magnitude > 8 then
+State.Movement.ResetFakeLag('TELEPORT RESET', false)
+State.Movement.FakeLagLastPosition = Position
+State.Movement.FakeLagBlockedUntil = Now + 0.20
+return
+end
+State.Movement.FakeLagLastPosition = Position
+local RawDirection = HumanoidObject.MoveDirection
+local Direction = Vector3.new(RawDirection.X, 0, RawDirection.Z)
+if Direction.Magnitude > 0.001 then
+Direction = Direction.Unit
+State.Movement.FakeLagHoldDirection = Direction
+elseif State.Movement.FakeLagPhase == 'CHOKE'
+and typeof(State.Movement.FakeLagHoldDirection) == 'Vector3'
+and State.Movement.FakeLagHoldDirection.Magnitude > 0.001 then
+Direction = State.Movement.FakeLagHoldDirection.Unit
+else
+if State.Movement.FakeLagPhase ~= 'IDLE' then
+State.Movement.ResetFakeLag(string.upper(Mode) .. ' READY', false)
+end
+return
+end
+
+local Backend = State.Movement.ResolveFakeLagBackend(Root)
+State.Movement.NotifyFakeLagBackend()
+local DT = math.clamp(tonumber(DeltaTime) or (1 / 60), 0, 0.05)
+local Phase = State.Movement.FakeLagPhase
+if Phase ~= 'CHOKE' and Phase ~= 'RELEASE' then
+local Scale = 1 + (math.random() * 2 - 1) * Profile.Jitter
+State.Movement.FakeLagPhase = 'CHOKE'
+State.Movement.FakeLagPhaseUntil = Now + math.max(Profile.ChokeTime * Scale, 0.04)
+State.Movement.SetFakeLagNetworkChoke(true, false)
+if State.Movement.FakeLagBackend == 'LOCAL CHOKE' then
+State.Movement.FakeLagHoldPosition = Root.Position
+end
+Phase = 'CHOKE'
+end
+
+Backend = State.Movement.FakeLagBackend
+if Backend == 'LOCAL CHOKE' and Phase == 'CHOKE' then
+local BaseSpeed = State.Movement.WalkSpeedEnabled and State.Movement.WalkSpeedValue
+or HumanoidObject.WalkSpeed or 16
+if CONFIG.SpeedProfiles and not State.Movement.IsInMatch() then BaseSpeed = CONFIG.OutOfMatchSpeed end
+BaseSpeed = math.clamp(tonumber(BaseSpeed) or 16, 1, 250)
+State.Movement.FakeLagBuffer = math.min(
+(State.Movement.FakeLagBuffer or 0) + (BaseSpeed + Profile.ExtraSpeed) * DT,
+Profile.FallbackMaxPulse)
+local Hold = State.Movement.FakeLagHoldPosition or Root.Position
+State.Movement.FakeLagHoldPosition = Hold
+local Rotation = Root.CFrame - Root.Position
+local Velocity = Root.AssemblyLinearVelocity
+pcall(function()
+Root.CFrame = CFrame.new(Hold.X, Root.Position.Y, Hold.Z) * Rotation
+Root.AssemblyLinearVelocity = Vector3.new(0, Velocity.Y, 0)
+end)
+else
+State.Movement.FakeLagBuffer = math.min(
+(State.Movement.FakeLagBuffer or 0) + Profile.ExtraSpeed * DT,
+Profile.MaxPulse * 1.5)
+if Phase == 'CHOKE' then State.Movement.SetFakeLagNetworkChoke(true, false) end
+end
+
+if Phase == 'CHOKE' then
+State.Movement.FakeLagStatus = string.format('%s | CHOKE | %s',
+string.upper(Mode), State.Movement.FakeLagBackend)
+if Now < (State.Movement.FakeLagPhaseUntil or 0) then return end
+State.Movement.SetFakeLagNetworkChoke(false, false)
+local MaxPulse = State.Movement.FakeLagBackend == 'LOCAL CHOKE'
+and Profile.FallbackMaxPulse or Profile.MaxPulse
+local Requested = math.min(State.Movement.FakeLagBuffer or 0, MaxPulse)
+local Moved, Result = State.Movement.ReleaseFakeLagPulse(
+Character, Root, Direction, Requested)
+if Moved > 0 then
+State.Movement.FakeLagBuffer = math.max(0, (State.Movement.FakeLagBuffer or 0) - Moved)
+State.Movement.FakeLagPulses = (State.Movement.FakeLagPulses or 0) + 1
+State.Movement.FakeLagLastPosition = Root.Position
+else
+State.Movement.FakeLagBuffer = 0
+end
+State.Movement.FakeLagHoldPosition = nil
+State.Movement.FakeLagPhase = 'RELEASE'
+local Scale = 1 + (math.random() * 2 - 1) * Profile.Jitter
+State.Movement.FakeLagPhaseUntil = Now + math.max(Profile.ReleaseTime * Scale, 0.025)
+State.Movement.FakeLagStatus = string.format('%s | %s | +%.2f',
+string.upper(Mode), Result, Moved)
+return
+end
+
+State.Movement.SetFakeLagNetworkChoke(false, false)
+if Now >= (State.Movement.FakeLagPhaseUntil or 0) then
+local Scale = 1 + (math.random() * 2 - 1) * Profile.Jitter
+State.Movement.FakeLagPhase = 'CHOKE'
+State.Movement.FakeLagPhaseUntil = Now + math.max(Profile.ChokeTime * Scale, 0.04)
+State.Movement.SetFakeLagNetworkChoke(true, false)
+if State.Movement.FakeLagBackend == 'LOCAL CHOKE' then
+State.Movement.FakeLagHoldPosition = Root.Position
+end
+end
+end
+
+State.Lifecycle:AddCleanup(function()
+pcall(function() State.Movement.ResetFakeLag('OFF', true) end)
+end)
 
 function State.Movement.ApplyWalkSpeed(DeltaTime)
 if not State.Movement.WalkSpeedEnabled then return end
@@ -3461,8 +3860,10 @@ end)))
 
 GiveSignal(RunService.Heartbeat:Connect(WYNF_JIT(function(DeltaTime)
 if not State.Active then return end
+State.Lifecycle:Prune(false)
 if State.Movement.WalkSpeedEnabled and not CONFIG.IcePhysics then pcall(State.Movement.ApplyWalkSpeed, DeltaTime) end
 if State.Movement.AdvancedFeaturesEnabled() then pcall(State.Movement.ApplyGroundFeatures, DeltaTime) end
+if State.Movement.FakeLagMode ~= 'Off' then pcall(State.Movement.ApplyFakeLag, DeltaTime) end
 if State.Movement.JumpPowerEnabled then pcall(State.Movement.ApplyJumpPower) end
 if State.Movement.AirWalkEnabled then pcall(State.Movement.RefreshAirWalk) end
 if State.Movement.BodyCollidersEnabled
@@ -28699,6 +29100,13 @@ MovementCoreGroup, 465, 'Include your own body',
 State.Movement.BodyColliderIncludeSelf,
 function(Value) State.Movement.SetBodyColliderIncludeSelf(Value) end
 )
+HubUI.Controls.FakeLagMode = CreateSelector(
+MovementCoreGroup, 495, 'Fake Lag + Boost',
+{ 'Off', 'Subtle', 'Balanced', 'Aggressive' },
+State.Movement.FakeLagMode or 'Off',
+function(Value) State.Movement.SetFakeLagMode(Value) end,
+118
+)
 
 CreateSectionHeader(MovementFlightGroup, 11, 'Air movement')
 HubUI.Controls.Flight = CreateCheckbox(
@@ -33932,6 +34340,7 @@ State.AutoGetOpen.NormalizeSpot(CONFIG.AutoGetOpenPreferredSpot) },
 { HubUI.Controls.StepbackActivation, CONFIG.StepbackActivation },
 { HubUI.Controls.StepbackDirection, CONFIG.StepbackDirection },
 { HubUI.Controls.StepbackEasing, CONFIG.StepbackEasing },
+{ HubUI.Controls.FakeLagMode, State.Movement.FakeLagMode },
 { HubUI.Controls.OutlineMode, State.Outline.Mode },
 }
 for _, Data in ipairs(SelectValues) do
@@ -34337,6 +34746,7 @@ AntiReachCounterRadius = 'Radius where reach-steal attempts against you get coun
 AntiReachCounterWindow = 'Time window after a steal attempt where the counter stays active.',
 AntiReachNoStealRange = 'Range of the no-steal protection bubble.',
 WalkSpeedValue = 'Movement speed applied while the override is on. Game default is 16.',
+FakeLagMode = 'Alternates outgoing physics choke and release phases, then releases a capped speed pulse. Uses NetworkIsSleeping first, S2PhysicsSenderRate second, and a visible pause/jump fallback when the executor exposes neither API.',
 JumpPowerValue = 'Jump strength applied while the override is on. Game default is 50.',
 Freecam = 'Scriptable free camera. P toggles it; WASD flies, mouse looks, Space/E rises, Ctrl/Q descends, and Shift boosts.',
 FreecamSpeed = 'Independent camera movement speed.',
@@ -35339,6 +35749,11 @@ HubUI.ConfigApplying = false
 table.clear(HubUI.Accents)
 table.clear(HubUI.ThemeBindings)
 table.clear(HubUI.FontBindings)
+if HubUI.PrismBorders then table.clear(HubUI.PrismBorders) end
+if HubUI.ActiveToasts then table.clear(HubUI.ActiveToasts) end
+if HubUI.ActionCallbacks then table.clear(HubUI.ActionCallbacks) end
+if HubUI.TabButtons then table.clear(HubUI.TabButtons) end
+if HubUI.Controls then table.clear(HubUI.Controls) end
 end
 
 function HubUI.BindGenericButtonPressAnimations()
@@ -37013,6 +37428,7 @@ CONFIG.AutoHeadRide = false
 State.AutoHeadRide.Reset('OFF')
 end)
 pcall(function() State.Freecam.SetEnabled(false) end)
+pcall(function() State.Movement.SetFakeLagMode('Off') end)
 pcall(function() State.Movement.SetIcePhysics(false) end)
 pcall(function() State.Movement.SetFlight(false) end)
 pcall(function() State.Movement.SetAirWalk(false) end)
@@ -37113,6 +37529,14 @@ State.AutoMix.Animator, State.AutoMix.LastTrack = nil, nil
 LegitAimCameraController = nil
 LegitAimLandConnection = nil
 AimbotConn = nil
+if GlobalEnv.__GOLDEN_EAGLE_TRAVEL_RUNTIME == State then
+GlobalEnv.__GOLDEN_EAGLE_TRAVEL_RUNTIME = nil
+end
+GlobalEnv.__GEH_TOAST = nil
+if GlobalEnv.__HOOPZ_ARC_TABLE == ArcTable then
+GlobalEnv.__HOOPZ_ARC_TABLE = nil
+GlobalEnv.__HOOPZ_ARC_TABLE_VERSION = nil
+end
 table.clear(State.PassLabels)
 if HubUI.Destroy then HubUI.Destroy() end
 State.Lifecycle:Cleanup()
