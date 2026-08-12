@@ -95,19 +95,29 @@ LegitTweenAim = true,
 -- launch direction, but uses capped exponential easing so it still looks
 -- like a controlled human camera movement instead of a snap/camlock.
 LegitTweenAimSpeed = 0.09, -- legacy setting; retained for config compatibility
-LegitAimResponse = 14,
-LegitAimMaxDegreesPerSecond = 540,
--- Smooth S-curve duration for the initial formula-driven camera flick.
--- It accelerates, peaks mid-turn, then eases into the exact angle.
+LegitAimResponse = 9.5,
+LegitAimMaxDegreesPerSecond = 340,
+LegitAimAccelerationDegreesPerSecond = 980,
+LegitAimPitchSpeedScale = 0.78,
 LegitAimFlickTime = 0.28,
+LegitAimFlickMinTime = 0.18,
+LegitAimFlickMaxTime = 0.60,
+LegitAimFlickAngleDivisor = 420,
 LegitAimRampTime = 0.025,
-LegitAimManualInputScale = 0.22,
-LegitAimDeadzoneDegrees = 0.035,
-LegitAimFlickMaxDegreesPerSecond = 260,
-LegitAimReactionMin = 0.05,
-LegitAimReactionMax = 0.11,
-LegitAimSwayDegrees = 0.45,
-LegitAimSwaySpeed = 5.2,
+LegitAimManualInputScale = 0.42,
+LegitAimManualOwnershipTime = 0.14,
+LegitAimDeadzoneDegrees = 0.12,
+LegitAimFlickMaxDegreesPerSecond = 220,
+LegitAimReactionMin = 0.14,
+LegitAimReactionMax = 0.28,
+LegitAimSwayDegrees = 0.18,
+LegitAimSwaySpeed = 7,
+LegitAimCorrectionMin = 0.07,
+LegitAimCorrectionMax = 0.13,
+LegitAimOvershootChance = 12,
+LegitAimOvershootMinAngle = 8,
+LegitAimOvershootMinScale = 0.02,
+LegitAimOvershootMaxScale = 0.06,
 LegitTweenHoldTime = 0.42,
 LegitTweenFadeTime = 0.22,
 PingAdaptiveRelease = false,
@@ -867,6 +877,20 @@ LegitAimTurnSign = 0,
 LegitAimLastFlickProgress = 0,
 LegitAimReactionDelay = 0,
 LegitAimSwaySeed = 0,
+LegitAimAngularVelocityYaw = 0,
+LegitAimAngularVelocityPitch = 0,
+LegitAimCorrectionDirection = nil,
+LegitAimNextCorrectionAt = 0,
+LegitAimNoiseYaw = 0,
+LegitAimNoisePitch = 0,
+LegitAimNoiseTargetYaw = 0,
+LegitAimNoiseTargetPitch = 0,
+LegitAimManualUntil = 0,
+LegitAimOvershootYaw = 0,
+LegitAimOvershootPitch = 0,
+LegitAimInitialAngle = 0,
+LegitAimDynamicFlickTime = 0.28,
+LegitAimStopTask = nil,
 ShotModeRandomSeed = 0,
 AutoQueueEnabled = CONFIG.AutoQueue,
 AutoPassEnabled = CONFIG.AutoPass,
@@ -927,6 +951,210 @@ AntiAFKEnabled = CONFIG.AntiAFK,
 AntiTravelEnabled = CONFIG.AntiTravel,
 AntiFallEnabled = CONFIG.AntiFall,
 }
+
+State.Lifecycle = {
+Alive = true,
+Generation = 1,
+Connections = {},
+NamedConnections = {},
+Tasks = {},
+NamedTasks = {},
+RenderBindings = {},
+Instances = {},
+Cleanups = {},
+}
+
+function State.Lifecycle:GiveConnection(Connection, Name)
+if not Connection then return nil end
+if not self.Alive then
+pcall(function() Connection:Disconnect() end)
+return Connection
+end
+if Name then
+local Existing = self.NamedConnections[Name]
+if Existing and Existing ~= Connection then self:DisconnectConnection(Existing) end
+self.NamedConnections[Name] = Connection
+end
+self.Connections[Connection] = true
+return Connection
+end
+
+function State.Lifecycle:Connect(Signal, Callback, Name)
+if not (self.Alive and Signal and type(Callback) == 'function') then return nil end
+if Name and self.NamedConnections[Name] then
+self:DisconnectConnection(self.NamedConnections[Name])
+end
+local Generation = self.Generation
+local Connection = Signal:Connect(function(...)
+if not self.Alive or self.Generation ~= Generation then return end
+return Callback(...)
+end)
+return self:GiveConnection(Connection, Name)
+end
+
+function State.Lifecycle:DisconnectConnection(Connection)
+if not Connection then return end
+self.Connections[Connection] = nil
+for Name, Value in pairs(self.NamedConnections) do
+if Value == Connection then self.NamedConnections[Name] = nil end
+end
+pcall(function() Connection:Disconnect() end)
+end
+
+function State.Lifecycle:DisconnectNamed(Name)
+local Connection = self.NamedConnections[Name]
+if Connection then self:DisconnectConnection(Connection) end
+end
+
+function State.Lifecycle:ForgetTask(Thread)
+if not Thread then return end
+self.Tasks[Thread] = nil
+for Name, Value in pairs(self.NamedTasks) do
+if Value == Thread then self.NamedTasks[Name] = nil end
+end
+end
+
+function State.Lifecycle:CancelTask(Thread)
+if not Thread then return end
+self:ForgetTask(Thread)
+if Thread ~= coroutine.running() then pcall(task.cancel, Thread) end
+end
+
+function State.Lifecycle:CancelNamedTask(Name)
+local Thread = self.NamedTasks[Name]
+if Thread then self:CancelTask(Thread) end
+end
+
+function State.Lifecycle:Spawn(Callback, ...)
+if not (self.Alive and type(Callback) == 'function') then return nil end
+local Packed = table.pack(...)
+local Generation = self.Generation
+local Thread
+local Finished = false
+Thread = task.spawn(function()
+if self.Alive and self.Generation == Generation then
+local Ok, ErrorText = pcall(Callback, table.unpack(Packed, 1, Packed.n))
+if not Ok and self.Alive then warn('[SILVER SURFER TASK] ' .. tostring(ErrorText)) end
+end
+Packed = nil
+Finished = true
+if Thread then self:ForgetTask(Thread) end
+end)
+if not Finished then self.Tasks[Thread] = true end
+return Thread
+end
+
+function State.Lifecycle:Delay(Seconds, Callback, ...)
+if not (self.Alive and type(Callback) == 'function') then return nil end
+local Packed = table.pack(...)
+local Generation = self.Generation
+local Thread
+Thread = task.delay(math.max(tonumber(Seconds) or 0, 0), function()
+if self.Alive and self.Generation == Generation then
+local Ok, ErrorText = pcall(Callback, table.unpack(Packed, 1, Packed.n))
+if not Ok and self.Alive then warn('[SILVER SURFER DELAY] ' .. tostring(ErrorText)) end
+end
+Packed = nil
+if Thread then self:ForgetTask(Thread) end
+end)
+self.Tasks[Thread] = true
+return Thread
+end
+
+function State.Lifecycle:Defer(Callback, ...)
+if not (self.Alive and type(Callback) == 'function') then return nil end
+local Packed = table.pack(...)
+local Generation = self.Generation
+local Thread
+Thread = task.defer(function()
+if self.Alive and self.Generation == Generation then
+local Ok, ErrorText = pcall(Callback, table.unpack(Packed, 1, Packed.n))
+if not Ok and self.Alive then warn('[SILVER SURFER DEFER] ' .. tostring(ErrorText)) end
+end
+Packed = nil
+if Thread then self:ForgetTask(Thread) end
+end)
+self.Tasks[Thread] = true
+return Thread
+end
+
+function State.Lifecycle:NameTask(Name, Thread)
+if not Name then return Thread end
+local Existing = self.NamedTasks[Name]
+if Existing and Existing ~= Thread then self:CancelTask(Existing) end
+self.NamedTasks[Name] = Thread
+return Thread
+end
+
+function State.Lifecycle:BindToRenderStep(Name, Priority, Callback)
+if not (self.Alive and Name and type(Callback) == 'function') then return end
+pcall(function() RunService:UnbindFromRenderStep(Name) end)
+local Generation = self.Generation
+RunService:BindToRenderStep(Name, Priority, function(...)
+if not self.Alive or self.Generation ~= Generation then return end
+return Callback(...)
+end)
+self.RenderBindings[Name] = true
+end
+
+function State.Lifecycle:UnbindFromRenderStep(Name)
+if not Name then return end
+self.RenderBindings[Name] = nil
+pcall(function() RunService:UnbindFromRenderStep(Name) end)
+end
+
+function State.Lifecycle:OwnInstance(Object)
+if typeof(Object) ~= 'Instance' then return Object end
+if not self.Alive then pcall(function() Object:Destroy() end); return Object end
+self.Instances[Object] = true
+local Watch
+pcall(function()
+Watch = Object.Destroying:Connect(function()
+self.Instances[Object] = nil
+if Watch then self:DisconnectConnection(Watch); Watch = nil end
+end)
+end)
+if Watch then self:GiveConnection(Watch) end
+return Object
+end
+
+function State.Lifecycle:ForgetInstance(Object)
+if Object then self.Instances[Object] = nil end
+end
+
+function State.Lifecycle:AddCleanup(Callback)
+if type(Callback) == 'function' then self.Cleanups[#self.Cleanups + 1] = Callback end
+return Callback
+end
+
+function State.Lifecycle:Cleanup()
+if not self.Alive then return end
+self.Alive = false
+self.Generation += 1
+for Name in pairs(self.RenderBindings) do
+pcall(function() RunService:UnbindFromRenderStep(Name) end)
+end
+table.clear(self.RenderBindings)
+local CurrentThread = coroutine.running()
+for Thread in pairs(self.Tasks) do
+if Thread ~= CurrentThread then pcall(task.cancel, Thread) end
+end
+table.clear(self.Tasks)
+table.clear(self.NamedTasks)
+for Connection in pairs(self.Connections) do
+pcall(function() Connection:Disconnect() end)
+end
+table.clear(self.Connections)
+table.clear(self.NamedConnections)
+for Index = #self.Cleanups, 1, -1 do
+pcall(self.Cleanups[Index])
+self.Cleanups[Index] = nil
+end
+for Object in pairs(self.Instances) do
+pcall(function() Object:Destroy() end)
+end
+table.clear(self.Instances)
+end
 
 State.ClientSettings = {
 PlayerData = nil,
@@ -996,7 +1224,7 @@ function State.PowerBypass.PrepareShot(Seconds) State.PowerBypass.Suspend(Second
 function State.PowerBypass.BeginInputShot() State.PowerBypass.PreviousPower = State.PowerBypass.GetEffectivePower(); return State.PowerBypass.PreviousPower end
 function State.PowerBypass.BeginSyntheticShot() return State.PowerBypass.BeginInputShot() end
 function State.PowerBypass.CommitSyntheticShot(DesiredPower) return State.PowerBypass.SyncChannels(DesiredPower or State.PowerBypass.Value) end
-function State.PowerBypass.EndInputShot(DelaySeconds) task.delay(tonumber(DelaySeconds) or 0, function() if State.PowerBypass.PreviousPower then State.PowerBypass.SyncChannels(State.PowerBypass.PreviousPower); State.PowerBypass.PreviousPower=nil end end) end
+function State.PowerBypass.EndInputShot(DelaySeconds) State.Lifecycle:Delay(tonumber(DelaySeconds) or 0, function() if State.PowerBypass.PreviousPower then State.PowerBypass.SyncChannels(State.PowerBypass.PreviousPower); State.PowerBypass.PreviousPower=nil end end) end
 function State.PowerBypass.Apply() if State.PowerBypass.Enabled and os.clock() >= State.PowerBypass.SuspendedUntil then State.PowerBypass.SyncChannels(State.PowerBypass.Value) end end
 function State.PowerBypass.SetEnabled(Enabled, ShouldNotify) State.PowerBypass.Enabled=Enabled==true; State.PowerBypass.Apply() end
 function State.PowerBypass.SetValue(Value, ShouldNotify) State.PowerBypass.Value=State.PowerBypass.Snap(Value); State.PowerBypass.Apply() end
@@ -1505,7 +1733,7 @@ return Direction.Magnitude > 1 and Direction.Unit or Direction
 end
 
 function State.Movement.RefreshFlight()
-pcall(function() RunService:UnbindFromRenderStep(State.Movement.FlightRenderName) end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep(State.Movement.FlightRenderName) end)
 local _, HumanoidObject, Root = State.Movement.GetRig()
 if not State.Movement.FlightEnabled then
 if HumanoidObject then
@@ -1530,7 +1758,7 @@ return
 end
 
 if HumanoidObject then State.Movement.OriginalAutoRotate = HumanoidObject.AutoRotate end
-RunService:BindToRenderStep(
+State.Lifecycle:BindToRenderStep(
 State.Movement.FlightRenderName,
 Enum.RenderPriority.Character.Value + 1,
 WYNF_JIT(function()
@@ -1843,7 +2071,7 @@ State.BallAssist.AntiReachNoStealCheckedAt = 0
 State.BallAssist.AntiReachNoStealCachedStatus = 'IDLE'
 if State.BallAssist.AntiReachWatchConnection then
 pcall(function()
-State.BallAssist.AntiReachWatchConnection:Disconnect()
+State.Lifecycle:DisconnectConnection(State.BallAssist.AntiReachWatchConnection)
 end)
 end
 State.BallAssist.AntiReachWatchConnection = nil
@@ -1925,7 +2153,7 @@ if State.BallAssist.AntiReachWatchedCharacter == Character then return end
 
 if State.BallAssist.AntiReachWatchConnection then
 pcall(function()
-State.BallAssist.AntiReachWatchConnection:Disconnect()
+State.Lifecycle:DisconnectConnection(State.BallAssist.AntiReachWatchConnection)
 end)
 end
 State.BallAssist.AntiReachWatchConnection = nil
@@ -1933,7 +2161,7 @@ State.BallAssist.AntiReachWatchedCharacter = Character
 if not Character then return end
 
 local Success, Connection = pcall(function()
-return Character.ChildRemoved:Connect(function(Child)
+return State.Lifecycle:Connect(Character.ChildRemoved, function(Child)
 if Child and Child.Name == 'Basketball'
 and State.BallAssist.AntiReachEnabled then
 State.BallAssist.ArmAntiReachCounter()
@@ -2382,9 +2610,10 @@ local Method = State.BallAssist.BallReachMethod or 'firetouchinterest'
 if Method == 'Touched Event' then
 -- Connect to the ball Touched event locally and nudge the ball in range.
 local Connection
-Connection = Ball.Touched:Connect(function(Hit)
+Connection = State.Lifecycle:Connect(Ball.Touched, function(Hit)
 if Hit == TouchPart then
-Connection:Disconnect()
+State.Lifecycle:DisconnectConnection(Connection)
+Connection = nil
 end
 end)
 pcall(function()
@@ -2393,7 +2622,7 @@ if Offset.Magnitude > 0.01 then
 Ball.AssemblyLinearVelocity = Offset.Unit * math.min(80, 24 + Offset.Magnitude * 8)
 end
 end)
-task.delay(0.5, function() pcall(function() Connection:Disconnect() end) end)
+State.Lifecycle:Delay(0.5, function() if Connection then State.Lifecycle:DisconnectConnection(Connection); Connection = nil end end)
 return true
 end
 
@@ -2419,7 +2648,7 @@ if Method == 'Size Enlarge' then
 pcall(function()
 local OriginalSize = TouchPart.Size
 TouchPart.Size = OriginalSize + Vector3.new(2, 2, 2)
-task.delay(0.1, function()
+State.Lifecycle:Delay(0.1, function()
 if TouchPart and TouchPart.Parent then
 TouchPart.Size = OriginalSize
 end
@@ -2432,7 +2661,7 @@ end
 if type(firetouchinterest) == 'function' then
 local Success = pcall(function()
 firetouchinterest(TouchPart, Ball, 0)
-task.defer(function()
+State.Lifecycle:Defer(function()
 if Ball and Ball.Parent and TouchPart and TouchPart.Parent then
 pcall(firetouchinterest, TouchPart, Ball, 1)
 end
@@ -2783,10 +3012,8 @@ end
 
 State.BallAssist.DiscoverExistingCandidates()
 
-local Signals = {}
 local function GiveSignal(connection)
-table.insert(Signals, connection)
-return connection
+return State.Lifecycle:GiveConnection(connection)
 end
 
 local function BindLocalBallColliderSafety(Character)
@@ -2804,7 +3031,7 @@ State.BallAssist.ColliderGraceUntil = Now + math.clamp(
 tonumber(State.BallAssist.ColliderPossessionGrace) or 0.8, 0.2, 2)
 State.BallAssist.ColliderLastLocalPossession = true
 State.BallAssist.ColliderLastScanAt = 0
-task.defer(function()
+State.Lifecycle:Defer(function()
 if State.Active and State.BallAssist.ColliderEnabled then
 pcall(State.BallAssist.StepBallColliders, true)
 end
@@ -2840,14 +3067,14 @@ elseif Method == 'Key Simulation' then
 if type(keypress) == 'function' and type(keyrelease) == 'function' then
 pcall(function()
 keypress(Enum.KeyCode.Space)
-task.delay(0.05, function()
+State.Lifecycle:Delay(0.05, function()
 pcall(keyrelease, Enum.KeyCode.Space)
 end)
 end)
 else
 pcall(function()
 VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-task.delay(0.05, function()
+State.Lifecycle:Delay(0.05, function()
 VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
 end)
 end)
@@ -2907,7 +3134,7 @@ State.BallAssist.ColliderProtectedUntil[Ball] = nil
 end))
 GiveSignal(Workspace.DescendantAdded:Connect(function(Object)
 if Object.Name == 'Basketball' and (Object:IsA('Model') or Object:IsA('Tool') or Object:IsA('Folder')) then
-task.delay(0.03, function() if Object.Parent then State.BallAssist.RegisterBasketballContainer(Object) end end)
+State.Lifecycle:Delay(0.03, function() if Object.Parent then State.BallAssist.RegisterBasketballContainer(Object) end end)
 end
 end))
 GiveSignal(Workspace.DescendantRemoving:Connect(function(Object)
@@ -2964,7 +3191,7 @@ end))
 end)
 end
 
-task.defer(InstallMouseHooks)
+State.Lifecycle:Defer(InstallMouseHooks)
 -- arena place ids are stable in both public and private/reserved servers. the
 -- workspace-only test is kept as a fallback for legacy arena layouts.
 local IsArenaMode = game.PlaceId == 89892874044551
@@ -3106,7 +3333,7 @@ safe_set_attribute(LP, 'DisguiseName', Enabled and Alias or LocalIdentity.Origin
 RefreshLocalIdentitySurfaces()
 end
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 while State.Active do
 if State.LocalAnonymizerEnabled then
 if safe_get_attribute(LP, 'DisguiseName') ~= State.LocalAlias then
@@ -3272,7 +3499,7 @@ function State.Utility.Reconnect(Reason)
 if not State.AutoReconnectEnabled or os.clock() - State.Utility.LastReconnectAt < 15 then return false end
 State.Utility.LastReconnectAt = os.clock()
 State.Utility.ReconnectStatus = 'RECONNECTING'
-task.delay(2, function()
+State.Lifecycle:Delay(2, function()
 if not State.Active then return end
 local Success = pcall(function()
 if game.JobId ~= '' then
@@ -3604,7 +3831,7 @@ end
 if State.AntiFallEnabled then pcall(State.Utility.StepAntiFall) end
 end)))
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local LastServerCheck = 0
 while State.Active do
 if State.AutoDailySpinEnabled then pcall(State.Utility.TryDailySpin) end
@@ -4069,7 +4296,7 @@ local Cached = State.LogoBadges.CustomImageCache[Id]
 if Cached then return Cached end
 local Thumbnail = 'rbxthumb://type=Asset&id=' .. tostring(Id) .. '&w=420&h=420'
 State.LogoBadges.CustomImageCache[Id] = Thumbnail
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local Resolved = Thumbnail
 local Ok, Objects = pcall(function()
 return game:GetObjects('rbxassetid://' .. tostring(Id))
@@ -4214,7 +4441,7 @@ local Ok, Reason = State.LogoBadges.AddCustomLogo(Box.Text)
 Box.Text = ''
 if not Ok then
 Box.PlaceholderText = tostring(Reason)
-task.delay(2, function()
+State.Lifecycle:Delay(2, function()
 if State.LogoBadges.CustomBox then
 State.LogoBadges.CustomBox.PlaceholderText = 'Logo asset id'
 end
@@ -4279,8 +4506,8 @@ end
 function State.LogoBadges.StartLoop()
 if State.LogoBadges.Bound then return end
 State.LogoBadges.Bound = true
-pcall(function() RunService:UnbindFromRenderStep('SilverSurferLogoBadges') end)
-RunService:BindToRenderStep('SilverSurferLogoBadges', Enum.RenderPriority.Last.Value + 12, WYNF_JIT(function()
+pcall(function() State.Lifecycle:UnbindFromRenderStep('SilverSurferLogoBadges') end)
+State.Lifecycle:BindToRenderStep('SilverSurferLogoBadges', Enum.RenderPriority.Last.Value + 12, WYNF_JIT(function()
 if not State.LogoBadges.AnyActive() then return end
 local Now = os.clock()
 if Now - (State.LogoBadges.LastApplyAt or 0) < 0.35 then return end
@@ -4333,7 +4560,17 @@ CachedColor = nil,
 CachedSequence = nil,
 Objects = setmetatable({}, { __mode = 'k' }),
 ColorWatches = setmetatable({}, { __mode = 'k' }),
+Generation = 0,
 }
+
+function State.PerfectShotStyle.ClearWatches()
+for Object, Connection in pairs(State.PerfectShotStyle.ColorWatches) do
+State.Lifecycle:DisconnectConnection(Connection)
+State.PerfectShotStyle.ColorWatches[Object] = nil
+end
+table.clear(State.PerfectShotStyle.Objects)
+table.clear(State.PerfectShotStyle.Applying)
+end
 
 function State.PerfectShotStyle.Color()
 local R = math.clamp(math.floor(tonumber(CONFIG.PerfectShotColorR) or 80), 0, 255)
@@ -4409,13 +4646,13 @@ State.PerfectShotStyle.Objects[Object] = true
 -- Emit call. Watch that property and immediately restore the selected color.
 if not IsHighlight and not State.PerfectShotStyle.ColorWatches[Object] then
 pcall(function()
-State.PerfectShotStyle.ColorWatches[Object] = Object:GetPropertyChangedSignal('Color'):Connect(function()
+State.PerfectShotStyle.ColorWatches[Object] = State.Lifecycle:Connect(Object:GetPropertyChangedSignal('Color'), function()
 if os.clock() <= State.PerfectShotStyle.ActiveUntil and not State.PerfectShotStyle.Applying[Object] then
 State.PerfectShotStyle.Applying[Object] = true
-task.defer(function()
+State.Lifecycle:Defer(function()
 pcall(State.PerfectShotStyle.ApplyObject, Object)
 -- Keep the guard through the property's signal dispatch, then release it.
-task.defer(function() State.PerfectShotStyle.Applying[Object] = nil end)
+State.Lifecycle:Defer(function() State.PerfectShotStyle.Applying[Object] = nil end)
 end)
 end
 end)
@@ -4434,7 +4671,7 @@ if Object.FillColor ~= Color then Object.FillColor = Color end
 if Object.OutlineColor ~= Color then Object.OutlineColor = Color end
 end
 end)
-task.defer(function() State.PerfectShotStyle.Applying[Object] = nil end)
+State.Lifecycle:Defer(function() State.PerfectShotStyle.Applying[Object] = nil end)
 end
 
 function State.PerfectShotStyle.ApplyEffects()
@@ -4448,24 +4685,30 @@ State.PerfectShotStyle.ApplyText()
 end
 
 function State.PerfectShotStyle.Trigger(Position)
-table.clear(State.PerfectShotStyle.Objects)
+State.PerfectShotStyle.ClearWatches()
+State.PerfectShotStyle.Generation += 1
+local Generation = State.PerfectShotStyle.Generation
 State.PerfectShotStyle.Origin = typeof(Position) == 'Vector3' and Position or nil
 State.PerfectShotStyle.ActiveUntil = os.clock() + 2.4
 State.PerfectShotStyle.LastScanAt = 0
 State.PerfectShotStyle.LastLockAt = 0
 for _, Delay in ipairs({ 0, 0.03, 0.12, 0.3, 0.65, 1.1, 1.7 }) do
-task.delay(Delay, function()
-if os.clock() <= State.PerfectShotStyle.ActiveUntil then
+State.Lifecycle:Delay(Delay, function()
+if Generation == State.PerfectShotStyle.Generation
+and os.clock() <= State.PerfectShotStyle.ActiveUntil then
 pcall(State.PerfectShotStyle.ApplyEffects)
 end
 end)
 end
+State.Lifecycle:Delay(2.55, function()
+if Generation == State.PerfectShotStyle.Generation then State.PerfectShotStyle.ClearWatches() end
+end)
 end
 
 pcall(function()
 GiveSignal(Workspace.DescendantAdded:Connect(function(Object)
 if os.clock() <= State.PerfectShotStyle.ActiveUntil then
-task.defer(function() pcall(State.PerfectShotStyle.ApplyObject, Object) end)
+State.Lifecycle:Defer(function() pcall(State.PerfectShotStyle.ApplyObject, Object) end)
 end
 end))
 -- Property listeners catch immediate game writes. A 30 Hz lock and occasional
@@ -4668,7 +4911,7 @@ Trail.Texture = Texture or ''
 Trail.TextureMode = Enum.TextureMode.Stretch
 Trail.TextureLength = math.max(0.01, Trail.Lifetime)
 if Texture then
-task.defer(function()
+State.Lifecycle:Defer(function()
 if not Trail.Parent then return end
 pcall(function()
 game:GetService('ContentProvider'):PreloadAsync({ Trail })
@@ -4706,14 +4949,14 @@ end
 -- cosmetic event fires, so the takeover is re-asserted on every child added.
 function State.BallStudio.WatchBall(Ball)
 if State.BallStudio.SkinWatch then
-pcall(function() State.BallStudio.SkinWatch:Disconnect() end)
+pcall(function() State.Lifecycle:DisconnectConnection(State.BallStudio.SkinWatch) end)
 State.BallStudio.SkinWatch = nil
 end
 if not Ball then return end
-State.BallStudio.SkinWatch = Ball.ChildAdded:Connect(function(Child)
+State.BallStudio.SkinWatch = State.Lifecycle:Connect(Ball.ChildAdded, function(Child)
 if not (CONFIG.BallStudioEnabled and CONFIG.CustomBallEnabled) then return end
 if Child:GetAttribute(State.BallStudio.Tag) ~= nil then return end
-task.defer(function()
+State.Lifecycle:Defer(function()
 if Child.Parent == Ball and Child:GetAttribute('Ball') ~= nil then
 pcall(function() Child:Destroy() end)
 end
@@ -5052,13 +5295,11 @@ end
 -- plays flat through SoundService, and waits for the asset to stream in before
 -- playing so a freshly typed ID is not skipped.
 function State.BallStudio.PlayShotSound(Ball, Force)
-if not Force and not (CONFIG.BallStudioEnabled and CONFIG.ShotSoundEnabled) then
-return
-end
+if not Force and not (CONFIG.BallStudioEnabled and CONFIG.ShotSoundEnabled) then return end
 local Id = State.BallStudio.Asset(CONFIG.ShotSoundId)
 if not Id then return end
 pcall(function()
-local Sound = Instance.new('Sound')
+local Sound = State.Lifecycle:OwnInstance(Instance.new('Sound'))
 Sound.Name = 'SilverSurferShotSound'
 Sound.SoundId = Id
 Sound.Volume = math.clamp(tonumber(CONFIG.ShotSoundVolume) or 1.2, 0, 10)
@@ -5070,30 +5311,25 @@ Sound.Looped = false
 Sound:SetAttribute(State.BallStudio.Tag, 'Sound')
 Sound.Parent = game:GetService('SoundService')
 local Duration = math.clamp(tonumber(CONFIG.ShotSoundDuration) or 0, 0, 120)
-Sound.Ended:Connect(function() pcall(function() Sound:Destroy() end) end)
-pcall(function()
+Sound.Ended:Once(function()
+if Sound.Parent then pcall(function() Sound:Destroy() end) end
+end)
 Sound.Played:Once(function()
 if Duration <= 0 then return end
-task.delay(Duration, function()
+State.Lifecycle:Delay(Duration, function()
 if Sound.Parent then
 pcall(function() Sound:Stop() end)
 pcall(function() Sound:Destroy() end)
 end
 end)
 end)
-end)
-if Sound.IsLoaded then
-Sound:Play()
-else
-pcall(function()
+if not Sound.IsLoaded then
 Sound.Loaded:Once(function()
 if Sound.Parent and not Sound.IsPlaying then Sound:Play() end
 end)
-end)
-Sound:Play()
 end
--- Ended normally removes it. This is only a safety cleanup for invalid assets.
-task.delay(300, function() pcall(function() Sound:Destroy() end) end)
+Sound:Play()
+game:GetService('Debris'):AddItem(Sound, math.max(30, Duration + 5))
 end)
 end
 
@@ -5157,7 +5393,7 @@ end
 function State.BallStudio.Cleanup()
 local Ball = State.BallStudio.Tracked or GetLocalBallHandle()
 if State.BallStudio.SkinWatch then
-pcall(function() State.BallStudio.SkinWatch:Disconnect() end)
+pcall(function() State.Lifecycle:DisconnectConnection(State.BallStudio.SkinWatch) end)
 State.BallStudio.SkinWatch = nil
 end
 for Part in pairs(State.BallStudio.Proxies) do
@@ -5249,7 +5485,7 @@ end))
 GiveSignal(CollectionService:GetInstanceAddedSignal('BallHandle'):Connect(function(Ball)
 State.Cosmetics.Runtime.LastBallResolveAt = 0
 if State.LocalCosmeticSpoofEnabled and Ball:IsA('BasePart') then
-task.defer(function() pcall(State.Cosmetics.ApplyLocalCosmetics, true) end)
+State.Lifecycle:Defer(function() pcall(State.Cosmetics.ApplyLocalCosmetics, true) end)
 end
 end))
 pcall(function()
@@ -5258,7 +5494,7 @@ GiveSignal(ReplicateEvent.OnClientEvent:Connect(function(Ball, Category)
 if State.LocalCosmeticSpoofEnabled and Ball and Ball.Parent
 and (Ball == State.Cosmetics.Runtime.LastBall or Ball:IsDescendantOf(LP.Character))
 and (Category == 'Aura' or Category == 'Trail' or Category == 'Ball') then
-task.defer(function() pcall(State.Cosmetics.ApplyLocalCosmetics, true) end)
+State.Lifecycle:Defer(function() pcall(State.Cosmetics.ApplyLocalCosmetics, true) end)
 end
 end))
 end)
@@ -5576,7 +5812,10 @@ X = X + Width
 end
 return Overlay
 end
-RunService.RenderStepped:Connect(function()
+Extras.ChatTagAnimationConnection = State.Lifecycle:Connect(RunService.RenderStepped, function()
+local Now = os.clock()
+if Now - (Extras.ChatTagAnimationAt or 0) < 0.10 then return end
+Extras.ChatTagAnimationAt = Now
 if not Extras.IsChatTagStyleActive('Custom tag') then return end
 local Root = Extras.GetChatRoot()
 if not Root then return end
@@ -5631,7 +5870,7 @@ math.round(NameColor.B * 255), Name)
 Properties.Text = Message.Text or ''
 return Properties
 end
-task.spawn(function()
+Extras.ChatTagTask = State.Lifecycle:Spawn(function()
 local TextChatService = game:GetService('TextChatService')
 while Extras.ChatTagHookInstalled and Extras.IsChatTagStyleActive('Custom tag') do
 -- Setter only: never read this write-only callback property.
@@ -5644,6 +5883,12 @@ end
 function State.LocalCosmeticExtras.RestoreChatTagHook()
 local Extras = State.LocalCosmeticExtras
 Extras.ChatTagHookInstalled = false
+if Extras.ChatTagTask then State.Lifecycle:CancelTask(Extras.ChatTagTask); Extras.ChatTagTask = nil end
+if Extras.ChatTagAnimationConnection then
+State.Lifecycle:DisconnectConnection(Extras.ChatTagAnimationConnection)
+Extras.ChatTagAnimationConnection = nil
+end
+Extras.ChatTagAnimationInstalled = false
 Extras.ChatTagHookWatch = false
 Extras.ChatTagHook = nil
 Extras.ChatTagHookOriginal = nil
@@ -5866,7 +6111,7 @@ State.ClientSettings.SetConfig('Toggle_Rank', State.LocalSpoofs.OriginalConfigTo
 end
 State.LocalSpoofs.ApplyingELO = false
 if State.LocalSpoofs.ELOBox then State.LocalSpoofs.ELOBox.Text = tostring(Value) end
-task.defer(function()
+State.Lifecycle:Defer(function()
 if State.Active then
 pcall(State.LocalSpoofs.ApplyProfile)
 pcall(State.LocalSpoofs.ApplyNativeNameTags)
@@ -6069,11 +6314,11 @@ end
 function State.LocalSpoofs.SetStatsSpoof(Enabled)
 State.LocalStatsSpoofEnabled = Enabled == true
 CONFIG.LocalStatsSpoof = State.LocalStatsSpoofEnabled
-pcall(function() RunService:UnbindFromRenderStep('SilverSurferProfileStatsLock') end)
-pcall(function() RunService:UnbindFromRenderStep('SilverSurferLeaderboardGradient') end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep('SilverSurferProfileStatsLock') end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep('SilverSurferLeaderboardGradient') end)
 if State.LocalStatsSpoofEnabled then
 pcall(State.LocalSpoofs.ApplyProfile)
-RunService:BindToRenderStep('SilverSurferProfileStatsLock', Enum.RenderPriority.Last.Value + 10, WYNF_JIT(function()
+State.Lifecycle:BindToRenderStep('SilverSurferProfileStatsLock', Enum.RenderPriority.Last.Value + 10, WYNF_JIT(function()
 if State.Active and State.LocalStatsSpoofEnabled then
 local Now = os.clock()
 if Now - (State.LocalSpoofs.StatsLockAt or 0) >= 0.2 then
@@ -6082,7 +6327,7 @@ pcall(State.LocalSpoofs.ApplyStatsLock)
 end
 end
 end))
-RunService:BindToRenderStep('SilverSurferLeaderboardGradient', Enum.RenderPriority.Last.Value + 11, WYNF_JIT(function()
+State.Lifecycle:BindToRenderStep('SilverSurferLeaderboardGradient', Enum.RenderPriority.Last.Value + 11, WYNF_JIT(function()
 if State.Active and State.LocalStatsSpoofEnabled then pcall(State.LocalSpoofs.UpdateLeaderboardGradients) end
 end))
 else
@@ -6169,7 +6414,7 @@ State.LocalSpoofs.WorldBoardConnectionBound = true
 GiveSignal(Workspace.DescendantAdded:Connect(function(Object)
 local ListFrame = Object.Name == 'ListFrame' and Object or Object:FindFirstAncestor('ListFrame')
 if ListFrame then
-task.delay(0.35, function()
+State.Lifecycle:Delay(0.35, function()
 if ListFrame and ListFrame.Parent then State.LocalSpoofs.RegisterLeaderboardList(ListFrame) end
 end)
 end
@@ -6226,7 +6471,7 @@ local Humanoid = Dummy and Dummy:FindFirstChildWhichIsA('Humanoid')
 if not (UserId and UserId > 0 and Humanoid) then return end
 if State.LocalSpoofs.PedestalApplied[Dummy] == UserId then return end
 State.LocalSpoofs.PedestalApplied[Dummy] = UserId
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local Ok, Description = pcall(function()
 return game:GetService('Players'):GetHumanoidDescriptionFromUserId(UserId)
 end)
@@ -6627,10 +6872,10 @@ end
 function State.LocalSpoofs.SetClanSpoof(Enabled)
 State.LocalClanSpoofEnabled = Enabled == true
 CONFIG.LocalClanSpoof = State.LocalClanSpoofEnabled
-pcall(function() RunService:UnbindFromRenderStep('SilverSurferClanSpoof') end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep('SilverSurferClanSpoof') end)
 if State.LocalClanSpoofEnabled then
 pcall(State.LocalSpoofs.ApplyClanSpoof)
-RunService:BindToRenderStep('SilverSurferClanSpoof', Enum.RenderPriority.Last.Value + 11, WYNF_JIT(function()
+State.Lifecycle:BindToRenderStep('SilverSurferClanSpoof', Enum.RenderPriority.Last.Value + 11, WYNF_JIT(function()
 if State.Active and State.LocalClanSpoofEnabled then
 local Now = os.clock()
 if Now - (State.LocalSpoofs.ClanSpoofAt or 0) >= 0.3 then
@@ -6696,10 +6941,10 @@ end
 function State.LocalSpoofs.SetAchievementSpoof(Enabled)
 State.LocalAchievementSpoofEnabled = Enabled == true
 CONFIG.LocalAchievementSpoof = State.LocalAchievementSpoofEnabled
-pcall(function() RunService:UnbindFromRenderStep('SilverSurferAchievementSpoof') end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep('SilverSurferAchievementSpoof') end)
 if State.LocalAchievementSpoofEnabled then
 pcall(State.LocalSpoofs.ApplyAchievementSpoof)
-RunService:BindToRenderStep('SilverSurferAchievementSpoof', Enum.RenderPriority.Last.Value + 12, WYNF_JIT(function()
+State.Lifecycle:BindToRenderStep('SilverSurferAchievementSpoof', Enum.RenderPriority.Last.Value + 12, WYNF_JIT(function()
 if State.Active and State.LocalAchievementSpoofEnabled then
 local Now = os.clock()
 if Now - (State.LocalSpoofs.AchievementSpoofAt or 0) >= 0.3 then
@@ -6756,14 +7001,14 @@ function State.LocalSpoofs.BindIntroBanners(Character)
 if Character then
 State.LocalSpoofs.ScanBannerRoot(Character)
 GiveSignal(Character.DescendantAdded:Connect(function(Object)
-task.defer(function() State.LocalSpoofs.RegisterIntroBanner(Object) end)
+State.Lifecycle:Defer(function() State.LocalSpoofs.RegisterIntroBanner(Object) end)
 end))
 end
 if not State.LocalSpoofs.BannerGuiBound then
 State.LocalSpoofs.BannerGuiBound = true
 State.LocalSpoofs.ScanBannerRoot(LP.PlayerGui)
 GiveSignal(LP.PlayerGui.DescendantAdded:Connect(function(Object)
-task.defer(function() State.LocalSpoofs.RegisterIntroBanner(Object) end)
+State.Lifecycle:Defer(function() State.LocalSpoofs.RegisterIntroBanner(Object) end)
 end))
 end
 end
@@ -6775,9 +7020,9 @@ local Frame = Object:FindFirstChild('Frame'); local Search = Frame and Frame:Fin
 if Search and Search:IsA('TextBox') then
 local Old = Search.Text
 Search.Text = Old .. ' '
-task.defer(function()
+State.Lifecycle:Defer(function()
 if Search and Search.Parent then Search.Text = Old end
-task.delay(0.12,State.LocalSpoofs.PatchFakeDrawRows)
+State.Lifecycle:Delay(0.12,State.LocalSpoofs.PatchFakeDrawRows)
 end)
 end
 end
@@ -7349,7 +7594,7 @@ end
 function State.LocalSpoofs.QueueMadeGoalEffect(Name, Scorer, Court, Goal, ...)
 local RequestedAt = os.clock()
 local Arguments = table.pack(...)
-task.delay(0.06, function()
+State.Lifecycle:Delay(0.06, function()
 if not (State.Active and State.LocalGoalEffectSpoofEnabled and Scorer == LP) then return end
 local PerfectAt = State.PerfectRelease and State.PerfectRelease.LastPerfectAt or 0
 local IsPerfectCallback = PerfectAt > 0 and math.abs(RequestedAt - PerfectAt) <= 0.18
@@ -7414,7 +7659,7 @@ if ServerELO ~= State.LocalELO then
 -- Preserve the newest real value so disabling the spoof restores correctly.
 State.LocalSpoofs.OriginalELO = ServerELO
 end
-task.defer(function()
+State.Lifecycle:Defer(function()
 if State.Active and State.LocalELOSpoofEnabled
 and LP:GetAttribute('ELO') ~= State.LocalELO then
 State.LocalSpoofs.SetELO(true, State.LocalELO, false)
@@ -7428,7 +7673,7 @@ end))
 GiveSignal(LP:GetAttributeChangedSignal('Toggle_Rank'):Connect(function()
 if State.LocalSpoofs.ApplyingELO then return end
 if State.LocalELOSpoofEnabled and LP:GetAttribute('Toggle_Rank') ~= true then
-task.defer(function()
+State.Lifecycle:Defer(function()
 if State.Active and State.LocalELOSpoofEnabled then
 State.LocalSpoofs.SetELO(true, State.LocalELO, false)
 end
@@ -7441,14 +7686,14 @@ end))
 GiveSignal(LP:GetAttributeChangedSignal('Ingame'):Connect(function()
 if not State.LocalELOSpoofEnabled then return end
 -- Match transitions rebuild the in-game rank UI, so reapply after it exists.
-task.delay(0.2, function()
+State.Lifecycle:Delay(0.2, function()
 if State.Active and State.LocalELOSpoofEnabled then
 State.LocalSpoofs.SetELO(true, State.LocalELO, false)
 end
 end)
 end))
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 while State.Active do
 if State.LocalCosmeticSpoofEnabled then pcall(State.Cosmetics.ApplyLocalCosmetics) end
 if State.LocalELOSpoofEnabled then
@@ -7683,7 +7928,7 @@ AutoQueue.WasIngame = safe_get_attribute(LP, 'Ingame') == true
 UpdateAutoQueueStatus(State.AutoQueueEnabled and 'SEARCHING' or 'OFF')
 end
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 while State.Active do
 if State.AutoQueueEnabled then
 local Ingame = safe_get_attribute(LP, 'Ingame') == true
@@ -8478,7 +8723,7 @@ GiveSignal(CollectionService:GetInstanceRemovedSignal('FieldGoals'):Connect(Refr
 GiveSignal(Workspace.DescendantAdded:Connect(function(Object)
 if Object.Name == 'FieldGoal' or Object.Name == 'HitboxesHome'
 or Object.Name == 'HitboxesAway' or Object.Name == 'Hitboxes' then
-task.defer(RefreshGoalData)
+State.Lifecycle:Defer(RefreshGoalData)
 end
 end))
 
@@ -10468,7 +10713,7 @@ Token = Token,
 }
 State.PerfectRelease.LastDelay = Delay
 State.PerfectRelease.LastResult = 'WAITING'
-task.delay(1.35, function()
+State.Lifecycle:Delay(1.35, function()
 local Pending = State.PerfectRelease.Pending
 if Pending and Pending.Token == Token then
 State.PerfectRelease.Resolve(false)
@@ -10482,7 +10727,7 @@ pcall(function()
 local Remotes = ReplicatedStorage:FindFirstChild('Remotes')
 local PerfectEvent = Remotes and Remotes:FindFirstChild('perfectEvent')
 if not PerfectEvent then return end
-State.PerfectRelease.Connection = PerfectEvent.OnClientEvent:Connect(
+State.PerfectRelease.Connection = State.Lifecycle:Connect(PerfectEvent.OnClientEvent,
 function(Shooter, ...)
 if Shooter ~= LP then return end
 State.PerfectRelease.LastPerfectAt = os.clock()
@@ -10923,7 +11168,7 @@ TintColor = Color3.fromRGB(244, 240, 228),
 RangeScreenTint.GroupTween:Play()
 RangeScreenTint.CorrectionTween:Play()
 
-task.delay(InTime, function()
+State.Lifecycle:Delay(InTime, function()
 if RangeScreenTint.Serial ~= Serial or not RangeScreenTint.TargetVisible then return end
 if not (Group and Group.Parent and Correction and Correction.Parent) then return end
 CancelRangeScreenTintTween()
@@ -10964,7 +11209,7 @@ TintColor = Color3.new(1, 1, 1),
 )
 RangeScreenTint.GroupTween:Play()
 RangeScreenTint.CorrectionTween:Play()
-task.delay(OutTime + 0.02, function()
+State.Lifecycle:Delay(OutTime + 0.02, function()
 if RangeScreenTint.Serial ~= Serial or RangeScreenTint.TargetVisible then return end
 if Group and Group.Parent then Group.Visible = false end
 if Correction and Correction.Parent then Correction.Enabled = false end
@@ -12585,7 +12830,7 @@ State.Trickshot.MovementStatus = FadeEnabled
 and ('FADING ' .. string.upper(tostring(CONFIG.FadeawayDirection)))
 or 'QUICK STOP'
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local StartedAt = os.clock()
 local LastEased = 0
 while State.Active and State.Trickshot.MovementActive
@@ -12701,7 +12946,7 @@ H.AutoRotate = false
 local StartRotation = Root.CFrame - Root.Position
 local StepSignal = RunService.PreSimulation or RunService.Heartbeat
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 while State.Active and State.Trickshot.Active and State.Trickshot.Generation == Generation
 and Root and Root.Parent and H and H.Parent do
 StepSignal:Wait()
@@ -12770,7 +13015,7 @@ if Phase == 'SECOND_JUMP' then
 State.Trickshot.EBLPhase, State.Trickshot.EBLStatus = 'SHOOTING', 'SECOND JUMP - SHOOTING'
 State.Trickshot.ForceAutoRelease = true
 local G = State.Trickshot.EBLGeneration
-task.delay(3, function()
+State.Lifecycle:Delay(3, function()
 if State.Trickshot.EBLGeneration == G and State.Trickshot.EBLPhase == 'SHOOTING' then
 State.Trickshot.ResetAutoEBL('READY')
 end end)
@@ -12782,7 +13027,7 @@ State.Trickshot.EBLGeneration += 1
 local G = State.Trickshot.EBLGeneration
 State.Trickshot.EBLPhase, State.Trickshot.EBLStatus = 'FIRST_JUMP', 'FIRST JUMP - NO SHOT'
 State.Trickshot.ForceAutoRelease = false
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local T = os.clock() + 1.5
 while State.Active and CONFIG.AutoEBL and State.Trickshot.EBLGeneration == G
 and H and H.Parent and H.FloorMaterial ~= Enum.Material.Air and os.clock() < T do
@@ -12867,7 +13112,7 @@ end)
 -- the old handle hidden with no proxy on the shot.
 if CONFIG.BallStudioEnabled or State.LocalCosmeticSpoofEnabled then
 for _, Delay in ipairs({ 0.03, 0.12 }) do
-task.delay(Delay, function()
+State.Lifecycle:Delay(Delay, function()
 if not State.Active then return end
 if State.LocalCosmeticSpoofEnabled then pcall(State.Cosmetics.ApplyLocalCosmetics, true) end
 if CONFIG.BallStudioEnabled then pcall(State.BallStudio.Refresh) end
@@ -12882,10 +13127,10 @@ if SavedCameraFocus then Camera.Focus = SavedCameraFocus end
 end)
 end
 
-task.delay(0.25, SilentAim.ClearActorAim)
+State.Lifecycle:Delay(0.25, SilentAim.ClearActorAim)
 if CONFIG.HumanizeEnabled then
 local UsedRoll = State.Humanize.Roll
-task.delay(0.35, function()
+State.Lifecycle:Delay(0.35, function()
 if State.Humanize.Roll == UsedRoll then
 State.Humanize.Roll = nil
 State.Humanize.Tallied = true
@@ -12896,7 +13141,7 @@ if ClickOk and CONFIG.AutoEBL and State.Trickshot.EBLPhase == 'SHOOTING' then
 local G = State.Trickshot.EBLGeneration
 State.Trickshot.EBLPhase, State.Trickshot.EBLStatus = 'COMPLETE', 'SHOT FIRED'
 State.Trickshot.ForceAutoRelease = false
-task.delay(0.35, function() if State.Trickshot.EBLGeneration == G then State.Trickshot.ResetAutoEBL('READY') end end)
+State.Lifecycle:Delay(0.35, function() if State.Trickshot.EBLGeneration == G then State.Trickshot.ResetAutoEBL('READY') end end)
 end
 State.silentShootActive = false
 return ClickOk
@@ -12929,9 +13174,21 @@ State.LegitAimLastSolveAt = 0
 State.LegitAimSmoothedDirection = nil
 State.LegitAimTurnSign = 0
 State.LegitAimLastFlickProgress = 0
-pcall(function() RunService:UnbindFromRenderStep(LEGIT_AIM_BIND_NAME) end)
+State.LegitAimAngularVelocityYaw = 0
+State.LegitAimAngularVelocityPitch = 0
+State.LegitAimCorrectionDirection = nil
+State.LegitAimNextCorrectionAt = 0
+State.LegitAimNoiseYaw, State.LegitAimNoisePitch = 0, 0
+State.LegitAimNoiseTargetYaw, State.LegitAimNoiseTargetPitch = 0, 0
+State.LegitAimManualUntil = 0
+State.LegitAimOvershootYaw, State.LegitAimOvershootPitch = 0, 0
+if State.LegitAimStopTask then
+State.Lifecycle:CancelTask(State.LegitAimStopTask)
+State.LegitAimStopTask = nil
+end
+pcall(function() State.Lifecycle:UnbindFromRenderStep(LEGIT_AIM_BIND_NAME) end)
 if LegitAimLandConnection then
-LegitAimLandConnection:Disconnect()
+State.Lifecycle:DisconnectConnection(LegitAimLandConnection)
 LegitAimLandConnection = nil
 end
 end
@@ -13030,21 +13287,57 @@ State.LegitAimTarget = Target
 State.LegitAimLastFrameAt = os.clock()
 State.LegitAimLastSolveAt = State.LegitAimLastFrameAt
 local StartingCamera = Workspace.CurrentCamera
-State.LegitAimSmoothedDirection = StartingCamera and StartingCamera.CFrame.LookVector or nil
+local StartingLook = StartingCamera and StartingCamera.CFrame.LookVector or Vector3.new(0, 0, -1)
+local StartingHead = Character and Character:FindFirstChild('Head')
+local StartingVector = StartingHead and (Target - StartingHead.Position) or nil
+local StartingDirection = StartingVector and StartingVector.Magnitude > 0.0001
+and StartingVector.Unit or StartingLook
+State.LegitAimSmoothedDirection = StartingLook
+State.LegitAimCorrectionDirection = StartingDirection
 State.LegitAimTurnSign = 0
 State.LegitAimLastFlickProgress = 0
-State.LegitAimReactionDelay = math.random()
-* math.max((tonumber(CONFIG.LegitAimReactionMax) or 0.11)
-- (tonumber(CONFIG.LegitAimReactionMin) or 0.05), 0)
-+ math.max(tonumber(CONFIG.LegitAimReactionMin) or 0.05, 0)
+State.LegitAimAngularVelocityYaw = 0
+State.LegitAimAngularVelocityPitch = 0
+State.LegitAimNoiseYaw, State.LegitAimNoisePitch = 0, 0
+State.LegitAimNoiseTargetYaw, State.LegitAimNoiseTargetPitch = 0, 0
+State.LegitAimManualUntil = 0
+local ReactionMin = math.max(tonumber(CONFIG.LegitAimReactionMin) or 0.14, 0)
+local ReactionMax = math.max(tonumber(CONFIG.LegitAimReactionMax) or 0.28, ReactionMin)
+local TriangularRoll = (math.random() + math.random()) * 0.5
+State.LegitAimReactionDelay = ReactionMin + (ReactionMax - ReactionMin) * TriangularRoll
 State.LegitAimSwaySeed = math.random() * 1000
+local InitialDot = math.clamp(StartingLook.Unit:Dot(StartingDirection.Unit), -1, 1)
+local InitialAngle = math.deg(math.acos(InitialDot))
+State.LegitAimInitialAngle = InitialAngle
+local FlickMin = math.max(tonumber(CONFIG.LegitAimFlickMinTime) or 0.18, 0.06)
+local FlickMax = math.max(tonumber(CONFIG.LegitAimFlickMaxTime) or 0.60, FlickMin)
+local FlickDivisor = math.max(tonumber(CONFIG.LegitAimFlickAngleDivisor) or 420, 1)
+State.LegitAimDynamicFlickTime = math.clamp(0.16 + InitialAngle / FlickDivisor, FlickMin, FlickMax)
+State.LegitAimNextCorrectionAt = State.LegitAimLastFrameAt + State.LegitAimReactionDelay
+local StartYaw = math.atan2(-StartingLook.X, -StartingLook.Z)
+local GoalYaw = math.atan2(-StartingDirection.X, -StartingDirection.Z)
+local StartPitch = math.asin(math.clamp(StartingLook.Y, -1, 1))
+local GoalPitch = math.asin(math.clamp(StartingDirection.Y, -1, 1))
+local InitialYawError = math.atan2(math.sin(GoalYaw - StartYaw), math.cos(GoalYaw - StartYaw))
+local InitialPitchError = GoalPitch - StartPitch
+local OvershootChance = math.clamp(tonumber(CONFIG.LegitAimOvershootChance) or 12, 0, 100)
+if InitialAngle >= math.max(tonumber(CONFIG.LegitAimOvershootMinAngle) or 8, 0)
+and math.random() * 100 < OvershootChance then
+local MinScale = math.max(tonumber(CONFIG.LegitAimOvershootMinScale) or 0.02, 0)
+local MaxScale = math.max(tonumber(CONFIG.LegitAimOvershootMaxScale) or 0.06, MinScale)
+local Scale = MinScale + (MaxScale - MinScale) * math.random()
+State.LegitAimOvershootYaw = InitialYawError * Scale
+State.LegitAimOvershootPitch = InitialPitchError * Scale * 0.55
+else
+State.LegitAimOvershootYaw, State.LegitAimOvershootPitch = 0, 0
+end
 local Generation = State.LegitAimGeneration
 local StartedAt = State.LegitAimLastFrameAt
 local HoldTime = math.max(CONFIG.LegitTweenHoldTime, 0)
 local FadeTime = math.max(CONFIG.LegitTweenFadeTime, 0.01)
-local ReleaseAt = HoldTime + FadeTime
+local ReleaseAt = State.LegitAimReactionDelay + HoldTime + FadeTime
 
-RunService:BindToRenderStep(
+State.Lifecycle:BindToRenderStep(
 LEGIT_AIM_BIND_NAME,
 Enum.RenderPriority.Camera.Value + 20,
 WYNF_JIT(function()
@@ -13098,10 +13391,14 @@ CurrentCamera.Focus = CFrame.new(Current.Position + FormulaDirection * 1000)
 return
 end
 
--- Keep our own yaw/pitch instead of CFrame:Lerp. Quaternion lerp is
--- ambiguous near 180 degrees and can alternate between left/right
--- paths when a backwards target moves slightly, producing stutter.
+-- Human-style controller: decisions update intermittently, while the visible
+-- camera follows those decisions with acceleration-limited yaw and pitch.
 local ManualInput = IsManualCameraAimActive()
+if ManualInput then
+State.LegitAimManualUntil = Now
++ math.clamp(tonumber(CONFIG.LegitAimManualOwnershipTime) or 0.14, 0.02, 0.5)
+end
+local ManualOwned = Now < (tonumber(State.LegitAimManualUntil) or 0)
 local SmoothedDirection = State.LegitAimSmoothedDirection
 if typeof(SmoothedDirection) ~= 'Vector3' or SmoothedDirection.Magnitude < 0.5
 or ManualInput then
@@ -13110,89 +13407,111 @@ else
 SmoothedDirection = SmoothedDirection.Unit
 end
 
-local SwayAmp = math.rad(math.max(tonumber(CONFIG.LegitAimSwayDegrees) or 0.45, 0))
-local SwaySpeed = math.max(tonumber(CONFIG.LegitAimSwaySpeed) or 5.2, 0.01)
-local SwaySeed = tonumber(State.LegitAimSwaySeed) or 0
-local SwayYaw = SwayAmp
-* (math.sin(Elapsed * SwaySpeed + SwaySeed) * 0.65
-+ math.sin(Elapsed * SwaySpeed * 0.41 + SwaySeed * 1.7) * 0.35)
-local SwayPitch = SwayAmp * 0.7
-* (math.sin(Elapsed * SwaySpeed * 0.83 + SwaySeed * 2.3) * 0.6
-+ math.sin(Elapsed * SwaySpeed * 0.29 + SwaySeed * 0.7) * 0.4)
-local CurrentYaw = math.atan2(-SmoothedDirection.X, -SmoothedDirection.Z)
-local TargetYaw = math.atan2(-FormulaDirection.X, -FormulaDirection.Z) + SwayYaw
-local YawError = math.atan2(
-math.sin(TargetYaw - CurrentYaw),
-math.cos(TargetYaw - CurrentYaw))
-
--- Lock the initial turn side while the target is substantially
--- behind the camera. Without this, tiny formula updates around the
--- +/-pi boundary can reverse the chosen turn direction every frame.
-if math.abs(YawError) > math.rad(150) then
-if State.LegitAimTurnSign == 0 then
-State.LegitAimTurnSign = YawError >= 0 and 1 or -1
+-- Humans make discrete visual corrections rather than recomputing a perfect
+-- target every render frame. The camera still renders smoothly between them.
+if Now >= (tonumber(State.LegitAimNextCorrectionAt) or 0) then
+State.LegitAimCorrectionDirection = FormulaDirection
+local CorrectionMin = math.max(tonumber(CONFIG.LegitAimCorrectionMin) or 0.07, 0.02)
+local CorrectionMax = math.max(tonumber(CONFIG.LegitAimCorrectionMax) or 0.13, CorrectionMin)
+State.LegitAimNextCorrectionAt = Now + CorrectionMin
++ (CorrectionMax - CorrectionMin) * ((math.random() + math.random()) * 0.5)
+local SwayAmp = math.rad(math.max(tonumber(CONFIG.LegitAimSwayDegrees) or 0.18, 0))
+State.LegitAimNoiseTargetYaw = (math.random() * 2 - 1) * SwayAmp
+State.LegitAimNoiseTargetPitch = (math.random() * 2 - 1) * SwayAmp * 0.65
 end
+local DecisionDirection = State.LegitAimCorrectionDirection or FormulaDirection
+local NoiseResponse = math.max(tonumber(CONFIG.LegitAimSwaySpeed) or 7, 0.1)
+local NoiseAlpha = 1 - math.exp(-NoiseResponse * DeltaTime)
+State.LegitAimNoiseYaw += ((tonumber(State.LegitAimNoiseTargetYaw) or 0)
+- (tonumber(State.LegitAimNoiseYaw) or 0)) * NoiseAlpha
+State.LegitAimNoisePitch += ((tonumber(State.LegitAimNoiseTargetPitch) or 0)
+- (tonumber(State.LegitAimNoisePitch) or 0)) * NoiseAlpha
+
+local ReactionDelay = tonumber(State.LegitAimReactionDelay) or 0
+local MotionElapsed = math.max(0, Elapsed - ReactionDelay)
+local FlickTime = math.max(tonumber(State.LegitAimDynamicFlickTime)
+or tonumber(CONFIG.LegitAimFlickTime) or 0.28, 0.06)
+local FlickProgress = math.clamp(MotionElapsed / FlickTime, 0, 1)
+local IsInitialFlick = FlickProgress < 1
+State.LegitAimLastFlickProgress = FlickProgress
+local OvershootWeight = 0
+if IsInitialFlick then
+local Settle = math.clamp((FlickProgress - 0.76) / 0.24, 0, 1)
+local SmoothSettle = Settle * Settle * (3 - 2 * Settle)
+OvershootWeight = 1 - SmoothSettle
+end
+
+local CurrentYaw = math.atan2(-SmoothedDirection.X, -SmoothedDirection.Z)
+local TargetYaw = math.atan2(-DecisionDirection.X, -DecisionDirection.Z)
++ (tonumber(State.LegitAimNoiseYaw) or 0)
++ (tonumber(State.LegitAimOvershootYaw) or 0) * OvershootWeight
+local YawError = math.atan2(math.sin(TargetYaw - CurrentYaw), math.cos(TargetYaw - CurrentYaw))
+if math.abs(YawError) > math.rad(150) then
+if State.LegitAimTurnSign == 0 then State.LegitAimTurnSign = YawError >= 0 and 1 or -1 end
 YawError = math.abs(YawError) * State.LegitAimTurnSign
 elseif math.abs(YawError) < math.rad(90) then
 State.LegitAimTurnSign = 0
 elseif State.LegitAimTurnSign ~= 0 then
 YawError = math.abs(YawError) * State.LegitAimTurnSign
 end
-
 local CurrentPitch = math.asin(math.clamp(SmoothedDirection.Y, -1, 1))
-local TargetPitch = math.asin(math.clamp(FormulaDirection.Y, -1, 1)) + SwayPitch
+local TargetPitch = math.asin(math.clamp(DecisionDirection.Y, -1, 1))
++ (tonumber(State.LegitAimNoisePitch) or 0)
++ (tonumber(State.LegitAimOvershootPitch) or 0) * OvershootWeight
 local PitchError = TargetPitch - CurrentPitch
 local ErrorAngle = math.sqrt(YawError * YawError + PitchError * PitchError)
-local Deadzone = math.rad(tonumber(CONFIG.LegitAimDeadzoneDegrees) or 0.035)
+local Deadzone = math.rad(math.max(tonumber(CONFIG.LegitAimDeadzoneDegrees) or 0.12, 0))
 if ErrorAngle <= Deadzone then
-YawError = 0
-PitchError = 0
-ErrorAngle = Deadzone
+YawError, PitchError = 0, 0
+ErrorAngle = 0
 end
 
--- Use an S-curve for the initial flick: it accelerates naturally,
--- moves fastest in the middle, then eases into the exact formula
--- angle. Incremental eased progress keeps the turn deterministic
--- without the constant-speed, lock-on look of a deadline snap.
-local FlickTime = math.max(tonumber(CONFIG.LegitAimFlickTime) or 0.28, 0.06)
-local IsInitialFlick = (tonumber(State.LegitAimLastFlickProgress) or 0) < 1
 local Fade = 1
-if Elapsed > HoldTime then
-local FadeAlpha = math.clamp((Elapsed - HoldTime) / FadeTime, 0, 1)
+local FadeStart = ReactionDelay + HoldTime
+if Elapsed > FadeStart then
+local FadeAlpha = math.clamp((Elapsed - FadeStart) / FadeTime, 0, 1)
 Fade = 1 - FadeAlpha * FadeAlpha * (3 - 2 * FadeAlpha)
 end
-if Fade <= 0.0001 then return end
-
-local StepAlpha
-if IsInitialFlick then
-local Progress = math.clamp(
-(Elapsed - (tonumber(State.LegitAimReactionDelay) or 0)) / FlickTime, 0, 1)
-local EasedProgress = Progress * Progress * (3 - 2 * Progress)
-local PreviousProgress = math.clamp(
-tonumber(State.LegitAimLastFlickProgress) or 0, 0, 0.999999)
-StepAlpha = math.clamp(
-(EasedProgress - PreviousProgress) / (1 - PreviousProgress), 0, 1)
-local FlickCap = math.rad(math.max(
-tonumber(CONFIG.LegitAimFlickMaxDegreesPerSecond) or 260, 1)) * DeltaTime
-StepAlpha = math.min(StepAlpha, FlickCap / ErrorAngle)
-State.LegitAimLastFlickProgress = EasedProgress
-else
-State.LegitAimLastFlickProgress = 1
--- After the eased flick, softly follow small formula changes
--- caused by movement, height, or power.
-local ManualScale = ManualInput
-and math.clamp(tonumber(CONFIG.LegitAimManualInputScale) or 0.22, 0, 1)
-or 1
+local ManualScale = ManualOwned
+and math.clamp(tonumber(CONFIG.LegitAimManualInputScale) or 0.42, 0, 1) or 1
 local Weight = Fade * ManualScale
-local Response = math.max(tonumber(CONFIG.LegitAimResponse) or 14, 0.01)
-local NaturalAlpha = 1 - math.exp(-Response * DeltaTime * Weight)
-local MaxRadians = math.rad(math.max(
-tonumber(CONFIG.LegitAimMaxDegreesPerSecond) or 540, 1))
-* DeltaTime * Weight
-StepAlpha = math.min(NaturalAlpha, MaxRadians / ErrorAngle, 1)
+local MaxDegrees = IsInitialFlick
+and math.max(tonumber(CONFIG.LegitAimFlickMaxDegreesPerSecond) or 220, 1)
+or math.max(tonumber(CONFIG.LegitAimMaxDegreesPerSecond) or 340, 1)
+local MaxYawSpeed = math.rad(MaxDegrees) * Weight
+local PitchScale = math.clamp(tonumber(CONFIG.LegitAimPitchSpeedScale) or 0.78, 0.25, 1)
+local MaxPitchSpeed = MaxYawSpeed * PitchScale
+local Response = math.max(tonumber(CONFIG.LegitAimResponse) or 9.5, 0.1)
+if IsInitialFlick then
+Response = math.max(Response * 0.45, 1 / math.max(FlickTime - MotionElapsed, 0.05))
 end
-local NewYaw = CurrentYaw + YawError * StepAlpha
-local NewPitch = CurrentPitch + PitchError * StepAlpha
+local DesiredYawVelocity = math.clamp(YawError * Response, -MaxYawSpeed, MaxYawSpeed)
+local DesiredPitchVelocity = math.clamp(PitchError * Response, -MaxPitchSpeed, MaxPitchSpeed)
+local Acceleration = math.rad(math.max(
+tonumber(CONFIG.LegitAimAccelerationDegreesPerSecond) or 980, 1)) * Weight
+local YawVelocity = tonumber(State.LegitAimAngularVelocityYaw) or 0
+local PitchVelocity = tonumber(State.LegitAimAngularVelocityPitch) or 0
+YawVelocity += math.clamp(DesiredYawVelocity - YawVelocity,
+-Acceleration * DeltaTime, Acceleration * DeltaTime)
+PitchVelocity += math.clamp(DesiredPitchVelocity - PitchVelocity,
+-Acceleration * PitchScale * DeltaTime, Acceleration * PitchScale * DeltaTime)
+local YawStep = YawError == 0 and 0 or YawVelocity * DeltaTime
+local PitchStep = PitchError == 0 and 0 or PitchVelocity * DeltaTime
+if YawError ~= 0 and (math.abs(YawStep) > math.abs(YawError)
+or YawStep * YawError < 0) then YawStep, YawVelocity = YawError, 0 end
+if PitchError ~= 0 and (math.abs(PitchStep) > math.abs(PitchError)
+or PitchStep * PitchError < 0) then PitchStep, PitchVelocity = PitchError, 0 end
+if YawError == 0 then
+YawVelocity += math.clamp(-YawVelocity, -Acceleration * DeltaTime, Acceleration * DeltaTime)
+end
+if PitchError == 0 then
+PitchVelocity += math.clamp(-PitchVelocity,
+-Acceleration * PitchScale * DeltaTime, Acceleration * PitchScale * DeltaTime)
+end
+State.LegitAimAngularVelocityYaw = YawVelocity
+State.LegitAimAngularVelocityPitch = PitchVelocity
+local NewYaw = CurrentYaw + YawStep
+local NewPitch = math.clamp(CurrentPitch + PitchStep, -math.pi * 0.495, math.pi * 0.495)
 local CosPitch = math.cos(NewPitch)
 local AimedDirection = Vector3.new(
 -math.sin(NewYaw) * CosPitch,
@@ -13212,13 +13531,13 @@ CurrentCamera.Focus = CFrame.new(Aimed.Position + AimedDirection * 1000)
 end)
 )
 
-LegitAimLandConnection = LocalHumanoid:GetPropertyChangedSignal('FloorMaterial'):Connect(function()
+LegitAimLandConnection = State.Lifecycle:Connect(LocalHumanoid:GetPropertyChangedSignal('FloorMaterial'), function()
 if LocalHumanoid.FloorMaterial ~= Enum.Material.Air then
 StopLegitAimTween()
 end
 end)
 if not OriginalCamlock then
-task.delay(ReleaseAt, function()
+State.LegitAimStopTask = State.Lifecycle:Delay(ReleaseAt, function()
 if Generation == State.LegitAimGeneration then StopLegitAimTween() end
 end)
 end
@@ -13228,7 +13547,7 @@ end
 local function UpdateSilentAimController()
 if not (State.Active and State.Enabled) then
 if AimbotConn then
-AimbotConn:Disconnect()
+State.Lifecycle:DisconnectConnection(AimbotConn)
 AimbotConn = nil
 end
 SilentAim.ClearActorAim()
@@ -13241,7 +13560,7 @@ end
 
 if not Humanoid then InitCharacter() end
 if not Humanoid then return end
-AimbotConn = Humanoid:GetPropertyChangedSignal('Jump'):Connect(function()
+AimbotConn = State.Lifecycle:Connect(Humanoid:GetPropertyChangedSignal('Jump'), function()
 if Humanoid.Jump then
 if State.NoJump.Active then return end
 SilentAim.ReleasePredictionDeadline = 0
@@ -13296,7 +13615,7 @@ local PeakHandled = false
 local function AttemptPeakShot()
 if PeakHandled then return end
 PeakHandled = true
-if CheckPeakJump then CheckPeakJump:Disconnect() end
+if CheckPeakJump then State.Lifecycle:DisconnectConnection(CheckPeakJump); CheckPeakJump = nil end
 if CONFIG.TrickshotEnabled or CONFIG.AutoFadeaway then State.Trickshot.WaitForStyle() end
 
 local PeakShotAttempted = false
@@ -13319,12 +13638,12 @@ end
 SilentAim.ReleasePredictionDeadline = 0
 end
 
-CheckPeakJump = RunService.Heartbeat:Connect(WYNF_JIT(function(DeltaTime)
+CheckPeakJump = State.Lifecycle:Connect(RunService.Heartbeat, WYNF_JIT(function(DeltaTime)
 if State.PassInProgress or (State.AutoDunk and State.AutoDunk.InProgress)
 or not (State.Active and State.Enabled) or not HumanoidRootPart then
 if JumpArmTarget then SilentAim.ClearActorAim() end
 SilentAim.ReleasePredictionDeadline = 0
-CheckPeakJump:Disconnect()
+State.Lifecycle:DisconnectConnection(CheckPeakJump); CheckPeakJump = nil
 return
 end
 local VelY = HumanoidRootPart.AssemblyLinearVelocity.Y
@@ -13369,7 +13688,7 @@ State.ClickShoot.Armed = false
 State.ClickShoot.Target = nil
 State.ClickShoot.Status = 'IDLE'
 if JumpArmTarget then SilentAim.ClearActorAim() end
-CheckPeakJump:Disconnect()
+State.Lifecycle:DisconnectConnection(CheckPeakJump); CheckPeakJump = nil
 end
 return
 end
@@ -13401,7 +13720,7 @@ end
 if not IsRising and os.clock() - StartedAt > 0.5 then
 if JumpArmTarget then SilentAim.ClearActorAim() end
 SilentAim.ReleasePredictionDeadline = 0
-CheckPeakJump:Disconnect()
+State.Lifecycle:DisconnectConnection(CheckPeakJump); CheckPeakJump = nil
 end
 end))
 end
@@ -13435,7 +13754,7 @@ SilentAim.FireActorAim(Target)
 State.ClickShoot.Target = Target
 end
 end)
-task.delay(0.25, function() pcall(SilentAim.ClearActorAim) end)
+State.Lifecycle:Delay(0.25, function() pcall(SilentAim.ClearActorAim) end)
 end))
 
 local HubUI = {
@@ -13475,7 +13794,7 @@ local GroundY = Root.Position.Y
 local EndsAt = os.clock() + math.max(
 tonumber(CONFIG.NoJumpGroundLockTime) or 0.30, 0.08)
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 while State.Active and State.NoJump.Active
 and State.NoJump.Generation == Generation and os.clock() < EndsAt
 and Root and Root.Parent and HumanoidObject and HumanoidObject.Parent do
@@ -13598,7 +13917,7 @@ local ShotOk = SilentShoot(Rim, YOffset or 0, Target, Target)
 pcall(function()
 VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
 end)
-task.delay(0.08, function()
+State.Lifecycle:Delay(0.08, function()
 if State.NoJump.Generation == Generation then
 State.NoJump.SyntheticInput = false
 end
@@ -13631,7 +13950,7 @@ if not ShouldCapture then
 return Enum.ContextActionResult.Pass
 end
 if InputState == Enum.UserInputState.Begin then
-task.spawn(State.NoJump.Fire)
+State.Lifecycle:Spawn(State.NoJump.Fire)
 end
 return Enum.ContextActionResult.Sink
 end,
@@ -13936,7 +14255,7 @@ State.AutoBody.HandSampleHand = nil
 State.AutoBody.HandSampleResting = false
 State.AutoBody.HandSampleTrack = nil
 if State.AutoBody.BounceConnection then
-pcall(function() State.AutoBody.BounceConnection:Disconnect() end)
+pcall(function() State.Lifecycle:DisconnectConnection(State.AutoBody.BounceConnection) end)
 end
 State.AutoBody.BounceConnection = nil
 State.AutoBody.BounceTrack = nil
@@ -13956,10 +14275,10 @@ end
 
 function State.AutoBody.AttachAnimator(Character, Animator)
 if State.AutoBody.Animator == Animator then return end
-if State.AutoBody.AnimatorConnection then pcall(function() State.AutoBody.AnimatorConnection:Disconnect() end) end
+if State.AutoBody.AnimatorConnection then pcall(function() State.Lifecycle:DisconnectConnection(State.AutoBody.AnimatorConnection) end) end
 State.AutoBody.Animator, State.AutoBody.AnimatorConnection = Animator, nil
 if not Animator then return end
-State.AutoBody.AnimatorConnection = Animator.AnimationPlayed:Connect(function(Track)
+State.AutoBody.AnimatorConnection = State.Lifecycle:Connect(Animator.AnimationPlayed, function(Track)
 local Animation = Track.Animation
 local Id, Name = Animation and Animation.AnimationId, Animation and Animation.Name
 local Hand = (Id == State.AutoBody.RightDribbleAnimationId or Name == 'RTrack') and 'R'
@@ -14043,13 +14362,13 @@ function State.AutoBody.WatchBounce(Track)
 if not CONFIG.AutoBodyBounceSync then return end
 if not Track or State.AutoBody.BounceTrack == Track then return end
 if State.AutoBody.BounceConnection then
-pcall(function() State.AutoBody.BounceConnection:Disconnect() end)
+pcall(function() State.Lifecycle:DisconnectConnection(State.AutoBody.BounceConnection) end)
 State.AutoBody.BounceConnection = nil
 end
 State.AutoBody.BounceTrack = Track
 pcall(function()
 State.AutoBody.BounceConnection =
-Track:GetMarkerReachedSignal('bounce'):Connect(function()
+State.Lifecycle:Connect(Track:GetMarkerReachedSignal('bounce'), function()
 local Now = os.clock()
 local Gap = Now - (State.AutoBody.LastBounceAt or 0)
 if Gap > 0.1 and Gap < 1.5 then
@@ -14226,7 +14545,7 @@ State.AutoBody.LastHandSwitchAt = Now
 State.AutoBody.HandCandidate = nil
 State.AutoBody.HandCandidateSince = 0
 State.AutoBody.HandStatus = DesiredHand == 'L' and 'SWITCHING LEFT' or 'SWITCHING RIGHT'
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local Pressed = pcall(function()
 VirtualInputManager:SendKeyEvent(true, Key, false, game)
 end)
@@ -14424,7 +14743,7 @@ return DesiredDirection
 end
 
 local function UpdateAutoBodyBinding()
-pcall(function() RunService:UnbindFromRenderStep(AUTO_BODY_BIND_NAME) end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep(AUTO_BODY_BIND_NAME) end)
 State.AutoBody.ReleaseRotation()
 
 if not State.AutoBody.Enabled then
@@ -14439,7 +14758,7 @@ end
 
 State.AutoBody.ResetRuntime()
 State.AutoBody.LastTargetScan = 0
-RunService:BindToRenderStep(
+State.Lifecycle:BindToRenderStep(
 AUTO_BODY_BIND_NAME,
 Enum.RenderPriority.Character.Value + 1,
 WYNF_JIT(function(DeltaTime)
@@ -15049,9 +15368,9 @@ end
 function State.AutoMix.AttachAnimator(Character, HumanoidObject)
 local Animator = HumanoidObject and safe_find(HumanoidObject, 'Animator')
 if not Animator or State.AutoMix.Animator == Animator then return end
-if State.AutoMix.AnimatorConnection then pcall(function() State.AutoMix.AnimatorConnection:Disconnect() end) end
+if State.AutoMix.AnimatorConnection then pcall(function() State.Lifecycle:DisconnectConnection(State.AutoMix.AnimatorConnection) end) end
 State.AutoMix.Animator = Animator
-State.AutoMix.AnimatorConnection = Animator.AnimationPlayed:Connect(function(Track)
+State.AutoMix.AnimatorConnection = State.Lifecycle:Connect(Animator.AnimationPlayed, function(Track)
 local Name = Track and Track.Name or ''
 if Name == 'RTrack' then State.AutoMix.CurrentHand = 'R'; return end
 if Name == 'LTrack' then State.AutoMix.CurrentHand = 'L'; return end
@@ -15062,8 +15381,8 @@ State.AutoMix.MoveCooldownUntil[Info.Move] = 0
 State.AutoMix.Busy = true
 State.AutoMix.LastTrack = Track
 State.AutoMix.LastMove = State.AutoMix.Moves[Info.Move] and State.AutoMix.Moves[Info.Move].Label or Info.Move
-if State.AutoMix.TrackConnection then pcall(function() State.AutoMix.TrackConnection:Disconnect() end) end
-State.AutoMix.TrackConnection = Track.Stopped:Connect(function()
+if State.AutoMix.TrackConnection then pcall(function() State.Lifecycle:DisconnectConnection(State.AutoMix.TrackConnection) end) end
+State.AutoMix.TrackConnection = State.Lifecycle:Connect(Track.Stopped, function()
 State.AutoMix.CurrentHand = Info.EndHand or State.AutoMix.CurrentHand
 State.AutoMix.Busy = false
 State.AutoMix.LastTrack = nil
@@ -15542,12 +15861,12 @@ State.AutoMix.MovementUntil = os.clock() + (Move.Timeout or 0.42)
 end
 State.AutoMix.StartSpin(Move)
 local Pressed = pcall(function() VirtualInputManager:SendKeyEvent(true, Key, false, game) end)
-task.delay(0.03, function()
+State.Lifecycle:Delay(0.03, function()
 pcall(function() VirtualInputManager:SendKeyEvent(false, Key, false, game) end)
 State.AutoMix.SendingInput = false
 end)
 if not Pressed then State.AutoMix.StopSpin() end
-task.delay(Move.Timeout or 0.42, function()
+State.Lifecycle:Delay(Move.Timeout or 0.42, function()
 if State.Active and State.AutoMix.Generation == Generation and State.AutoMix.Busy then
 State.AutoMix.Busy = false
 if ExpectedEndHand then State.AutoMix.CurrentHand = ExpectedEndHand end
@@ -15909,8 +16228,8 @@ end
 end
 end))
 
-pcall(function() RunService:UnbindFromRenderStep(State.AutoMix.ShiftLockBindName) end)
-RunService:BindToRenderStep(
+pcall(function() State.Lifecycle:UnbindFromRenderStep(State.AutoMix.ShiftLockBindName) end)
+State.Lifecycle:BindToRenderStep(
 State.AutoMix.ShiftLockBindName,
 Enum.RenderPriority.Camera.Value + 5,
 function()
@@ -15923,7 +16242,7 @@ end
 end
 )
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 while State.Active do
 if State.AutoMix.Enabled then
 local Character = LP.Character
@@ -16477,7 +16796,7 @@ end
 
 local function UpdateAutoGuardBinding()
 pcall(function()
-RunService:UnbindFromRenderStep(AUTO_GUARD_BIND_NAME)
+State.Lifecycle:UnbindFromRenderStep(AUTO_GUARD_BIND_NAME)
 end)
 
 if not State.AutoGuardEnabled then
@@ -16504,7 +16823,7 @@ end
 
 local JumpTarget
 local TargetWasJumping = false
-RunService:BindToRenderStep(
+State.Lifecycle:BindToRenderStep(
 AUTO_GUARD_BIND_NAME,
 Enum.RenderPriority.Input.Value + 1,
 WYNF_JIT(function(DeltaTime)
@@ -16653,7 +16972,7 @@ CONFIG.AutoGetOpen = false
 State.AutoGetOpenTarget = nil
 State.AutoGetOpenRoute = 'Waiting'
 State.AutoGetOpenStatus = 'OFF'
-pcall(function() RunService:UnbindFromRenderStep(AUTO_GET_OPEN_BIND_NAME) end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep(AUTO_GET_OPEN_BIND_NAME) end)
 end
 if not State.AutoGuardEnabled then
 State.AutoGuardTarget = nil
@@ -16707,7 +17026,7 @@ State.AutoGuardTarget = nil
 SetAutoGuardEnabled(not State.AutoGuardEnabled, false)
 end
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 while State.Active do
 if State.AutoGuardEnabled then
 local Ok, Target, AdaptiveState, EffectiveMode = pcall(function()
@@ -18225,7 +18544,7 @@ return Anchors
 end
 
 local function UpdateAutoGetOpenBinding()
-pcall(function() RunService:UnbindFromRenderStep(AUTO_GET_OPEN_BIND_NAME) end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep(AUTO_GET_OPEN_BIND_NAME) end)
 
 if not State.AutoGetOpenEnabled then
 State.AutoGetOpenTarget = nil
@@ -18246,7 +18565,7 @@ State.AutoGetOpenPressureAdvanceUntil = 0
 return
 end
 
-RunService:BindToRenderStep(
+State.Lifecycle:BindToRenderStep(
 AUTO_GET_OPEN_BIND_NAME,
 Enum.RenderPriority.Last.Value,
 WYNF_JIT(function()
@@ -19014,7 +19333,7 @@ return true
 end
 
 function State.AutoDunk.UpdateBinding()
-pcall(function() RunService:UnbindFromRenderStep(State.AutoDunk.BindName) end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep(State.AutoDunk.BindName) end)
 State.AutoDunk.ReleaseKey()
 State.AutoDunk.Target = nil
 State.AutoDunk.TargetDistance = math.huge
@@ -19030,7 +19349,7 @@ return
 end
 State.AutoDunkStatus = 'WAITING'
 
-RunService:BindToRenderStep(
+State.Lifecycle:BindToRenderStep(
 State.AutoDunk.BindName,
 Enum.RenderPriority.Input.Value + 3,
 WYNF_JIT(function()
@@ -19437,7 +19756,7 @@ State.AutoPassEnabled = Enabled == true
 CONFIG.AutoPass = State.AutoPassEnabled
 if State.AutoPassEnabled then
 pcall(UpdatePassLabels)
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 if State.Active and State.AutoPassEnabled and SilentAim.ActorAimReady ~= true then
 pcall(SilentAim.EnsureActorAim)
 end
@@ -19556,7 +19875,7 @@ Camera.CFrame = SavedCameraCFrame
 if SavedCameraFocus then Camera.Focus = SavedCameraFocus end
 end)
 end
-task.delay(0.25, function()
+State.Lifecycle:Delay(0.25, function()
 if State.PassGeneration == Generation then SilentAim.ClearActorAim() end
 end)
 return Ok
@@ -19567,7 +19886,7 @@ if State.PassInProgress or State.silentShootActive then return false end
 State.PassGeneration += 1
 local Generation = State.PassGeneration
 State.PassInProgress = true
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local Ok, ErrorText = pcall(Work, Generation)
 if State.PassGeneration == Generation then State.PassInProgress = false end
 if not Ok then
@@ -19654,7 +19973,7 @@ local Stroke = Instance.new('UIStroke')
 Stroke.Color = Color3.fromRGB(212, 175, 55)
 Stroke.Thickness = 1.5
 Stroke.Parent = Button
-Button.Activated:Connect(function() StartTeammatePass(Index) end)
+State.Lifecycle:Connect(Button.Activated, function() StartTeammatePass(Index) end)
 end
 State.MobilePass.Gui = Gui
 end
@@ -19725,7 +20044,7 @@ end
 
 GiveSignal(UserInputService.JumpRequest:Connect(StartAutoSelfPass))
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 while State.Active do
 if State.AutoPassEnabled then
 pcall(UpdatePassLabels)
@@ -19767,7 +20086,7 @@ if HubUI.Sync then HubUI.Sync() end
 return
 end
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local WaitingNotified = false
 while State.Active and State.RequestedEnabled
 and Generation == AimToggleGeneration and not ActorsAvailable() do
@@ -19792,7 +20111,7 @@ end)
 end
 
 State.AimMatchDisarm = { Auto = false }
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 task.wait(2)
 while State.Active do
 if CONFIG.AimOnlyInMatch then
@@ -19821,7 +20140,7 @@ function State.ArenaSilentAimRecovery.Queue()
 if not (IsArenaMode and State.Active and State.RequestedEnabled) then return end
 State.ArenaSilentAimRecovery.Generation += 1
 local Generation = State.ArenaSilentAimRecovery.Generation
-task.delay(0.75, function()
+State.Lifecycle:Delay(0.75, function()
 if not (State.Active and State.RequestedEnabled)
 or Generation ~= State.ArenaSilentAimRecovery.Generation then
 return
@@ -21003,7 +21322,7 @@ State.AutoOffense.StopSmoothMovement(Humanoid)
 Humanoid.Jump = true
 pcall(function() Humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end)
 
-task.delay(1.2, function()
+State.Lifecycle:Delay(1.2, function()
 State.AutoOffense.FinishAction(Generation, 'READY')
 end)
 return true
@@ -21041,7 +21360,7 @@ State.AutoOffense.FinishAction(Generation, 'DUNK INPUT FAILED')
 return false
 end
 
-task.delay(math.max(0.35, tonumber(CONFIG.AutoDunkHoldTime) or 1.45), function()
+State.Lifecycle:Delay(math.max(0.35, tonumber(CONFIG.AutoDunkHoldTime) or 1.45), function()
 if Generation ~= State.AutoOffense.Generation then return end
 State.AutoDunk.ReleaseKey()
 State.AutoOffense.FinishAction(Generation, 'READY')
@@ -21787,7 +22106,7 @@ end
 end
 
 function State.AutoOffense.UpdateBinding()
-pcall(function() RunService:UnbindFromRenderStep(State.AutoOffense.BindName) end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep(State.AutoOffense.BindName) end)
 
 if not State.AutoOffense.Enabled then
 State.AutoOffense.ClearPathVisual()
@@ -21804,7 +22123,7 @@ return
 end
 
 State.AutoOffense.Status = 'READY'
-RunService:BindToRenderStep(
+State.Lifecycle:BindToRenderStep(
 State.AutoOffense.BindName,
 Enum.RenderPriority.Input.Value + 4,
 WYNF_JIT(function(DeltaTime)
@@ -22324,9 +22643,9 @@ State.Outline.LastUpdate = 0
 State.Outline.LastMembershipAt = 0
 end
 function State.Outline.UpdateBinding()
-pcall(function() RunService:UnbindFromRenderStep(State.Outline.BindName) end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep(State.Outline.BindName) end)
 if not State.Outline.Enabled then State.Outline.Clear(); return end
-RunService:BindToRenderStep(State.Outline.BindName, Enum.RenderPriority.Camera.Value + 50, WYNF_JIT(function(DeltaTime)
+State.Lifecycle:BindToRenderStep(State.Outline.BindName, Enum.RenderPriority.Camera.Value + 50, WYNF_JIT(function(DeltaTime)
 if State.Active and State.Outline.Enabled then State.Outline.Update(DeltaTime) else State.Outline.Clear() end
 end))
 end
@@ -23748,7 +24067,7 @@ end
 Tween(Button, 0.20, { TextTransparency = 0, Rotation = 0 }, Enum.EasingStyle.Quint)
 else
 Tween(Button, 0.16, { TextTransparency = 1, Rotation = 24 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(HubUI.Motion.Hold(0.17), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.17), function()
 if Button.Parent and Button:GetAttribute('AnimationSerial') == Serial then
 Button.Visible = false
 Button.Rotation = 0
@@ -24645,7 +24964,7 @@ local TabSerial = 0
 local SwitchTab
 
 local function EnsureTabVisible(Name, AlignToStart)
-task.defer(function()
+State.Lifecycle:Defer(function()
 if not (NavList and NavList.Parent and NavLayout and NavLayout.Parent) then return end
 local Data = HubUI.TabButtons[Name]
 local Button = Data and Data.Button
@@ -24786,7 +25105,7 @@ UpdateNavigationHover(Vector2.new(Input.Position.X, Input.Position.Y))
 end
 end))
 GiveSignal(NavList:GetPropertyChangedSignal('CanvasPosition'):Connect(function()
-task.defer(function()
+State.Lifecycle:Defer(function()
 if NavList and NavList.Parent then UpdateNavigationHover(UserInputService:GetMouseLocation()) end
 end)
 end))
@@ -24814,7 +25133,7 @@ Tween(ActivePageLabel, 0.10, {
 TextTransparency = 1,
 Position = UDim2.fromOffset(196, -2),
 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(HubUI.Motion.Hold(0.105), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.105), function()
 if ThisLabelSerial ~= PageLabelSerial or not ActivePageLabel.Parent then return end
 ActivePageLabel.Text = string.upper(Name)
 ActivePageLabel.Position = UDim2.fromOffset(196, 3)
@@ -24843,7 +25162,7 @@ for _, TabData in pairs(HubUI.TabButtons) do
 if TabData.RefreshRow then TabData.RefreshRow() end
 end
 
-task.delay(HubUI.Motion.Hold(0.29), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.29), function()
 if ThisSerial ~= TabSerial then return end
 for PageName, Page in pairs(Pages) do
 local Selected = PageName == Name
@@ -24940,7 +25259,7 @@ Label.Visible = true
 Label.Size = UDim2.new(1, -6, 0, 0)
 Label.TextTransparency = 1
 end
-task.delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(DelayIndex)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+State.Lifecycle:Delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(DelayIndex)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
 if CategorySearchSerials[Category] ~= Serial or not Label.Parent then return end
 Tween(Label, 0.15, {
 Size = UDim2.new(1, -6, 0, 15),
@@ -24952,7 +25271,7 @@ Tween(Label, 0.1, {
 Size = UDim2.new(1, -6, 0, 0),
 TextTransparency = 1,
 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-task.delay(HubUI.Motion.Hold(0.11), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.11), function()
 if CategorySearchSerials[Category] == Serial and Label.Parent then Label.Visible = false end
 end)
 end
@@ -24970,7 +25289,7 @@ Button.Size = UDim2.fromOffset(170, 0)
 Button.TextTransparency = 1
 Button.BackgroundTransparency = 1
 end
-task.delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(DelayIndex)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+State.Lifecycle:Delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(DelayIndex)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
 if Data.SearchAnimationSerial ~= Serial or not Button.Parent then return end
 Tween(Button, 0.18, {
 Size = UDim2.fromOffset(170, 22),
@@ -24986,7 +25305,7 @@ TextTransparency = 1,
 BackgroundTransparency = 1,
 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 Tween(Data.Marker, 0.09, { BackgroundTransparency = 1 })
-task.delay(HubUI.Motion.Hold(0.12), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.12), function()
 if Data.SearchAnimationSerial == Serial and Button.Parent then Button.Visible = false end
 end)
 end
@@ -25680,7 +25999,7 @@ GroupTransparency = 1,
 Position = Popup.Position + UDim2.fromOffset(0, -2),
 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(PopupScale, 0.18, { Scale = 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(HubUI.Motion.Hold(0.19), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.19), function()
 if Control.AnimationSerial == Serial and not Control.Open and Popup.Parent then Popup.Visible = false end
 end)
 if ActiveDropdown == Control then ActiveDropdown = nil end
@@ -25757,7 +26076,7 @@ for RowIndex, Entry in ipairs(Rows) do
 if Entry.Button.Visible then
 Entry.Button.TextTransparency = 1
 Entry.Button.BackgroundTransparency = 1
-task.delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(RowIndex - 1)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+State.Lifecycle:Delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(RowIndex - 1)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
 if Control.AnimationSerial ~= Serial or not Control.Open or not Entry.Button.Parent then return end
 Tween(Entry.Button, 0.18, {
 TextTransparency = 0,
@@ -25766,7 +26085,7 @@ BackgroundTransparency = 0,
 end)
 end
 end
-task.defer(function() if DropdownSearch.Parent and Control.Open then DropdownSearch:CaptureFocus() end end)
+State.Lifecycle:Defer(function() if DropdownSearch.Parent and Control.Open then DropdownSearch:CaptureFocus() end end)
 end
 
 for Slot = 1, 7 do
@@ -26398,7 +26717,7 @@ GroupTransparency = 1,
 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(ColorPickerCard, 0.20, { Position = UDim2.fromScale(0.5, 0.515) }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(ColorPickerCardScale, 0.20, { Scale = 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(HubUI.Motion.Hold(0.21), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.21), function()
 if PickerAnimationSerial == Serial and ColorPickerOverlay.Parent then ColorPickerOverlay.Visible = false end
 end)
 DragSV, DragHue = false, false
@@ -26408,13 +26727,13 @@ end
 HubUI.OpenCustomColorPicker = function(Title, InitialColor, PreviewCallback, CommitCallback)
 HubUI.OpenColorPicker(nil, InitialColor, PreviewCallback, CommitCallback, Title)
 end
-PickerApply.MouseButton1Click:Connect(function()
+State.Lifecycle:Connect(PickerApply.MouseButton1Click, function()
 local Color = HexToColor(PickerHex.Text, PickerInitialColor or Theme[PickerRole] or Color3.new(1, 1, 1))
 PickerH, PickerS, PickerV = Color:ToHSV()
 RefreshPickerVisuals(true)
 ClosePicker(true)
 end)
-PickerCancel.MouseButton1Click:Connect(function() ClosePicker(false) end)
+State.Lifecycle:Connect(PickerCancel.MouseButton1Click, function() ClosePicker(false) end)
 GiveSignal(PickerHex.FocusLost:Connect(function(EnterPressed)
 if not (PickerRole or PickerInitialColor) then return end
 local Color = HexToColor(PickerHex.Text, PickerInitialColor or Theme[PickerRole] or Color3.new(1, 1, 1))
@@ -26867,11 +27186,11 @@ BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'HOP NOW', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, UtilityAutomationGroup)
 AccentStroke(HopNowButton, 1, 0.18)
-GiveSignal(HopNowButton.MouseButton1Click:Connect(function() task.spawn(State.Utility.HopNow, 'manual') end))
+GiveSignal(HopNowButton.MouseButton1Click:Connect(function() State.Lifecycle:Spawn(State.Utility.HopNow, 'manual') end))
 HubUI.Controls.HopNowAction = {
 SearchRoot = HopNowButton, SearchParent = UtilityAutomationGroup,
 SearchLabel = 'Hop now', Kind = 'Action',
-Trigger = function() task.spawn(State.Utility.HopNow, 'manual') end,
+Trigger = function() State.Lifecycle:Spawn(State.Utility.HopNow, 'manual') end,
 }
 CreateSectionHeader(UtilityAutomationGroup, 211, 'Live status')
 local UtilityAutomationStatus = CreateParagraph(
@@ -27350,13 +27669,13 @@ Font = Enum.Font.Code, Text = 'RESTORE', TextColor3 = Theme.Text, TextSize = 9, 
 AccentStroke(State.Extras.AvatarApplyButton, 1, 0.18)
 AccentStroke(State.Extras.AvatarRestoreButton, 1, 0.18)
 GiveSignal(State.Extras.AvatarApplyButton.MouseButton1Click:Connect(function()
-task.spawn(State.Extras.ApplyAvatarPreview, State.Extras.AvatarIdBox.Text)
+State.Lifecycle:Spawn(State.Extras.ApplyAvatarPreview, State.Extras.AvatarIdBox.Text)
 end))
 GiveSignal(State.Extras.AvatarRestoreButton.MouseButton1Click:Connect(State.Extras.RestoreAvatarPreview))
 HubUI.Controls.ApplyAvatarAction = {
 SearchRoot = State.Extras.AvatarApplyButton, SearchParent = PrivacyGroup,
 SearchLabel = 'Apply full local avatar package and face', Kind = 'Action',
-Trigger = function() task.spawn(State.Extras.ApplyAvatarPreview, State.Extras.AvatarIdBox.Text) end,
+Trigger = function() State.Lifecycle:Spawn(State.Extras.ApplyAvatarPreview, State.Extras.AvatarIdBox.Text) end,
 }
 HubUI.Controls.RestoreAvatarAction = {
 SearchRoot = State.Extras.AvatarRestoreButton, SearchParent = PrivacyGroup,
@@ -27593,7 +27912,7 @@ CustomGoalCodeBox:ReleaseFocus()
 Tween(CustomGoalOverlay, 0.18, { GroupTransparency = 1, BackgroundTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(CustomGoalCard, 0.18, { Position = UDim2.fromScale(0.5, 0.515) }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(CustomGoalCardScale, 0.18, { Scale = 0.98 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(HubUI.Motion.Hold(0.19), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.19), function()
 if CustomGoalAnimationSerial == Serial and CustomGoalOverlay.Parent then CustomGoalOverlay.Visible = false end
 end)
 end
@@ -27699,7 +28018,7 @@ GiveSignal(CustomGoalExtract.MouseButton1Click:Connect(function()
 local Selected = tostring(State.LocalGoalEffect or '')
 CustomGoalStatus.Text = 'EXTRACTING  /  '..string.upper(Selected)
 CustomGoalStatus.TextColor3 = Theme.Muted
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local Source, SourceName, ExtractError = State.LocalSpoofs.ExtractGoalEffectSource(Selected)
 if not (CustomGoalOverlay and CustomGoalOverlay.Parent) then return end
 if not Source then
@@ -28700,7 +29019,7 @@ HubUI.Controls.DesyncVisualizer = CreateCheckbox(HubUI.SyncGroup, 47, 'Position 
 HubUI.Controls.Outline = CreateCheckbox(HubUI.SyncGroup, 77, 'Position Outlines', State.Outline.Enabled, function(Value) State.Outline.SetEnabled(Value) end)
 HubUI.Controls.OutlineMode = CreateSelector(HubUI.SyncGroup, 107, 'Show outlines for', { 'both', 'self', 'enemies' }, State.Outline.Mode, function(Value) State.Outline.SetMode(Value) end, 135)
 HubUI.DesyncStatusText = CreateParagraph(HubUI.SyncGroup, UDim2.fromOffset(8, 138), UDim2.new(1, -16, 0, 82), 'status  off\noffset  --\navg offset  --\nsamples  0')
-if CONFIG.DesyncVisualizer then task.defer(function() State.DesyncVisualizer.SetEnabled(true) end) end
+if CONFIG.DesyncVisualizer then State.Lifecycle:Defer(function() State.DesyncVisualizer.SetEnabled(true) end) end
 
 HubUI.Controls.SilentAim = CreateCheckbox(LeftGroup, 29, 'Silent Aim', State.RequestedEnabled, function(Value)
 SetSilentAimEnabled(Value, true)
@@ -29751,10 +30070,10 @@ AccentStroke(RecheckButton, 1, 0.2)
 
 GiveSignal(RecheckButton.MouseButton1Click:Connect(function()
 RecheckButton.Text = 'Checking...'
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local Ready = SilentAim.EnsureActorAim()
 RecheckButton.Text = Ready and 'Actor hooks ready' or 'Actor hooks unavailable'
-task.delay(1.2, function()
+State.Lifecycle:Delay(1.2, function()
 if RecheckButton.Parent then RecheckButton.Text = 'Recheck actor hooks' end
 end)
 end)
@@ -29764,10 +30083,10 @@ SearchRoot = RecheckButton, SearchParent = StatusGroup,
 SearchLabel = 'Recheck actor hooks', Kind = 'Action',
 Trigger = function()
 RecheckButton.Text = 'Checking...'
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local Ready = SilentAim.EnsureActorAim()
 RecheckButton.Text = Ready and 'Actor hooks ready' or 'Actor hooks unavailable'
-task.delay(1.2, function()
+State.Lifecycle:Delay(1.2, function()
 if RecheckButton.Parent then RecheckButton.Text = 'Recheck actor hooks' end
 end)
 end)
@@ -30105,7 +30424,7 @@ return
 end
 HubUI.ConfigApplying = true
 SetConfigStatus('Applying profile in safe batches...')
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 if type(Profile.Config) == 'table' then MergeConfig(CONFIG, DeepCopy(Profile.Config)) end
 if type(Profile.Interface) == 'table' then pcall(ApplyInterfaceSnapshot, Profile.Interface) end
 local Queue = {}
@@ -30322,7 +30641,7 @@ end
 function KeybindManager:ScheduleSave()
 self.SaveSerial += 1
 local Serial = self.SaveSerial
-task.delay(0.12, function()
+State.Lifecycle:Delay(0.12, function()
 if Serial == self.SaveSerial and State.Active then SaveInterfaceConfig() end
 end)
 end
@@ -30437,7 +30756,7 @@ if not Entry then return end
 InterfaceConfig.MobileButtonHidden[Entry.Id] = true
 InterfaceConfig.MobileButtonPositions[Entry.Id] = nil
 self:ScheduleSave()
-task.defer(function()
+State.Lifecycle:Defer(function()
 if State.Active and self.RefreshMobileQuick then self:RefreshMobileQuick(true) end
 end)
 Notify('SILVER SURFER', Entry.Label .. ' button removed. Pin it again in Keybinds to restore it.')
@@ -30503,7 +30822,7 @@ function KeybindManager:EndCapture()
 self.Capture = nil
 Tween(CaptureOverlay, 0.18, { GroupTransparency = 1, BackgroundTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(CaptureScale, 0.18, { Scale = 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(HubUI.Motion.Hold(0.19), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.19), function()
 if not self.Capture and CaptureOverlay.Parent then CaptureOverlay.Visible = false end
 end)
 end
@@ -30750,7 +31069,7 @@ Tween(OverlayScale, 0.26, { Scale = 1 }, Enum.EasingStyle.Quint)
 else
 Tween(Overlay, 0.18, { GroupTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(OverlayScale, 0.18, { Scale = 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(HubUI.Motion.Hold(0.19), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.19), function()
 if ThisSerial == OverlayVisibilitySerial and Overlay.Parent then
 Overlay.Visible = false
 end
@@ -31028,7 +31347,7 @@ if not State.NoJump.IsEnabled() then
 Notify('SILVER SURFER', 'Enable No Jump Shot under Silent Aim first.')
 return
 end
-task.spawn(State.NoJump.Fire)
+State.Lifecycle:Spawn(State.NoJump.Fire)
 end,
 })
 for Index, KeyCode in ipairs({ Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four, Enum.KeyCode.Five }) do
@@ -31164,7 +31483,7 @@ TouchSupport.LauncherMoved = false
 return
 end
 HubUI.Motion.Press(LauncherScale, true)
-task.delay(0.09, function()
+State.Lifecycle:Delay(0.09, function()
 if LauncherScale.Parent then HubUI.Motion.Press(LauncherScale, false) end
 end)
 if HubUI.SetOpen then HubUI.SetOpen(not HubUI.Open) end
@@ -31213,7 +31532,7 @@ DarkStroke(Button)
 local Scale = New('UIScale', { Scale = 1 }, Button)
 GiveSignal(Button.Activated:Connect(function()
 HubUI.Motion.Press(Scale, true)
-task.delay(0.08, function()
+State.Lifecycle:Delay(0.08, function()
 if Scale.Parent then HubUI.Motion.Press(Scale, false) end
 end)
 CycleTab(Button == PrevTabButton and -1 or 1)
@@ -31456,7 +31775,7 @@ ActiveHolds[DragKey] = Entry
 self:Invoke(Entry, true, 1)
 end
 end))
-task.defer(function() ClampMobileButton(Button) end)
+State.Lifecycle:Defer(function() ClampMobileButton(Button) end)
 end
 end
 PaintMobileButtons()
@@ -31513,7 +31832,7 @@ end))
 
 KeybindManager:RefreshMobileQuick(true)
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local LastOpen
 local LastFlight
 local LastViewport = Vector2.zero
@@ -31549,7 +31868,7 @@ task.wait(HubUI.Motion.Hold(0.15))
 end
 end)
 
-task.defer(ClampLauncher)
+State.Lifecycle:Defer(ClampLauncher)
 end
 
 BuildDesktopTouchSupport()
@@ -31608,7 +31927,7 @@ KeybindManager:ScheduleSave()
 Notify('SILVER SURFER', 'Keybinds reset to defaults.')
 end))
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 while State.Active do
 for _, Entry in ipairs(KeybindManager.Ordered) do
 if Entry.Mode == 'Always' and Entry.Kind == 'Toggle' and Entry.Control and not Entry.Control.Value then
@@ -31702,7 +32021,7 @@ GroupTransparency = 1,
 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(GlobalSearchResultsScale, 0.18, { Scale = 0.985 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(GlobalSearchAccentLine, 0.14, { BackgroundTransparency = 1 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(HubUI.Motion.Hold(0.19), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.19), function()
 if GlobalSearchAnimationSerial == Serial and not GlobalSearchIsOpen and GlobalSearchResults.Parent then
 GlobalSearchResults.Visible = false
 end
@@ -31729,7 +32048,7 @@ Transparency = 0,
 ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 LineJoinMode = Enum.LineJoinMode.Round,
 }, Root)
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 for Step = 1, 18 do
 if not (Highlight and Highlight.Parent) then return end
 Highlight.Transparency = (Step / 18) * 0.92
@@ -31745,7 +32064,7 @@ if not Entry then return end
 GlobalSearchBox:ReleaseFocus()
 CloseGlobalSearch(true)
 SwitchTab(Entry.Page)
-task.delay(0.23, function() FlashSearchTarget(Entry) end)
+State.Lifecycle:Delay(0.23, function() FlashSearchTarget(Entry) end)
 end
 
 for Slot = 1, 7 do
@@ -31852,7 +32171,7 @@ else
 RowData.Label.TextTransparency = 0.42
 RowData.Meta.TextTransparency = 0.55
 end
-task.delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(Slot - 1)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
+State.Lifecycle:Delay((InterfaceConfig.ReducedMotion and 0 or HubUI.Motion.Stagger(Slot - 1)) / math.max(0.1, tonumber(InterfaceConfig.AnimationSpeed) or 1), function()
 if QuerySerial ~= GlobalSearchQuerySerial or RowData.AnimationSerial ~= RowSerial or not RowData.Button.Parent then return end
 Tween(RowData.Button, 0.16, {
 Position = UDim2.fromOffset(0, (Slot - 1) * 28),
@@ -31868,7 +32187,7 @@ BackgroundTransparency = 1,
 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 Tween(RowData.Label, 0.08, { TextTransparency = 1 })
 Tween(RowData.Meta, 0.08, { TextTransparency = 1 })
-task.delay(HubUI.Motion.Hold(0.11), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.11), function()
 if RowData.AnimationSerial == RowSerial and not RowData.Entry and RowData.Button.Parent then
 RowData.Button.Visible = false
 end
@@ -32224,7 +32543,7 @@ Tween(MainScale, 0.28, { Scale = TargetScale }, Enum.EasingStyle.Quint)
 elseif Main.Visible then
 Tween(Main, 0.22, { GroupTransparency = 1, Rotation = 0 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 Tween(MainScale, 0.14, { Scale = TargetScale * 0.99 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-task.delay(HubUI.Motion.Hold(0.23), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(0.23), function()
 if ThisSerial == OpenSerial and not HubUI.Open and Main.Parent then
 Main.Visible = false
 Main.Rotation = 0
@@ -32240,7 +32559,7 @@ end
 -- Global command palette (CTRL+K), hover tooltips, active-features HUD,
 -- playstyle quick presets, config share codes, and a custom accent picker.
 -- Runs in its own closure for a fresh Luau register budget (200-local limit).
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 local B64Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 local function B64Encode(Data)
 local Out = {}
@@ -32294,7 +32613,7 @@ local Modal = ActiveModal
 ActiveModal = nil
 Tween(Modal, 0.14, { GroupTransparency = 1 }, Enum.EasingStyle.Quint)
 Tween(Scrim, 0.14, { BackgroundTransparency = 1 })
-task.delay(0.16, function()
+State.Lifecycle:Delay(0.16, function()
 if ActiveModal ~= Modal then Modal.Visible = false end
 if not ActiveModal then Scrim.Visible = false end
 end)
@@ -32516,7 +32835,7 @@ end
 local function ShowTip(Label, Body)
 TipSerial += 1
 local Serial = TipSerial
-task.delay(0.35, function()
+State.Lifecycle:Delay(0.35, function()
 if Serial ~= TipSerial then return end
 TipTitle.Text = string.upper(tostring(Label or ''))
 TipBody.Text = Body
@@ -33157,7 +33476,7 @@ end
 elseif Entry.Kind == 'Action' then
 pcall(Control.Trigger)
 Status.Text = 'DONE'
-task.delay(0.6, function()
+State.Lifecycle:Delay(0.6, function()
 if Status.Parent then Repaint() end
 end)
 end
@@ -33172,7 +33491,7 @@ local function OpenPalette()
 OpenModal(PaletteModal)
 PaletteBox.Text = ''
 RefreshPalette()
-task.defer(function()
+State.Lifecycle:Defer(function()
 pcall(function() PaletteBox:CaptureFocus() end)
 end)
 end
@@ -33229,7 +33548,7 @@ Tween(Toast.Frame, Instant and 0.12 or 0.22, {
 GroupTransparency = 1,
 Position = Toast.Frame.Position + UDim2.fromOffset(264, 0),
 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-task.delay(HubUI.Motion.Hold(Instant and 0.12 or 0.22), function()
+State.Lifecycle:Delay(HubUI.Motion.Hold(Instant and 0.12 or 0.22), function()
 if Toast.Frame and Toast.Frame.Parent then Toast.Frame:Destroy() end
 end)
 HubUI.RestackToasts()
@@ -33244,7 +33563,7 @@ Toast.ProgressTween = TweenService:Create(Toast.Progress, TweenInfo.new(
 Duration, Enum.EasingStyle.Linear
 ), { Size = UDim2.new(0, 0, 0, 2) })
 Toast.ProgressTween:Play()
-task.delay(Duration, function()
+State.Lifecycle:Delay(Duration, function()
 if Toast.Serial == Serial and not Toast.Closing and not Toast.Hovered then HubUI.DismissToast(Toast) end
 end)
 end
@@ -33397,7 +33716,7 @@ Tween(Bar, 0.34, { Size = UDim2.fromOffset(300, 3) })
 Tween(MainScale, 0.42, { Scale = math.max(0.05, MainScale.Scale * 0.84) })
 Tween(Main, 0.42, { GroupTransparency = 1, Rotation = 0 }, Enum.EasingStyle.Sine)
 
-task.delay(Delay, function()
+State.Lifecycle:Delay(Delay, function()
 local Unload = GlobalEnv.__HOOPZ_SILENTAIM_UNLOAD
 if type(Unload) == 'function' then
 local Ok, ErrorText = pcall(Unload)
@@ -33491,7 +33810,7 @@ local ShiftDown = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
 or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
 if CtrlDown and Input.KeyCode == Enum.KeyCode.F then
 if not HubUI.Open then HubUI.SetOpen(true) end
-task.defer(function()
+State.Lifecycle:Defer(function()
 if GlobalSearchBox and GlobalSearchBox.Parent then
 GlobalSearchBox.Visible = true
 ClearGlobalSearchButton.Visible = GlobalSearchBox.Text ~= ''
@@ -34075,7 +34394,7 @@ end
 end
 end
 HubUI.FitClassicGroupboxes()
-task.defer(HubUI.FitClassicGroupboxes)
+State.Lifecycle:Defer(HubUI.FitClassicGroupboxes)
 
 HubUI.ApplyFont(InterfaceConfig.Font, false)
 Main.BackgroundTransparency = 0
@@ -34093,7 +34412,7 @@ Main.Rotation = 0
 MainScale.Scale = EffectiveScale()
 ClampWindowToViewport()
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 if not InterfaceConfig.Intro or not (State.Active and ScreenGui.Parent and Intro and Intro.Parent) then
 if not InterfaceConfig.Intro and Intro and Intro.Parent then Intro:Destroy() end
 if HubUI.IntroScrim then HubUI.IntroScrim:Destroy(); HubUI.IntroScrim = nil end
@@ -34101,7 +34420,7 @@ HubUI.IntroPlaying = false
 Main.Visible = true
 Main.GroupTransparency = 0
 MainScale.Scale = EffectiveScale()
-task.defer(SaveWindowPosition)
+State.Lifecycle:Defer(SaveWindowPosition)
 return
 end
 
@@ -34144,7 +34463,7 @@ end
 local FillTween = Tween(IntroFill, 1.10, { Size = UDim2.fromScale(1, 1) }, Enum.EasingStyle.Linear)
 -- Counter is driven off the real fill width, so it can never drift out
 -- of sync with the bar or with a reduced-motion duration.
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 while HubUI.IntroPlaying and IntroFill.Parent and IntroFill.Size.X.Scale < 1 do
 local Progress = math.clamp(IntroFill.Size.X.Scale, 0, 1)
 if HubUI.IntroPercent then
@@ -34183,11 +34502,11 @@ task.wait(HubUI.Motion.Hold(0.36))
 if Intro and Intro.Parent then Intro:Destroy() end
 if HubUI.IntroScrim then HubUI.IntroScrim:Destroy(); HubUI.IntroScrim = nil end
 HubUI.IntroPlaying = false
-task.defer(SaveWindowPosition)
+State.Lifecycle:Defer(SaveWindowPosition)
 end)
 end
 
-task.spawn(function()
+State.Lifecycle:Spawn(function()
 while State.Active do
 if CONFIG.AutoPower then
 pcall(function()
@@ -34278,15 +34597,15 @@ State.BallAssist.ColliderLastScanAt = 0
 State.BallAssist.ColliderGraceUntil = os.clock()
 + math.clamp(tonumber(State.BallAssist.ColliderPossessionGrace) or 0.8, 0.2, 2)
 if AimbotConn then
-AimbotConn:Disconnect()
+State.Lifecycle:DisconnectConnection(AimbotConn)
 AimbotConn = nil
 end
 Visuals.GroundY = nil
-task.defer(function() if State.MobilePass then State.MobilePass.Refresh() end end)
+State.Lifecycle:Defer(function() if State.MobilePass then State.MobilePass.Refresh() end end)
 StopLegitAimTween()
 InitCharacter()
 if State.Extras.AvatarPreviewEnabled and State.Extras.AvatarPreviewUserId then
-task.defer(State.Extras.ApplyAvatarPreview, State.Extras.AvatarPreviewUserId)
+State.Lifecycle:Defer(State.Extras.ApplyAvatarPreview, State.Extras.AvatarPreviewUserId)
 end
 State.Movement.RefreshAll()
 State.Utility.SafeCFrame = nil
@@ -34532,7 +34851,7 @@ local Court = State.OffenseTrainer.GetCourt()
 local MyTeam = State.OffenseTrainer.GetMyTeam(Court)
 local HomeBefore = State.OffenseTrainer.GetCourtNumber(Court, 'HomeScore')
 local AwayBefore = State.OffenseTrainer.GetCourtNumber(Court, 'AwayScore')
-task.delay(3, function()
+State.Lifecycle:Delay(3, function()
 if Row.p == nil then
 Row.p = (State.PerfectRelease and State.PerfectRelease.LastResult == 'PERFECT')
 and 1 or 0
@@ -34554,7 +34873,7 @@ end)
 end
 
 function State.OffenseTrainer.WatchPassOutcome(Row)
-task.delay(1.5, function()
+State.Lifecycle:Delay(1.5, function()
 local Success = false
 local Ok, Teammates = pcall(GetPassTeammates)
 if Ok and type(Teammates) == 'table' then
@@ -34571,7 +34890,7 @@ end)
 end
 
 function State.OffenseTrainer.WatchMotionOutcome(Row, Features)
-task.delay(2.5, function()
+State.Lifecycle:Delay(2.5, function()
 local Later = State.OffenseTrainer.BuildFeatures()
 if not Later then
 State.OffenseTrainer.Resolve(Row, nil)
@@ -35025,6 +35344,7 @@ if CONFIG.OffensePolicy then State.OffensePolicy.SetEnabled(true, false) end
 GlobalEnv.__HOOPZ_SILENTAIM_UNLOAD = function()
 if State.Unloading then return end
 State.Unloading = true
+GlobalEnv.__HOOPZ_SILENTAIM_UNLOAD = nil
 State.Active = false
 pcall(function()
 game:GetService('ContextActionService'):UnbindAction(State.NoJump.ActionName)
@@ -35093,7 +35413,7 @@ pcall(function() State.BallAssist.SetTipOff(false) end)
 pcall(function() State.Movement.SetBodyColliders(false) end)
 table.clear(State.BallAssist.Candidates)
 table.clear(State.BallAssist.LastTouchAt)
-pcall(function() RunService:UnbindFromRenderStep('SilverSurferLogoBadges') end)
+pcall(function() State.Lifecycle:UnbindFromRenderStep('SilverSurferLogoBadges') end)
 for LogoName, OriginalValue in pairs(State.Cosmetics.Originals) do
 pcall(function() safe_set_attribute(LP, LogoName, OriginalValue) end)
 end
@@ -35131,7 +35451,7 @@ if GlobalEnv.__HOOPZ_SILENTAIM_SET_ARC_TABLE == SetArcTableApi then
 GlobalEnv.__HOOPZ_SILENTAIM_SET_ARC_TABLE = nil
 end
 if AimbotConn then
-AimbotConn:Disconnect()
+State.Lifecycle:DisconnectConnection(AimbotConn)
 AimbotConn = nil
 end
 
@@ -35147,7 +35467,7 @@ State.Movement and State.Movement.FlightRenderName,
 State.AutoMix and State.AutoMix.ShiftLockBindName,
 'SilverSurferProfileStatsLock',
 }) do
-if BindName then pcall(function() RunService:UnbindFromRenderStep(BindName) end) end
+if BindName then pcall(function() State.Lifecycle:UnbindFromRenderStep(BindName) end) end
 end
 
 SilentAim.RestoreAllHooks()
@@ -35157,11 +35477,31 @@ DestroyVisuals()
 pcall(State.BallStudio.Cleanup)
 pcall(State.PassRange.Destroy)
 pcall(function() State.Watch.SetActive(false) end)
+pcall(State.PerfectShotStyle.ClearWatches)
+State.Lifecycle:DisconnectConnection(State.PerfectRelease.Connection)
+State.PerfectRelease.Connection = nil
+State.PerfectRelease.Pending = nil
+State.Lifecycle:DisconnectConnection(State.BallAssist.AntiReachWatchConnection)
+State.BallAssist.AntiReachWatchConnection = nil
+State.BallAssist.AntiReachWatchedCharacter = nil
+State.Lifecycle:DisconnectConnection(State.BallStudio.SkinWatch)
+State.BallStudio.SkinWatch = nil
+State.Lifecycle:DisconnectConnection(State.AutoBody.AnimatorConnection)
+State.Lifecycle:DisconnectConnection(State.AutoBody.BounceConnection)
+State.AutoBody.AnimatorConnection, State.AutoBody.BounceConnection = nil, nil
+State.AutoBody.Animator, State.AutoBody.BounceTrack = nil, nil
+State.Lifecycle:DisconnectConnection(State.AutoMix.AnimatorConnection)
+State.Lifecycle:DisconnectConnection(State.AutoMix.TrackConnection)
+State.AutoMix.AnimatorConnection, State.AutoMix.TrackConnection = nil, nil
+State.AutoMix.Animator, State.AutoMix.LastTrack = nil, nil
+LegitAimCameraController = nil
+LegitAimLandConnection = nil
+AimbotConn = nil
+table.clear(State.PassLabels)
 if HubUI.Destroy then HubUI.Destroy() end
-for _, Connection in ipairs(Signals) do
-pcall(function() Connection:Disconnect() end)
-end
-table.clear(Signals)
+State.Lifecycle:Cleanup()
+Char, Humanoid, HumanoidRootPart = nil, nil, nil
+GlobalEnv.__HOOPZ_SILENTAIM_REINJECTING = false
 State.Unloading = false
 GlobalEnv.__HOOPZ_SILENTAIM_UNLOADED_SESSION = GlobalEnv.__HOOPZ_SILENTAIM_SESSION
 end
@@ -35200,7 +35540,7 @@ else
 UpdateSilentAimController()
 end
 
-task.defer(function()
+State.Lifecycle:Defer(function()
 local Ok, Loaded, Name = pcall(State.AutoConfig.LoadLatest)
 if Ok and Loaded then
 Notify('SILVER SURFER', 'Auto-loaded config: ' .. tostring(Name))
