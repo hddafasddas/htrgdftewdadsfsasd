@@ -10,7 +10,7 @@ function WYNF_INLINE(Fn) return Fn end
 function WYNF_NO_VIRTUALIZE(Fn) return Fn end
 end
 
-pcall(function() if type(writefile) == 'function' then writefile('GoldenEagleHub_Crash.txt', '[STARTED] Linoria black-gold fixed UI chunk began execution.\n') end end)
+pcall(function() if type(writefile) == 'function' then writefile('SilverSurfer_Crash.txt', '[STARTED] Silver Surfer theme-synced UI chunk began execution.\n') end end)
 
 local CONFIG = {
 ToggleKey = Enum.KeyCode.RightControl,
@@ -31,7 +31,7 @@ PerfectReleaseServerArrivalTime = 0.3195,
 PerfectReleaseMinimumClientDelay = 0.205,
 PerfectReleaseMaximumClientDelay = 0.360,
 PerfectReleaseMaximumPing = 300,
-PerfectReleaseCalibrationFile = 'GoldenEagleHub_Release.json',
+PerfectReleaseCalibrationFile = 'SilverSurfer_Release.json',
 CameraIndependentFallback = false,
 AimMode = 'Legit',
 SilentMode = 'High',
@@ -401,7 +401,7 @@ OffenseTrainer = false,
 OffenseTrainerAutoSave = true,
 OffenseTrainerSampleInterval = 0.15,
 OffenseTrainerMaxSamples = 4000,
-OffenseTrainerFile = 'GoldenEagleHub_Offense_Training.json',
+OffenseTrainerFile = 'SilverSurfer_Offense_Training.json',
 OffensePolicy = false,
 OffensePolicyConfidence = 0.55,
 OffensePolicyNeighbors = 12,
@@ -461,6 +461,186 @@ CosmeticTintEnabled = false,
 CosmeticTintR = 255,
 CosmeticTintG = 200,
 CosmeticTintB = 60,
+CustomCosmeticLuaEnabled = true,
+CustomCosmeticLuaCategory = 'Body Aura',
+CustomCosmeticLuaPresetName = '',
+CustomCosmeticLuaSources = { ['Body Aura'] = [==[
+-- SILVER SURFER: MERCURY WAKE BODY AURA
+-- Paste this into: Cosmetics > Cosmetic Lua > Body Aura
+-- Then press SAVE SOURCE and RUN LIVE.
+
+local Character = Context.Character
+if not Character then return end
+
+local AURA_TAG = "SilverSurfer_MercuryWake"
+
+-- Idempotent cleanup: refreshing the preview or running live never stacks copies.
+for _, Object in ipairs(Character:GetDescendants()) do
+    if Object:GetAttribute(AURA_TAG) then
+        Object:Destroy()
+    end
+end
+
+local Silver = Color3.fromRGB(198, 207, 218)
+local Chrome = Color3.fromRGB(240, 246, 252)
+local Shadow = Color3.fromRGB(92, 104, 120)
+local PreviewBoost = 1
+
+local function Mark(Object)
+    Object:SetAttribute(AURA_TAG, true)
+    return Object
+end
+
+local function FindPart(...)
+    for Index = 1, select("#", ...) do
+        local Part = Character:FindFirstChild(select(Index, ...), true)
+        if Part and Part:IsA("BasePart") then return Part end
+    end
+end
+
+local Root = FindPart("HumanoidRootPart", "Torso", "UpperTorso")
+if not Root then return end
+
+-- Clean silver silhouette.
+local Highlight = Mark(Instance.new("Highlight"))
+Highlight.Name = "MercuryWakeHighlight"
+Highlight.Adornee = Character
+Highlight.FillColor = Silver
+Highlight.FillTransparency = 0.78
+Highlight.OutlineColor = Chrome
+Highlight.OutlineTransparency = 0.08
+Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+Highlight.Parent = Character
+
+-- Metallic core glow.
+local Light = Mark(Instance.new("PointLight"))
+Light.Name = "MercuryCore"
+Light.Color = Chrome
+Light.Brightness = 1.65 * PreviewBoost
+Light.Range = 11
+Light.Shadows = false
+Light.Parent = Root
+
+local BodyParts = {
+    FindPart("Head"),
+    FindPart("UpperTorso", "Torso"),
+    FindPart("LowerTorso", "Torso"),
+    FindPart("LeftHand", "Left Arm"),
+    FindPart("RightHand", "Right Arm"),
+    FindPart("LeftFoot", "Left Leg"),
+    FindPart("RightFoot", "Right Leg"),
+}
+
+-- Fine chrome sparks shed from the whole body.
+for _, Part in ipairs(BodyParts) do
+    if Part then
+        local Attachment = Mark(Instance.new("Attachment"))
+        Attachment.Name = "MercurySparkPoint"
+        Attachment.Parent = Part
+
+        local Sparks = Mark(Instance.new("ParticleEmitter"))
+        Sparks.Name = "ChromeSparks"
+        Sparks.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+        Sparks.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Chrome),
+            ColorSequenceKeypoint.new(0.55, Silver),
+            ColorSequenceKeypoint.new(1, Shadow),
+        })
+        Sparks.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.12),
+            NumberSequenceKeypoint.new(0.35, 0.28),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        Sparks.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.16),
+            NumberSequenceKeypoint.new(0.45, 0.08),
+            NumberSequenceKeypoint.new(1, 0),
+        })
+        Sparks.Lifetime = NumberRange.new(0.45, 0.9)
+        Sparks.Rate = math.floor(7 * PreviewBoost)
+        Sparks.Speed = NumberRange.new(0.35, 1.4)
+        Sparks.Drag = 1.5
+        Sparks.Acceleration = Vector3.new(0, 1.8, 0)
+        Sparks.SpreadAngle = Vector2.new(180, 180)
+        Sparks.Rotation = NumberRange.new(0, 360)
+        Sparks.RotSpeed = NumberRange.new(-120, 120)
+        Sparks.LightEmission = 0.85
+        Sparks.LightInfluence = 0
+        Sparks.LockedToPart = false
+        Sparks.Parent = Attachment
+    end
+end
+
+-- Dense mercury mist around the core.
+local CoreAttachment = Mark(Instance.new("Attachment"))
+CoreAttachment.Name = "MercuryCorePoint"
+CoreAttachment.Parent = Root
+
+local Mist = Mark(Instance.new("ParticleEmitter"))
+Mist.Name = "MercuryMist"
+Mist.Texture = "rbxasset://textures/particles/smoke_main.dds"
+Mist.Color = ColorSequence.new(Silver, Chrome)
+Mist.Transparency = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0.76),
+    NumberSequenceKeypoint.new(0.5, 0.86),
+    NumberSequenceKeypoint.new(1, 1),
+})
+Mist.Size = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 1.5),
+    NumberSequenceKeypoint.new(0.5, 2.4),
+    NumberSequenceKeypoint.new(1, 3.3),
+})
+Mist.Lifetime = NumberRange.new(0.65, 1.15)
+Mist.Rate = math.floor(10 * PreviewBoost)
+Mist.Speed = NumberRange.new(0.15, 0.55)
+Mist.Drag = 2
+Mist.Acceleration = Vector3.new(0, 1.1, 0)
+Mist.SpreadAngle = Vector2.new(70, 70)
+Mist.LightEmission = 0.45
+Mist.LightInfluence = 0
+Mist.Parent = CoreAttachment
+
+-- Twin attachments produce a chrome wake while the character moves.
+local WakeLeft = Mark(Instance.new("Attachment"))
+WakeLeft.Name = "MercuryWakeLeft"
+WakeLeft.Position = Vector3.new(-1.15, -1.45, 0.35)
+WakeLeft.Parent = Root
+
+local WakeRight = Mark(Instance.new("Attachment"))
+WakeRight.Name = "MercuryWakeRight"
+WakeRight.Position = Vector3.new(1.15, -1.45, 0.35)
+WakeRight.Parent = Root
+
+local Wake = Mark(Instance.new("Trail"))
+Wake.Name = "MercuryWake"
+Wake.Attachment0 = WakeLeft
+Wake.Attachment1 = WakeRight
+Wake.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Chrome),
+    ColorSequenceKeypoint.new(0.45, Silver),
+    ColorSequenceKeypoint.new(1, Shadow),
+})
+Wake.Transparency = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0.18),
+    NumberSequenceKeypoint.new(0.55, 0.56),
+    NumberSequenceKeypoint.new(1, 1),
+})
+Wake.Lifetime = 0.42
+Wake.MinLength = 0.05
+Wake.LightEmission = 0.75
+Wake.LightInfluence = 0
+Wake.FaceCamera = true
+Wake.Parent = Root
+
+-- One immediate burst makes the effect visible as soon as it is applied.
+Mist:Emit(10)
+for _, Object in ipairs(Character:GetDescendants()) do
+    if Object.Name == "ChromeSparks" and Object:IsA("ParticleEmitter") then
+        Object:Emit(4)
+    end
+end
+
+]==] },
 LocalCourtSkinSpoof = false,
 LocalCourtSkin = 'CourtSkin_Default',
 LocalClanTagSpoof = false,
@@ -745,14 +925,14 @@ table.insert(Compat.Missing, 'getactors/run_on_actor')
 end
 
 if Compat.NoHooking then
-Notify('GOLDEN EAGLE HUB', 'No hookfunction or alias found - aim spoof features are disabled, everything else works.')
-warn('[GOLDEN EAGLE HUB] Compatibility mode, missing: ' .. table.concat(Compat.Missing, ', '))
+Notify('SILVER SURFER', 'No hookfunction or alias found - aim spoof features are disabled, everything else works.')
+warn('[SILVER SURFER] Compatibility mode, missing: ' .. table.concat(Compat.Missing, ', '))
 elseif #Compat.Shimmed > 0 or #Compat.Missing > 0 then
 local Parts = {}
 if #Compat.Shimmed > 0 then table.insert(Parts, 'shimmed: ' .. table.concat(Compat.Shimmed, ', ')) end
 if Compat.NoActors then table.insert(Parts, 'main-VM mode (no actor support)') end
-Notify('GOLDEN EAGLE HUB', 'Compatibility mode - ' .. table.concat(Parts, '; '))
-warn('[GOLDEN EAGLE HUB] Compatibility mode - ' .. table.concat(Parts, '; '))
+Notify('SILVER SURFER', 'Compatibility mode - ' .. table.concat(Parts, '; '))
+warn('[SILVER SURFER] Compatibility mode - ' .. table.concat(Parts, '; '))
 end
 end
 
@@ -1015,7 +1195,7 @@ BodyColliderManagedCount = 0,
 BodyColliderStatus = CONFIG.BodyColliders and 'SCANNING' or 'OFF',
 AirWalkPart = nil,
 AirWalkY = nil,
-FlightRenderName = 'GoldenEagleFlight',
+FlightRenderName = 'SilverSurferFlight',
 MatchCheckAt = 0,
 MatchCached = false,
 }
@@ -3165,7 +3345,7 @@ return Remote:InvokeServer('spin', math.random(60, 75) / 10)
 end)
 if Success and Accepted then
 State.Utility.DailySpinStatus = 'CLAIMED' .. (PrizeIndex and (' | SLOT ' .. tostring(PrizeIndex)) or '')
-Notify('GOLDEN EAGLE HUB', 'Daily spin claimed.')
+Notify('SILVER SURFER', 'Daily spin claimed.')
 return true
 end
 State.Utility.DailySpinStatus = Success and 'NOT READY' or 'REQUEST FAILED'
@@ -3226,7 +3406,7 @@ State.Utility.ServerHopStatus = 'SEARCHING'
 local Server, ErrorText = State.Utility.FindServer()
 if not Server then
 State.Utility.ServerHopStatus = ErrorText or 'NO SERVER'
-Notify('GOLDEN EAGLE HUB', State.Utility.ServerHopStatus)
+Notify('SILVER SURFER', State.Utility.ServerHopStatus)
 return false
 end
 State.Utility.ServerHopStatus = 'JOINING | ' .. tostring(Server.playing or '?') .. ' PLAYERS'
@@ -3391,16 +3571,16 @@ end
 function State.Utility.SetAntiTravel(Enabled)
 State.AntiTravelEnabled = Enabled == true
 CONFIG.AntiTravel = State.AntiTravelEnabled
-GlobalEnv.__GOLDEN_EAGLE_TRAVEL_RUNTIME = State
+GlobalEnv.__SILVER_SURFER_TRAVEL_RUNTIME = State
 if State.AntiTravelEnabled then State.Utility.InstallAntiTravelHook() end
 end
 
 function State.Utility.InstallAntiTravelHook()
-GlobalEnv.__GOLDEN_EAGLE_TRAVEL_RUNTIME = State
-if GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_INSTALLED then
-State.Utility.TravelFireServerOriginal = GlobalEnv.__GOLDEN_EAGLE_TRAVEL_ORIGINAL
+GlobalEnv.__SILVER_SURFER_TRAVEL_RUNTIME = State
+if GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_INSTALLED then
+State.Utility.TravelFireServerOriginal = GlobalEnv.__SILVER_SURFER_TRAVEL_ORIGINAL
 State.Utility.TravelHookMode =
-GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_MODE or 'INSTALLED'
+GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_MODE or 'INSTALLED'
 return true
 end
 
@@ -3411,7 +3591,7 @@ end
 local TargetEvent = State.Utility.SBEvent
 
 local function ShouldBlock(Self, First)
-local Runtime = GlobalEnv.__GOLDEN_EAGLE_TRAVEL_RUNTIME
+local Runtime = GlobalEnv.__SILVER_SURFER_TRAVEL_RUNTIME
 if not (Runtime and Runtime.Active and Runtime.AntiTravelEnabled) then
 return false
 end
@@ -3423,7 +3603,7 @@ end
 if type(hookmetamethod) == 'function'
 and type(getnamecallmethod) == 'function' then
 local function NamecallHandler(Self, ...)
-local Original = GlobalEnv.__GOLDEN_EAGLE_TRAVEL_ORIGINAL
+local Original = GlobalEnv.__SILVER_SURFER_TRAVEL_ORIGINAL
 local Method
 local Read = pcall(function() Method = getnamecallmethod() end)
 if Read and Method == 'FireServer'
@@ -3442,9 +3622,9 @@ return hookmetamethod(game, '__namecall', Callback)
 end)
 
 if Success and Original then
-GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_INSTALLED = true
-GlobalEnv.__GOLDEN_EAGLE_TRAVEL_ORIGINAL = Original
-GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_MODE = 'NAMECALL'
+GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_INSTALLED = true
+GlobalEnv.__SILVER_SURFER_TRAVEL_ORIGINAL = Original
+GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_MODE = 'NAMECALL'
 State.Utility.TravelFireServerOriginal = Original
 State.Utility.TravelHookMode = 'NAMECALL'
 return true
@@ -3461,9 +3641,9 @@ end))
 return Previous
 end)
 if Success and Original then
-GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_INSTALLED = true
-GlobalEnv.__GOLDEN_EAGLE_TRAVEL_ORIGINAL = Original
-GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_MODE = 'FIRESERVER'
+GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_INSTALLED = true
+GlobalEnv.__SILVER_SURFER_TRAVEL_ORIGINAL = Original
+GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_MODE = 'FIRESERVER'
 State.Utility.TravelFireServerOriginal = Original
 State.Utility.TravelHookMode = 'FIRESERVER (WEAK)'
 return true
@@ -3534,7 +3714,7 @@ HumanoidObject.PlatformStand = false
 HumanoidObject.AutoRotate = true
 pcall(function() HumanoidObject:ChangeState(Enum.HumanoidStateType.GettingUp) end)
 State.Utility.FallStatus = 'RECOVERED'
-Notify('GOLDEN EAGLE HUB', 'Anti-Fall returned you to safety.')
+Notify('SILVER SURFER', 'Anti-Fall returned you to safety.')
 end
 
 GiveSignal(LP.Idled:Connect(function()
@@ -3625,7 +3805,7 @@ local BODY_PARTS = { 'Head', 'HumanoidRootPart', 'Torso', 'Left Arm', 'Right Arm
 local function ClearManualBodyAura(Character)
 if not Character then return end
 for _, Object in ipairs(Character:GetDescendants()) do
-if Object:GetAttribute('GoldenEagleLocalAura') then Object:Destroy() end
+if Object:GetAttribute('SilverSurferLocalAura') then Object:Destroy() end
 end
 end
 
@@ -3640,10 +3820,10 @@ for _, Child in ipairs(SourcePart:GetChildren()) do
 if Child:GetAttribute('Takeover') then
 local Clone = Child:Clone()
 Clone:SetAttribute('Takeover', nil)
-Clone:SetAttribute('GoldenEagleLocalAura', true)
+Clone:SetAttribute('SilverSurferLocalAura', true)
 for _, Descendant in ipairs(Clone:GetDescendants()) do
 Descendant:SetAttribute('Takeover', nil)
-Descendant:SetAttribute('GoldenEagleLocalAura', true)
+Descendant:SetAttribute('SilverSurferLocalAura', true)
 end
 Clone.Parent = TargetPart
 end
@@ -3654,7 +3834,7 @@ for _, PartName in ipairs(BODY_PARTS) do
 local TargetPart = Character:FindFirstChild(PartName)
 if TargetPart then
 for _, Object in ipairs(TargetPart:GetDescendants()) do
-if Object:GetAttribute('GoldenEagleLocalAura') then
+if Object:GetAttribute('SilverSurferLocalAura') then
 if Object:IsA('ParticleEmitter') then
 local SavedSize = Object:GetAttribute('Size')
 if SavedSize then pcall(function() Object.Size = SavedSize end) end
@@ -3677,7 +3857,7 @@ end
 function State.Cosmetics.ForceBodyAuraVisible(Character)
 if not Character then return end
 for _, Object in ipairs(Character:GetDescendants()) do
-if Object:GetAttribute('Takeover') or Object:GetAttribute('GoldenEagleLocalAura') then
+if Object:GetAttribute('Takeover') or Object:GetAttribute('SilverSurferLocalAura') then
 if Object:IsA('ParticleEmitter') then
 local SavedSize = Object:GetAttribute('Size')
 if SavedSize then pcall(function() Object.Size = SavedSize end) end
@@ -3807,7 +3987,7 @@ end
 local function HasLocalTakeover(Character)
 if not Character then return false end
 for _, Object in ipairs(Character:GetDescendants()) do
-if Object:GetAttribute('Takeover') or Object:GetAttribute('GoldenEagleLocalAura') then
+if Object:GetAttribute('Takeover') or Object:GetAttribute('SilverSurferLocalAura') then
 return true
 end
 end
@@ -3905,6 +4085,60 @@ State.Cosmetics.Runtime.BodyAura = State.LocalBodyAura
 elseif Character and BodyCheckDue and State.LocalBodyAura ~= 'None' then
 State.Cosmetics.ForceBodyAuraVisible(Character)
 State.Cosmetics.Runtime.LastBodyCheckAt = Now
+end
+end
+
+
+-- Universal cosmetic Lua runtime. Every cosmetic family receives the same
+-- constrained context object, so presets can target the live character or the
+-- the live local character without duplicating editor code.
+State.Cosmetics.CustomLua = State.Cosmetics.CustomLua or {
+Categories = { 'Ball Aura', 'Ball Trail', 'Ball Skin', 'Body Aura', 'Court Skin', 'Chat Tag', 'Profile Logo', 'Goal Effect', 'Character' },
+Compiled = {}, Cleanup = {}, LastError = nil,
+}
+function State.Cosmetics.CompileCustomLua(Category, Source)
+Category = tostring(Category or 'Character')
+Source = tostring(Source or '')
+if Source == '' then return function() end end
+if type(loadstring) ~= 'function' then return nil, 'loadstring is unavailable in this executor' end
+local Wrapped = 'return function(Context)\n' .. Source .. '\nend'
+local Chunk, CompileError = loadstring(Wrapped, '=SilverSurferCosmetic/' .. Category)
+if not Chunk then return nil, CompileError end
+local Ok, Handler = pcall(Chunk)
+if not Ok or type(Handler) ~= 'function' then return nil, Handler end
+return Handler
+end
+function State.Cosmetics.RunCustomLua(Category, Target, IsPreview, Extra)
+if CONFIG.CustomCosmeticLuaEnabled == false then return true end
+Category = tostring(Category or CONFIG.CustomCosmeticLuaCategory or 'Character')
+local Sources = type(CONFIG.CustomCosmeticLuaSources) == 'table' and CONFIG.CustomCosmeticLuaSources or {}
+CONFIG.CustomCosmeticLuaSources = Sources
+local Source = tostring(Sources[Category] or '')
+if Source == '' then return true end
+local Handler, CompileError = State.Cosmetics.CompileCustomLua(Category, Source)
+if not Handler then State.Cosmetics.CustomLua.LastError = tostring(CompileError); return false, CompileError end
+State.Cosmetics.CustomLua.Compiled[Category] = Handler
+local Character = Target or LP.Character
+local Ball = (Extra and Extra.Ball) or (not IsPreview and GetLocalBallHandle() or nil)
+local Context = {
+Category = Category, IsPreview = IsPreview == true, Character = Character, Ball = Ball,
+Player = LP, Selection = {
+Aura = State.LocalAura, Trail = State.LocalTrail, Ball = State.LocalBall,
+BodyAura = State.LocalBodyAura, CourtSkin = State.LocalCourtSkin,
+GoalEffect = State.LocalGoalEffect,
+},
+Services = { TweenService = TweenService, RunService = RunService, Debris = game:GetService('Debris'),
+Lighting = Lighting, ReplicatedStorage = ReplicatedStorage },
+Theme = { Silver = Color3.fromRGB(191, 199, 209), Bright = Color3.fromRGB(247, 250, 252),
+Graphite = Color3.fromRGB(17, 19, 24) },
+}
+local Ok, Result = pcall(Handler, Context)
+State.Cosmetics.CustomLua.LastError = Ok and nil or tostring(Result)
+return Ok, Result
+end
+function State.Cosmetics.ApplyAllCustomLua(Target, IsPreview, Extra)
+for _, Category in ipairs(State.Cosmetics.CustomLua.Categories) do
+pcall(State.Cosmetics.RunCustomLua, Category, Target, IsPreview, Extra)
 end
 end
 
@@ -4255,8 +4489,8 @@ end
 function State.LogoBadges.StartLoop()
 if State.LogoBadges.Bound then return end
 State.LogoBadges.Bound = true
-pcall(function() RunService:UnbindFromRenderStep('GoldenEagleLogoBadges') end)
-RunService:BindToRenderStep('GoldenEagleLogoBadges', Enum.RenderPriority.Last.Value + 12, WYNF_JIT(function()
+pcall(function() RunService:UnbindFromRenderStep('SilverSurferLogoBadges') end)
+RunService:BindToRenderStep('SilverSurferLogoBadges', Enum.RenderPriority.Last.Value + 12, WYNF_JIT(function()
 if not State.LogoBadges.AnyActive() then return end
 local Now = os.clock()
 if Now - (State.LogoBadges.LastApplyAt or 0) < 0.35 then return end
@@ -4466,7 +4700,7 @@ end)
 -- colorizer and the hard unequip used by every 'None' option. Everything hangs
 -- off State so the main chunk gains no new locals (Luau 200-register ceiling).
 State.BallStudio = {
-Tag = 'GoldenEagleBallStudio',
+Tag = 'SilverSurferBallStudio',
 Tracked = nil,
 Holding = false,
 FlightUntil = 0,
@@ -4581,7 +4815,7 @@ Character = Character or LP.Character
 if not Character then return end
 for _, Object in ipairs(Character:GetDescendants()) do
 if Object:GetAttribute('Takeover') ~= nil
-or Object:GetAttribute('GoldenEagleLocalAura') ~= nil then
+or Object:GetAttribute('SilverSurferLocalAura') ~= nil then
 if Object:IsA('ParticleEmitter') or Object:IsA('Trail')
 or Object:IsA('Beam') or Object:IsA('PointLight')
 or Object:IsA('SpotLight') or Object:IsA('SurfaceLight') then
@@ -4593,23 +4827,23 @@ end
 
 function State.BallStudio.EnsureTrail(Ball)
 if not (Ball and Ball:IsA('BasePart')) then return nil end
-local Existing = Ball:FindFirstChild('GoldenEagleTrail')
+local Existing = Ball:FindFirstChild('SilverSurferTrail')
 if Existing and Existing:IsA('Trail') then return Existing end
 local Made
 pcall(function()
 local Radius = math.max(Ball.Size.X, Ball.Size.Y, Ball.Size.Z) * 0.5
 local Top = Instance.new('Attachment')
-Top.Name = 'GoldenEagleTrailA0'
+Top.Name = 'SilverSurferTrailA0'
 Top.Position = Vector3.new(0, Radius * 0.8, 0)
 Top:SetAttribute(State.BallStudio.Tag, 'Trail')
 Top.Parent = Ball
 local Bottom = Instance.new('Attachment')
-Bottom.Name = 'GoldenEagleTrailA1'
+Bottom.Name = 'SilverSurferTrailA1'
 Bottom.Position = Vector3.new(0, -Radius * 0.8, 0)
 Bottom:SetAttribute(State.BallStudio.Tag, 'Trail')
 Bottom.Parent = Ball
 local Trail = Instance.new('Trail')
-Trail.Name = 'GoldenEagleTrail'
+Trail.Name = 'SilverSurferTrail'
 Trail.Attachment0 = Top
 Trail.Attachment1 = Bottom
 Trail.Enabled = false
@@ -4734,7 +4968,7 @@ if Proxy and Proxy.Parent then return Proxy end
 Proxy = nil
 pcall(function()
 Proxy = Instance.new('Part')
-Proxy.Name = 'GoldenEagleBallSkin'
+Proxy.Name = 'SilverSurferBallSkin'
 Proxy.Shape = Enum.PartType.Ball
 Proxy.Anchored = true
 Proxy.CanCollide = false
@@ -4815,7 +5049,7 @@ function State.BallStudio.MountCatalogItem(Ball, Proxy, Value, Scale, Tint)
 local Item = State.BallStudio.LoadCatalogItem(Value)
 if not Item then return false end
 local Container = Instance.new('Model')
-Container.Name = 'GoldenEagleCatalogBall'
+Container.Name = 'SilverSurferCatalogBall'
 Container:SetAttribute(State.BallStudio.Tag, 'Skin')
 Item.Parent = Container
 Container.Parent = Proxy
@@ -4856,7 +5090,7 @@ Container:PivotTo(Shift * Container:GetPivot())
 for _, Part in ipairs(Parts) do
 Part.Anchored = false
 local Weld = Instance.new('WeldConstraint')
-Weld.Name = 'GoldenEagleCatalogWeld'
+Weld.Name = 'SilverSurferCatalogWeld'
 Weld.Part0 = Proxy
 Weld.Part1 = Part
 Weld:SetAttribute(State.BallStudio.Tag, 'Skin')
@@ -4908,8 +5142,8 @@ end
 local Stamp = tostring(Catalog) .. '|' .. tostring(Model or '') .. '|' .. tostring(Skin or '') .. '|'
 .. tostring(Texture or '') .. '|' .. tostring(Scale) .. '|'
 .. tostring(Tint and Tint:ToHex() or 'none')
-if Proxy:GetAttribute('GoldenEagleStamp') == Stamp then return end
-Proxy:SetAttribute('GoldenEagleStamp', Stamp)
+if Proxy:GetAttribute('SilverSurferStamp') == Stamp then return end
+Proxy:SetAttribute('SilverSurferStamp', Stamp)
 for _, Child in ipairs(Proxy:GetChildren()) do
 pcall(function() Child:Destroy() end)
 end
@@ -4927,15 +5161,15 @@ pcall(function()
 Proxy.Transparency = 1
 Proxy.Size = Ball.Size
 local Visual = Instance.new('MeshPart')
-Visual.Name = 'GoldenEagleBallMesh'
+Visual.Name = 'SilverSurferBallMesh'
 Visual.MeshId = Model
 Visual.TextureID = Texture or Skin or ''
 local AppliedTint = Tint or Color3.fromRGB(255, 255, 255)
-Visual:SetAttribute('GoldenEagleFitScale', Scale)
-Visual:SetAttribute('GoldenEagleTextureId', Texture or Skin or '')
-Visual:SetAttribute('GoldenEagleTintR', AppliedTint.R)
-Visual:SetAttribute('GoldenEagleTintG', AppliedTint.G)
-Visual:SetAttribute('GoldenEagleTintB', AppliedTint.B)
+Visual:SetAttribute('SilverSurferFitScale', Scale)
+Visual:SetAttribute('SilverSurferTextureId', Texture or Skin or '')
+Visual:SetAttribute('SilverSurferTintR', AppliedTint.R)
+Visual:SetAttribute('SilverSurferTintG', AppliedTint.G)
+Visual:SetAttribute('SilverSurferTintB', AppliedTint.B)
 Visual.Size = Ball.Size * Scale
 Visual.CFrame = Proxy.CFrame
 Visual.Color = AppliedTint
@@ -4953,7 +5187,7 @@ Visual.CastShadow = false
 Visual:SetAttribute(State.BallStudio.Tag, 'Skin')
 Visual.Parent = Proxy
 local Weld = Instance.new('WeldConstraint')
-Weld.Name = 'GoldenEagleBallMeshWeld'
+Weld.Name = 'SilverSurferBallMeshWeld'
 Weld.Part0 = Proxy
 Weld.Part1 = Visual
 Weld:SetAttribute(State.BallStudio.Tag, 'Skin')
@@ -4972,7 +5206,7 @@ Proxy.Size = Ball.Size * Scale
 Proxy.Transparency = 0
 Proxy.Color = Tint or Color3.fromRGB(255, 255, 255)
 local Wrap = Instance.new('SpecialMesh')
-Wrap.Name = 'GoldenEagleBallDecal'
+Wrap.Name = 'SilverSurferBallDecal'
 Wrap.MeshType = Enum.MeshType.Sphere
 Wrap.TextureId = Skin
 Wrap.Scale = Vector3.new(1, 1, 1)
@@ -4997,23 +5231,23 @@ else
 pcall(function()
 Proxy.CFrame = Ball.CFrame
 if VerifyAppearance == false then return end
-local Visual = Proxy:FindFirstChild('GoldenEagleBallMesh')
+local Visual = Proxy:FindFirstChild('SilverSurferBallMesh')
 if Visual and Visual:IsA('MeshPart') then
 -- MeshId loads asynchronously. Roblox can replace Size with the asset's
 -- authored dimensions after assignment, so enforce the fitted bounding box
 -- after loading and on every frame thereafter.
-local FitScale = math.clamp(tonumber(Visual:GetAttribute('GoldenEagleFitScale')) or 1, 0.001, 5)
+local FitScale = math.clamp(tonumber(Visual:GetAttribute('SilverSurferFitScale')) or 1, 0.001, 5)
 local WantedSize = Ball.Size * FitScale
 if (Visual.Size - WantedSize).Magnitude > 0.001 then
 Visual.Size = WantedSize
 end
 -- Mesh and texture content can finish loading after creation and restore their
 -- authored appearance. Reassert both the TextureID and multiplicative tint.
-local WantedTexture = Visual:GetAttribute('GoldenEagleTextureId') or ''
+local WantedTexture = Visual:GetAttribute('SilverSurferTextureId') or ''
 if Visual.TextureID ~= WantedTexture then Visual.TextureID = WantedTexture end
-local TintR = math.clamp(tonumber(Visual:GetAttribute('GoldenEagleTintR')) or 1, 0, 1)
-local TintG = math.clamp(tonumber(Visual:GetAttribute('GoldenEagleTintG')) or 1, 0, 1)
-local TintB = math.clamp(tonumber(Visual:GetAttribute('GoldenEagleTintB')) or 1, 0, 1)
+local TintR = math.clamp(tonumber(Visual:GetAttribute('SilverSurferTintR')) or 1, 0, 1)
+local TintG = math.clamp(tonumber(Visual:GetAttribute('SilverSurferTintG')) or 1, 0, 1)
+local TintB = math.clamp(tonumber(Visual:GetAttribute('SilverSurferTintB')) or 1, 0, 1)
 local WantedTint = Color3.new(TintR, TintG, TintB)
 if Visual.Color ~= WantedTint then Visual.Color = WantedTint end
 pcall(function() Visual.UsePartColor = true end)
@@ -5035,7 +5269,7 @@ local Id = State.BallStudio.Asset(CONFIG.ShotSoundId)
 if not Id then return end
 pcall(function()
 local Sound = Instance.new('Sound')
-Sound.Name = 'GoldenEagleShotSound'
+Sound.Name = 'SilverSurferShotSound'
 Sound.SoundId = Id
 Sound.Volume = math.clamp(tonumber(CONFIG.ShotSoundVolume) or 1.2, 0, 10)
 Sound.PlaybackSpeed = math.clamp(tonumber(CONFIG.ShotSoundPitch) or 1, 0.25, 4)
@@ -5078,7 +5312,7 @@ local Owner = Object
 while Owner and Owner ~= game do
 if Owner:GetAttribute('Aura') ~= nil or Owner:GetAttribute('Trail') ~= nil
 or Owner:GetAttribute('Ball') ~= nil or Owner:GetAttribute('Takeover') ~= nil
-or Owner:GetAttribute('GoldenEagleLocalAura') ~= nil then
+or Owner:GetAttribute('SilverSurferLocalAura') ~= nil then
 return true
 end
 Owner = Owner.Parent
@@ -5190,7 +5424,7 @@ State.BallStudio.DropProxy(Part)
 end
 end
 if Ball then
-local Trail = Ball:FindFirstChild('GoldenEagleTrail')
+local Trail = Ball:FindFirstChild('SilverSurferTrail')
 if Trail and Trail:IsA('Trail') then
 local Speed = Ball.AssemblyLinearVelocity.Magnitude
 local ShouldShow = CONFIG.BallFlightTrail == true
@@ -5489,7 +5723,7 @@ math.round(NameColor.B * 255), Name)
 for _, Obj in ipairs(Root:GetDescendants()) do
 if (Obj:IsA('TextLabel') or Obj:IsA('TextButton')) and Obj.RichText then
 local Text = Obj.Text
-local Styled = Obj:GetAttribute('GoldenEagleChatStyled') == true
+local Styled = Obj:GetAttribute('SilverSurferChatStyled') == true
 if type(Text) == 'string' and Text:find(NameColon, 1, true)
 and (Styled or Text:find('>' .. Tag .. '<', 1, true)) then
 if not Styled or Animated then
@@ -5498,7 +5732,7 @@ local PrefixEnd = Text:find('</font></b>', NamePos, true)
 if PrefixEnd then
 local Suffix = Text:sub(PrefixEnd + 11)
 Obj.Text = TagMarkup .. NameMarkup .. Suffix
-Obj:SetAttribute('GoldenEagleChatStyled', true)
+Obj:SetAttribute('SilverSurferChatStyled', true)
 end
 end
 end
@@ -5518,10 +5752,10 @@ Extras.ChatTagAnimationInstalled = true
 local RunService = game:GetService('RunService')
 local TextService = game:GetService('TextService')
 local function Attach(Label, Tag)
-local Overlay = Label:FindFirstChild('GoldenEagleAnimatedChatTag')
+local Overlay = Label:FindFirstChild('SilverSurferAnimatedChatTag')
 if Overlay then return Overlay end
 Overlay = Instance.new('Frame')
-Overlay.Name = 'GoldenEagleAnimatedChatTag'
+Overlay.Name = 'SilverSurferAnimatedChatTag'
 Overlay.BackgroundTransparency = 1
 Overlay.BorderSizePixel = 0
 Overlay.Size = UDim2.new(1, 0, 1, 0)
@@ -5976,10 +6210,10 @@ local Mode = tostring(CONFIG.LeaderboardColorMode or 'Solid')
 -- UIGradient multiplies its parent color, so keep gradient text white to
 -- preserve the exact configured colors instead of tinting them twice.
 State.LocalSpoofs.SetStatsUI(Label, 'TextColor3', Mode == 'Solid' and Primary or Color3.new(1, 1, 1))
-local Gradient = Label:FindFirstChild('GoldenEagleLeaderboardGradient')
+local Gradient = Label:FindFirstChild('SilverSurferLeaderboardGradient')
 if not Gradient then
 Gradient = Instance.new('UIGradient')
-Gradient.Name = 'GoldenEagleLeaderboardGradient'
+Gradient.Name = 'SilverSurferLeaderboardGradient'
 Gradient.Parent = Label
 end
 State.LocalSpoofs.LeaderboardGradients[Gradient] = true
@@ -6045,11 +6279,11 @@ end
 function State.LocalSpoofs.SetStatsSpoof(Enabled)
 State.LocalStatsSpoofEnabled = Enabled == true
 CONFIG.LocalStatsSpoof = State.LocalStatsSpoofEnabled
-pcall(function() RunService:UnbindFromRenderStep('GoldenEagleProfileStatsLock') end)
-pcall(function() RunService:UnbindFromRenderStep('GoldenEagleLeaderboardGradient') end)
+pcall(function() RunService:UnbindFromRenderStep('SilverSurferProfileStatsLock') end)
+pcall(function() RunService:UnbindFromRenderStep('SilverSurferLeaderboardGradient') end)
 if State.LocalStatsSpoofEnabled then
 pcall(State.LocalSpoofs.ApplyProfile)
-RunService:BindToRenderStep('GoldenEagleProfileStatsLock', Enum.RenderPriority.Last.Value + 10, WYNF_JIT(function()
+RunService:BindToRenderStep('SilverSurferProfileStatsLock', Enum.RenderPriority.Last.Value + 10, WYNF_JIT(function()
 if State.Active and State.LocalStatsSpoofEnabled then
 local Now = os.clock()
 if Now - (State.LocalSpoofs.StatsLockAt or 0) >= 0.2 then
@@ -6058,7 +6292,7 @@ pcall(State.LocalSpoofs.ApplyStatsLock)
 end
 end
 end))
-RunService:BindToRenderStep('GoldenEagleLeaderboardGradient', Enum.RenderPriority.Last.Value + 11, WYNF_JIT(function()
+RunService:BindToRenderStep('SilverSurferLeaderboardGradient', Enum.RenderPriority.Last.Value + 11, WYNF_JIT(function()
 if State.Active and State.LocalStatsSpoofEnabled then pcall(State.LocalSpoofs.UpdateLeaderboardGradients) end
 end))
 else
@@ -6603,10 +6837,10 @@ end
 function State.LocalSpoofs.SetClanSpoof(Enabled)
 State.LocalClanSpoofEnabled = Enabled == true
 CONFIG.LocalClanSpoof = State.LocalClanSpoofEnabled
-pcall(function() RunService:UnbindFromRenderStep('GoldenEagleClanSpoof') end)
+pcall(function() RunService:UnbindFromRenderStep('SilverSurferClanSpoof') end)
 if State.LocalClanSpoofEnabled then
 pcall(State.LocalSpoofs.ApplyClanSpoof)
-RunService:BindToRenderStep('GoldenEagleClanSpoof', Enum.RenderPriority.Last.Value + 11, WYNF_JIT(function()
+RunService:BindToRenderStep('SilverSurferClanSpoof', Enum.RenderPriority.Last.Value + 11, WYNF_JIT(function()
 if State.Active and State.LocalClanSpoofEnabled then
 local Now = os.clock()
 if Now - (State.LocalSpoofs.ClanSpoofAt or 0) >= 0.3 then
@@ -6672,10 +6906,10 @@ end
 function State.LocalSpoofs.SetAchievementSpoof(Enabled)
 State.LocalAchievementSpoofEnabled = Enabled == true
 CONFIG.LocalAchievementSpoof = State.LocalAchievementSpoofEnabled
-pcall(function() RunService:UnbindFromRenderStep('GoldenEagleAchievementSpoof') end)
+pcall(function() RunService:UnbindFromRenderStep('SilverSurferAchievementSpoof') end)
 if State.LocalAchievementSpoofEnabled then
 pcall(State.LocalSpoofs.ApplyAchievementSpoof)
-RunService:BindToRenderStep('GoldenEagleAchievementSpoof', Enum.RenderPriority.Last.Value + 12, WYNF_JIT(function()
+RunService:BindToRenderStep('SilverSurferAchievementSpoof', Enum.RenderPriority.Last.Value + 12, WYNF_JIT(function()
 if State.Active and State.LocalAchievementSpoofEnabled then
 local Now = os.clock()
 if Now - (State.LocalSpoofs.AchievementSpoofAt or 0) >= 0.3 then
@@ -6795,7 +7029,7 @@ end
 end
 end
 State.LocalSpoofs.HasFakeDraws=false
-for _,Match in ipairs(History) do if Match.__GoldenEagleFake and Match.__DisplayResult=='Draw' then State.LocalSpoofs.HasFakeDraws=true end end
+for _,Match in ipairs(History) do if Match.__SilverSurferFake and Match.__DisplayResult=='Draw' then State.LocalSpoofs.HasFakeDraws=true end end
 if not State.LocalSpoofs.HasFakeDraws then return end
 for _,Root in ipairs(LP.PlayerGui:GetDescendants()) do
 if Root.Name=='HistoryFrame' and Root:FindFirstChild('PageFrame') then
@@ -6804,7 +7038,7 @@ if Row:IsA('Frame') then
 local TeamA=Row:FindFirstChild('TeamA');local TeamB=Row:FindFirstChild('TeamB')
 local ScoreA=Row:FindFirstChild('TeamAScore');local ScoreB=Row:FindFirstChild('TeamBScore')
 for _,Match in ipairs(History) do
-if Match.__GoldenEagleFake and Match.__DisplayResult=='Draw' and TeamA and TeamB and ScoreA and ScoreB
+if Match.__SilverSurferFake and Match.__DisplayResult=='Draw' and TeamA and TeamB and ScoreA and ScoreB
 and tonumber(ScoreA.Text)==tonumber(Match.HomeScore) and tonumber(ScoreB.Text)==tonumber(Match.AwayScore) then
 local HomeHit=false;local AwayHit=false
 for Name in pairs(Match.Home) do if string.find(TeamA.Text,Name,1,true) then HomeHit=true break end end
@@ -6867,7 +7101,7 @@ for Index,Name in ipairs(HomeNames) do Home[Name]=BuildInfo(Name,true,Index) end
 for Index,Name in ipairs(AwayNames) do Away[Name]=BuildInfo(Name,false,100+Index) end
 local TeamSize=RequestedSize
 table.insert(Data.MatchHistory,1,{
-__GoldenEagleFake=true,__DisplayResult=Result,Result=RenderResult,
+__SilverSurferFake=true,__DisplayResult=Result,Result=RenderResult,
 HomeScore=HomeScore,AwayScore=AwayScore,Date=os.time(),PlayerCount=#HomeNames+#AwayNames,
 Mode=tostring(TeamSize)..'v'..tostring(TeamSize),Competitive=false,
 Home=Home,Away=Away,HomeIcon='',AwayIcon='',
@@ -6879,7 +7113,7 @@ function State.LocalSpoofs.ClearFakeMatches()
 local PlayerData = State.LocalSpoofs.PlayerData
 local History = PlayerData and PlayerData.storedData and PlayerData.storedData.MatchHistory
 if type(History) ~= 'table' then return end
-for Index=#History,1,-1 do if type(History[Index])=='table' and History[Index].__GoldenEagleFake then table.remove(History,Index) end end
+for Index=#History,1,-1 do if type(History[Index])=='table' and History[Index].__SilverSurferFake then table.remove(History,Index) end end
 State.LocalSpoofs.HasFakeDraws=false
 State.LocalSpoofs.RefreshFakeMatchHistory()
 end
@@ -7191,7 +7425,7 @@ local EffectFunction, CompileError = State.LocalSpoofs.CompileCustomGoalEffect(S
 if not EffectFunction then
 State.LocalSpoofs.CustomGoalFunction = nil
 State.LocalSpoofs.CustomGoalSource = nil
-warn('[GOLDEN EAGLE HUB] Custom goal effect compile error: '..tostring(CompileError))
+warn('[SILVER SURFER] Custom goal effect compile error: '..tostring(CompileError))
 Notify('CUSTOM GOAL EFFECT', 'Compile error: '..tostring(CompileError))
 return nil
 end
@@ -7206,7 +7440,7 @@ Arguments = table.pack(...),
 }
 local Ok, Result = pcall(State.LocalSpoofs.CustomGoalFunction, Context)
 if not Ok then
-warn('[GOLDEN EAGLE HUB] Custom goal effect runtime error: '..tostring(Result))
+warn('[SILVER SURFER] Custom goal effect runtime error: '..tostring(Result))
 Notify('CUSTOM GOAL EFFECT', 'Runtime error: '..tostring(Result))
 return nil
 end
@@ -7225,7 +7459,7 @@ end
 end
 if not VfxDirectory then
 local Message = 'Could not find the extracted effect assets for '..tostring(ExtractedName)..'.'
-warn('[GOLDEN EAGLE HUB] '..Message)
+warn('[SILVER SURFER] '..Message)
 Notify('CUSTOM GOAL EFFECT', Message)
 return nil
 end
@@ -7254,7 +7488,7 @@ else
 RunOk, RunResult = false, 'Extracted source did not return Execute, a function, or the named effect.'
 end
 if not RunOk then
-warn('[GOLDEN EAGLE HUB] Extracted goal effect runtime error: '..tostring(RunResult))
+warn('[SILVER SURFER] Extracted goal effect runtime error: '..tostring(RunResult))
 Notify('CUSTOM GOAL EFFECT', 'Extracted runtime error: '..tostring(RunResult))
 return nil
 end
@@ -7672,7 +7906,7 @@ AutoQueue.WasIngame = false
 AutoQueue.LastAttempt = 0
 AutoQueue.BlockedUntil = os.clock() + CONFIG.AutoQueuePostGameDelay
 if CONFIG.AutoQueueRequeue then
-Notify('GOLDEN EAGLE HUB', string.format('Match over: requeueing in %ds. Toggle Auto Queue off to skip.', math.floor(tonumber(CONFIG.AutoQueuePostGameDelay) or 0)))
+Notify('SILVER SURFER', string.format('Match over: requeueing in %ds. Toggle Auto Queue off to skip.', math.floor(tonumber(CONFIG.AutoQueuePostGameDelay) or 0)))
 end
 if not CONFIG.AutoQueueRequeue then
 State.AutoQueueEnabled = false
@@ -8371,17 +8605,17 @@ SetArcTableApi = function(NewRows)
 local OverrideRows = NormalizeArcTable(NewRows)
 if #OverrideRows == 0 then
 local ErrorText = 'table contained no valid rows'
-Notify('GOLDEN EAGLE HUB', 'Arc table rejected: ' .. ErrorText)
+Notify('SILVER SURFER', 'Arc table rejected: ' .. ErrorText)
 return false, ErrorText
 end
 local Ok, CountOrError = InstallArcTable(MergeArcTables(BuiltInArcTable, OverrideRows))
 if not Ok then
-Notify('GOLDEN EAGLE HUB', 'Arc table rejected: ' .. tostring(CountOrError))
+Notify('SILVER SURFER', 'Arc table rejected: ' .. tostring(CountOrError))
 return false, CountOrError
 end
 GlobalEnv.__HOOPZ_ARC_TABLE = ArcTable
 GlobalEnv.__HOOPZ_ARC_TABLE_VERSION = CONFIG.ArcTableVersion
-Notify('GOLDEN EAGLE HUB', string.format('Applied %d calibrated arc rows live.', CountOrError))
+Notify('SILVER SURFER', string.format('Applied %d calibrated arc rows live.', CountOrError))
 return true, CountOrError
 end
 GlobalEnv.__HOOPZ_SILENTAIM_SET_ARC_TABLE = SetArcTableApi
@@ -9109,7 +9343,7 @@ local Built, Temporary = pcall(function()
 return Players:CreateHumanoidModelFromDescription(Description, RigType)
 end)
 if not Built or not Temporary then State.Extras.AvatarPreviewStatus = 'MODEL BUILD FAILED'; return false end
-Temporary.Name = 'GoldenEagleLocalDisguise'
+Temporary.Name = 'SilverSurferLocalDisguise'
 Temporary.Parent = ReplicatedStorage
 local PackageComplete = true
 local Applied, ApplyError = pcall(function()
@@ -9310,7 +9544,7 @@ Ball.Archivable = true
 local BallOk, BallClone = pcall(function() return Ball:Clone() end)
 Ball.Archivable = PreviousArchivable
 if BallOk and BallClone then
-BallClone.Name = 'GoldenEagleGhostBallTemplate'
+BallClone.Name = 'SilverSurferGhostBallTemplate'
 BallClone.Parent = nil
 State.GhostReplay.BallTemplate = BallClone
 end
@@ -9331,7 +9565,7 @@ local HumanoidObject = Character:FindFirstChildOfClass('Humanoid')
 if not (HumanoidObject and HumanoidObject.Health > 0) then State.GhostReplay.Status = 'CHARACTER NOT READY'; return false end
 local Template = State.GhostReplay.CloneCompleteInstance(Character)
 if not Template then State.GhostReplay.Status = 'GHOST SNAPSHOT FAILED'; return false end
-Template.Name = 'GoldenEagleGhostTemplate'
+Template.Name = 'SilverSurferGhostTemplate'
 Template.Parent = nil
 State.GhostReplay.Template = Template
 State.GhostReplay.SourceCharacter = Character
@@ -9389,7 +9623,7 @@ if not Source then State.GhostReplay.Status = 'AVATAR SOURCE LOST'; return false
 local Ghost = State.GhostReplay.CloneCompleteInstance(Source)
 if not Ghost then Ghost = State.GhostReplay.CloneCompleteInstance(State.GhostReplay.Template) end
 if not Ghost then State.GhostReplay.Status = 'GHOST BUILD FAILED'; return false end
-Ghost.Name = 'GoldenEagleReplayGhost'
+Ghost.Name = 'SilverSurferReplayGhost'
 local ExistingAccessories = {}
 for _, Object in ipairs(Ghost:GetDescendants()) do
 if Object:IsA('Accessory') then table.insert(ExistingAccessories, Object) end
@@ -9436,7 +9670,7 @@ for Index, Path in ipairs(State.GhostReplay.SourcePaths) do
 State.GhostReplay.GhostParts[Index] = Map[Path] or false
 end
 local Highlight = Instance.new('Highlight')
-Highlight.Name = 'GoldenEagleGhostHighlight'
+Highlight.Name = 'SilverSurferGhostHighlight'
 Highlight.Adornee = Ghost
 Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 Highlight.FillColor = Color3.fromRGB(255, 196, 64)
@@ -9453,7 +9687,7 @@ end
 if State.GhostReplay.BallTemplate then
 local BallOk, GhostBall = pcall(function() return State.GhostReplay.BallTemplate:Clone() end)
 if BallOk and GhostBall and GhostBall:IsA('BasePart') then
-GhostBall.Name = 'GoldenEagleReplayGhostBall'
+GhostBall.Name = 'SilverSurferReplayGhostBall'
 GhostBall.Anchored = true
 GhostBall.CanCollide = false
 GhostBall.CanTouch = false
@@ -10273,7 +10507,7 @@ SyntheticInput = false,
 LastShotAt = 0,
 Generation = 0,
 Bound = false,
-ActionName = 'GoldenEagle_NoJumpShot',
+ActionName = 'SilverSurfer_NoJumpShot',
 }
 
 function State.NoJump.IsEnabled()
@@ -10522,7 +10756,7 @@ if FallbackGui and FallbackGui.Parent then return FallbackGui end
 local Container = HiddenGui()
 if not Container then return nil end
 local Gui = Instance.new('ScreenGui')
-Gui.Name = 'GoldenEagleDrawSurface'
+Gui.Name = 'SilverSurferDrawSurface'
 Gui.IgnoreGuiInset = true
 Gui.ResetOnSpawn = false
 Gui.DisplayOrder = 9996
@@ -10663,9 +10897,9 @@ GroundY = nil,
 Theme = {
 Background = Color3.fromRGB(8, 8, 9),
 Muted = Color3.fromRGB(146, 146, 155),
-Accent = Color3.fromRGB(212, 175, 55),
-AccentBright = Color3.fromRGB(255, 226, 122),
-HighlightFill = Color3.fromRGB(255, 225, 125),
+Accent = Color3.fromRGB(191, 199, 209),
+AccentBright = Color3.fromRGB(247, 250, 252),
+HighlightFill = Color3.fromRGB(218, 224, 231),
 White = Color3.fromRGB(255, 255, 255),
 },
 All = {},
@@ -10691,9 +10925,12 @@ DunkRangeCore = nil,
 local RangeScreenTint = {
 Gui = nil,
 Group = nil,
-BlackHalf = nil,
-GoldHalf = nil,
+ShadowHalf = nil,
+AccentHalf = nil,
 CenterBlend = nil,
+ShadowGradient = nil,
+AccentGradient = nil,
+CenterGradient = nil,
 ColorCorrection = nil,
 GroupTween = nil,
 CorrectionTween = nil,
@@ -10728,22 +10965,62 @@ Frame.Parent = Parent
 return Frame
 end
 
+local function RefreshRangeScreenTintTheme()
+local T = Visuals.Theme
+if not T then return end
+local Background = T.Background or Color3.fromRGB(11, 12, 14)
+local Accent = T.Accent or Color3.fromRGB(191, 199, 209)
+local Bright = T.AccentBright or Color3.fromRGB(247, 250, 252)
+local DeepAccent = Accent:Lerp(Background, 0.72)
+local MidAccent = Accent:Lerp(Background, 0.38)
+
+if RangeScreenTint.ShadowHalf then RangeScreenTint.ShadowHalf.BackgroundColor3 = Background end
+if RangeScreenTint.AccentHalf then RangeScreenTint.AccentHalf.BackgroundColor3 = Accent end
+if RangeScreenTint.CenterBlend then RangeScreenTint.CenterBlend.BackgroundColor3 = MidAccent end
+if RangeScreenTint.ShadowGradient then
+RangeScreenTint.ShadowGradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Background:Lerp(Color3.new(0, 0, 0), 0.36)),
+ColorSequenceKeypoint.new(0.70, Background),
+ColorSequenceKeypoint.new(1.00, DeepAccent),
+})
+end
+if RangeScreenTint.AccentGradient then
+RangeScreenTint.AccentGradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, DeepAccent),
+ColorSequenceKeypoint.new(0.20, MidAccent),
+ColorSequenceKeypoint.new(0.58, Accent),
+ColorSequenceKeypoint.new(1.00, Bright),
+})
+end
+if RangeScreenTint.CenterGradient then
+RangeScreenTint.CenterGradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Background),
+ColorSequenceKeypoint.new(0.48, MidAccent),
+ColorSequenceKeypoint.new(1.00, Bright),
+})
+end
+if RangeScreenTint.ColorCorrection and RangeScreenTint.ColorCorrection.Enabled then
+RangeScreenTint.ColorCorrection.TintColor = Bright:Lerp(Color3.new(1, 1, 1), 0.22)
+end
+end
+
 local function InitializeRangeScreenTint()
 if not CONFIG.RangeScreenTintEnabled then return false end
 if RangeScreenTint.Gui and RangeScreenTint.Gui.Parent
 and RangeScreenTint.Group and RangeScreenTint.Group.Parent
 and RangeScreenTint.ColorCorrection and RangeScreenTint.ColorCorrection.Parent then
+RefreshRangeScreenTintTheme()
 return true
 end
 
 local PlayerGui = LP:FindFirstChildOfClass('PlayerGui') or LP:WaitForChild('PlayerGui')
-local ExistingGui = PlayerGui:FindFirstChild('GoldenEagleRangeScreenTint')
+local ExistingGui = PlayerGui:FindFirstChild('SilverSurferRangeScreenTint')
 if ExistingGui then pcall(function() ExistingGui:Destroy() end) end
-local ExistingCorrection = Lighting:FindFirstChild('GoldenEagleRangeHueCorrection')
+local ExistingCorrection = Lighting:FindFirstChild('SilverSurferRangeHueCorrection')
 if ExistingCorrection then pcall(function() ExistingCorrection:Destroy() end) end
 
 local Correction = Instance.new('ColorCorrectionEffect')
-Correction.Name = 'GoldenEagleRangeHueCorrection'
+Correction.Name = 'SilverSurferRangeHueCorrection'
 Correction.Enabled = false
 Correction.Brightness = 0
 Correction.Contrast = 0
@@ -10752,7 +11029,7 @@ Correction.TintColor = Color3.new(1, 1, 1)
 Correction.Parent = Lighting
 
 local Gui = Instance.new('ScreenGui')
-Gui.Name = 'GoldenEagleRangeScreenTint'
+Gui.Name = 'SilverSurferRangeScreenTint'
 Gui.IgnoreGuiInset = true
 Gui.ResetOnSpawn = false
 Gui.DisplayOrder = 9997
@@ -10760,7 +11037,7 @@ Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 Gui.Parent = PlayerGui
 
 local Group = Instance.new('CanvasGroup')
-Group.Name = 'BlendedBlackGoldCanvas'
+Group.Name = 'BlendedThemeAccentCanvas'
 Group.Size = UDim2.fromScale(1, 1)
 Group.Position = UDim2.fromScale(0, 0)
 Group.BackgroundTransparency = 1
@@ -10771,85 +11048,55 @@ Group.Active = false
 Group.ZIndex = 1
 Group.Parent = Gui
 
-local BlackHalf = NewRangeTintFrame(
-'BlackHueHalf',
-UDim2.fromScale(0, 0),
-UDim2.fromScale(0.565, 1),
-Color3.fromRGB(0, 0, 0),
-0.05,
-Group
-)
-local BlackGradient = Instance.new('UIGradient')
-BlackGradient.Rotation = 0
-BlackGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Color3.fromRGB(0, 0, 0)),
-ColorSequenceKeypoint.new(0.70, Color3.fromRGB(4, 4, 5)),
-ColorSequenceKeypoint.new(1.00, Color3.fromRGB(17, 14, 8)),
+local T = Visuals.Theme
+local Background = T.Background or Color3.fromRGB(11, 12, 14)
+local Accent = T.Accent or Color3.fromRGB(191, 199, 209)
+local ShadowHalf = NewRangeTintFrame(
+'ThemeShadowHalf', UDim2.fromScale(0, 0), UDim2.fromScale(0.565, 1),
+Background, 0.05, Group)
+local ShadowGradient = Instance.new('UIGradient')
+ShadowGradient.Rotation = 0
+ShadowGradient.Transparency = NumberSequence.new({
+NumberSequenceKeypoint.new(0.00, 0.00), NumberSequenceKeypoint.new(0.72, 0.05),
+NumberSequenceKeypoint.new(0.86, 0.18), NumberSequenceKeypoint.new(1.00, 1.00),
 })
-BlackGradient.Transparency = NumberSequence.new({
-NumberSequenceKeypoint.new(0.00, 0.00),
-NumberSequenceKeypoint.new(0.72, 0.05),
-NumberSequenceKeypoint.new(0.86, 0.18),
-NumberSequenceKeypoint.new(1.00, 1.00),
-})
-BlackGradient.Parent = BlackHalf
+ShadowGradient.Parent = ShadowHalf
 
-local GoldHalf = NewRangeTintFrame(
-'GoldHueHalf',
-UDim2.fromScale(0.435, 0),
-UDim2.fromScale(0.565, 1),
-Color3.fromRGB(220, 171, 42),
-0.18,
-Group
-)
-local GoldGradient = Instance.new('UIGradient')
-GoldGradient.Rotation = 0
-GoldGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Color3.fromRGB(70, 48, 9)),
-ColorSequenceKeypoint.new(0.20, Color3.fromRGB(155, 108, 18)),
-ColorSequenceKeypoint.new(0.55, Color3.fromRGB(220, 171, 42)),
-ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 211, 91)),
+local AccentHalf = NewRangeTintFrame(
+'ThemeAccentHalf', UDim2.fromScale(0.435, 0), UDim2.fromScale(0.565, 1),
+Accent, 0.18, Group)
+local AccentGradient = Instance.new('UIGradient')
+AccentGradient.Rotation = 0
+AccentGradient.Transparency = NumberSequence.new({
+NumberSequenceKeypoint.new(0.00, 1.00), NumberSequenceKeypoint.new(0.14, 0.30),
+NumberSequenceKeypoint.new(0.28, 0.10), NumberSequenceKeypoint.new(1.00, 0.02),
 })
-GoldGradient.Transparency = NumberSequence.new({
-NumberSequenceKeypoint.new(0.00, 1.00),
-NumberSequenceKeypoint.new(0.14, 0.30),
-NumberSequenceKeypoint.new(0.28, 0.10),
-NumberSequenceKeypoint.new(1.00, 0.02),
-})
-GoldGradient.Parent = GoldHalf
+AccentGradient.Parent = AccentHalf
 
 local CenterBlend = NewRangeTintFrame(
-'CenterHueBlend',
-UDim2.fromScale(0.455, 0),
-UDim2.fromScale(0.09, 1),
-Color3.fromRGB(105, 76, 20),
-0.62,
-Group
-)
+'CenterThemeBlend', UDim2.fromScale(0.455, 0), UDim2.fromScale(0.09, 1),
+Accent:Lerp(Background, 0.38), 0.62, Group)
 CenterBlend.ZIndex = 2
 local CenterGradient = Instance.new('UIGradient')
 CenterGradient.Rotation = 0
-CenterGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Color3.fromRGB(2, 2, 2)),
-ColorSequenceKeypoint.new(0.48, Color3.fromRGB(55, 39, 10)),
-ColorSequenceKeypoint.new(1.00, Color3.fromRGB(224, 173, 42)),
-})
 CenterGradient.Transparency = NumberSequence.new({
-NumberSequenceKeypoint.new(0.00, 1.00),
-NumberSequenceKeypoint.new(0.30, 0.72),
-NumberSequenceKeypoint.new(0.50, 0.58),
-NumberSequenceKeypoint.new(0.70, 0.72),
+NumberSequenceKeypoint.new(0.00, 1.00), NumberSequenceKeypoint.new(0.30, 0.72),
+NumberSequenceKeypoint.new(0.50, 0.58), NumberSequenceKeypoint.new(0.70, 0.72),
 NumberSequenceKeypoint.new(1.00, 1.00),
 })
 CenterGradient.Parent = CenterBlend
 
 RangeScreenTint.Gui = Gui
 RangeScreenTint.Group = Group
-RangeScreenTint.BlackHalf = BlackHalf
-RangeScreenTint.GoldHalf = GoldHalf
+RangeScreenTint.ShadowHalf = ShadowHalf
+RangeScreenTint.AccentHalf = AccentHalf
 RangeScreenTint.CenterBlend = CenterBlend
+RangeScreenTint.ShadowGradient = ShadowGradient
+RangeScreenTint.AccentGradient = AccentGradient
+RangeScreenTint.CenterGradient = CenterGradient
 RangeScreenTint.ColorCorrection = Correction
 RangeScreenTint.TargetVisible = false
+RefreshRangeScreenTintTheme()
 return true
 end
 
@@ -10893,7 +11140,7 @@ TweenInfo.new(InTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 Saturation = -1,
 Contrast = 0.16,
 Brightness = -0.035,
-TintColor = Color3.fromRGB(244, 240, 228),
+TintColor = Visuals.Theme.AccentBright:Lerp(Color3.new(1, 1, 1), 0.22),
 }
 )
 RangeScreenTint.GroupTween:Play()
@@ -10915,7 +11162,7 @@ TweenInfo.new(SettleTime, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
 Saturation = -0.94,
 Contrast = 0.12,
 Brightness = -0.02,
-TintColor = Color3.fromRGB(250, 246, 235),
+TintColor = Visuals.Theme.AccentBright:Lerp(Color3.new(1, 1, 1), 0.34),
 }
 )
 RangeScreenTint.GroupTween:Play()
@@ -10963,9 +11210,12 @@ pcall(function() RangeScreenTint.ColorCorrection:Destroy() end)
 end
 RangeScreenTint.Gui = nil
 RangeScreenTint.Group = nil
-RangeScreenTint.BlackHalf = nil
-RangeScreenTint.GoldHalf = nil
+RangeScreenTint.ShadowHalf = nil
+RangeScreenTint.AccentHalf = nil
 RangeScreenTint.CenterBlend = nil
+RangeScreenTint.ShadowGradient = nil
+RangeScreenTint.AccentGradient = nil
+RangeScreenTint.CenterGradient = nil
 RangeScreenTint.ColorCorrection = nil
 end
 
@@ -11217,7 +11467,7 @@ if Existing then pcall(function() Existing:Destroy() end) end
 
 local Highlight = Instance.new('Highlight')
 local VisualTheme = Visuals.Theme
-Highlight.Name = 'GoldenEagleRangeHighlight'
+Highlight.Name = 'SilverSurferRangeHighlight'
 Highlight.Adornee = Char
 Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 Highlight.FillColor = VisualTheme.Accent
@@ -11761,7 +12011,7 @@ return OldNewIndex(Table, Key, Value)
 end))
 end)
 if not SpoofOk then
-Notify('GOLDEN EAGLE HUB', 'CameraData spoof hook failed on this executor - Silent Aim inactive.')
+Notify('SILVER SURFER', 'CameraData spoof hook failed on this executor - Silent Aim inactive.')
 return false
 end
 
@@ -11796,7 +12046,7 @@ restorefunction(SharedTableMeta.__newindex)
 Restored = true
 end
 end)
-Notify('GOLDEN EAGLE HUB', Restored
+Notify('SILVER SURFER', Restored
 and 'This executor\'s hookfunction failed live verification - Silent Aim disabled; hook removed.'
 or 'This executor\'s hookfunction failed and could not be removed - rejoin before shooting.')
 return false
@@ -11813,7 +12063,7 @@ St.Acks = 0
 St.VerifyFails = 0
 end)
 if not ok or St == nil then
-Notify('GOLDEN EAGLE HUB', 'SharedTable transport failed on this executor - Silent Aim inactive.')
+Notify('SILVER SURFER', 'SharedTable transport failed on this executor - Silent Aim inactive.')
 return false
 end
 SilentAim.ActorStName = StName
@@ -11837,7 +12087,7 @@ SilentAim.ActorAimReady = true
 return true
 end
 SilentAim.ActorAimReady = false
-Notify('GOLDEN EAGLE HUB', 'No actors found to hook - Silent Aim inactive.')
+Notify('SILVER SURFER', 'No actors found to hook - Silent Aim inactive.')
 return false
 end
 
@@ -11852,7 +12102,7 @@ end
 
 SilentAim.ActorAimReady = (SilentAim.ActorSt.Acks or 0) > 0
 if not SilentAim.ActorAimReady then
-Notify('GOLDEN EAGLE HUB', (SilentAim.ActorSt.VerifyFails or 0) > 0
+Notify('SILVER SURFER', (SilentAim.ActorSt.VerifyFails or 0) > 0
 and 'Actor hooks failed live verification - Silent Aim inactive; hooks removed.'
 or 'Actor hooks did not respond - Silent Aim inactive on this executor.')
 end
@@ -13293,7 +13543,7 @@ end
 
 State.AutoConfig = {
 PlaceId = 6229116934,
-Folder = 'GoldenEagleHub_Configs',
+Folder = 'SilverSurfer_Configs',
 LastLoaded = nil,
 }
 
@@ -13325,8 +13575,8 @@ end
 end
 end
 
-if LatestName == nil and type(GlobalEnv.__GOLDEN_EAGLE_CONFIGS) == 'table' then
-for Name, Profile in pairs(GlobalEnv.__GOLDEN_EAGLE_CONFIGS) do
+if LatestName == nil and type(GlobalEnv.__SILVER_SURFER_CONFIGS) == 'table' then
+for Name, Profile in pairs(GlobalEnv.__SILVER_SURFER_CONFIGS) do
 local SavedAt = type(Profile) == 'table' and tonumber(Profile.SavedAt) or 0
 if LatestName == nil or SavedAt > LatestTime then
 LatestName = tostring(Name)
@@ -14310,7 +14560,7 @@ SpinRadians = 0,
 SpinApplied = 0,
 SpinTarget = 0,
 ShiftLockActive = false,
-ShiftLockBindName = 'GoldenEagleAutoMixShiftLock',
+ShiftLockBindName = 'SilverSurferAutoMixShiftLock',
 Animator = nil,
 AnimatorConnection = nil,
 TrackConnection = nil,
@@ -17985,7 +18235,7 @@ end
 UpdateAutoGetOpenBinding()
 if HubUI.Sync then HubUI.Sync() end
 if ShouldNotify and RejectMessage then
-Notify('GOLDEN EAGLE HUB', RejectMessage)
+Notify('SILVER SURFER', RejectMessage)
 end
 end
 
@@ -18153,7 +18403,7 @@ Enabled and (State.AutoGuardEnabled
 and 'WAITING FOR OFF-BALL' or 'AUTO GUARD OFF') or 'OFF')
 if HubUI.Sync then HubUI.Sync() end
 if ShouldNotify and Enabled then
-Notify('GOLDEN EAGLE HUB', 'Off-ball Head Ride enabled')
+Notify('SILVER SURFER', 'Off-ball Head Ride enabled')
 end
 end
 
@@ -18785,9 +19035,9 @@ State.PassRange = {
 Highlight = nil,
 Maximum = nil,
 ReceiverInRange = false,
-FillA = Color3.fromRGB(212, 175, 55),
-FillB = Color3.fromRGB(255, 226, 122),
-OutlineColor = Color3.fromRGB(7, 7, 8),
+FillA = Color3.fromRGB(191, 199, 209),
+FillB = Color3.fromRGB(247, 250, 252),
+OutlineColor = Color3.fromRGB(11, 12, 14),
 }
 
 function State.PassRange.GetMaximum()
@@ -18830,7 +19080,7 @@ local Existing = Range.Highlight
 if Existing and Existing.Parent == HiddenGui() and Existing.Adornee == Character then return Existing end
 if Existing then pcall(function() Existing:Destroy() end) end
 local Highlight = Instance.new('Highlight')
-Highlight.Name = 'GoldenEaglePassRangeHighlight'
+Highlight.Name = 'SilverSurferPassRangeHighlight'
 Highlight.Adornee = Character
 Highlight.DepthMode = Enum.HighlightDepthMode.Occluded
 Highlight.FillTransparency = 0.72
@@ -18876,8 +19126,9 @@ local Range = State.PassRange
 local Highlight = Range.Highlight
 if not (Range.ReceiverInRange and Highlight and Highlight.Parent and Highlight.Enabled) then return end
 local Pulse = (math.sin(os.clock() * 4.2) + 1) * 0.5
-Highlight.FillColor = Range.FillA:Lerp(Range.FillB, Pulse)
-Highlight.OutlineColor = Range.OutlineColor
+local T = Visuals.Theme
+Highlight.FillColor = T.Accent:Lerp(T.AccentBright, Pulse)
+Highlight.OutlineColor = T.Background
 Highlight.FillTransparency = 0.76 - Pulse * 0.12
 Highlight.OutlineTransparency = 0.03
 end
@@ -18894,8 +19145,8 @@ while #State.PassLabels > Count do
 DestroyPassLabel(table.remove(State.PassLabels))
 end
 
-local GoldAlpha = (math.sin(os.clock() * 1.8) + 1) * 0.5
-local Accent = Color3.fromRGB(212, 175, 55):Lerp(Color3.fromRGB(255, 226, 122), GoldAlpha)
+local AccentAlpha = (math.sin(os.clock() * 1.8) + 1) * 0.5
+local Accent = Visuals.Theme.Accent:Lerp(Visuals.Theme.AccentBright, AccentAlpha)
 for Index = 1, Count do
 local Teammate = Teammates[Index]
 local Head = Teammate.Character and Teammate.Character:FindFirstChild('Head')
@@ -19059,7 +19310,7 @@ local Ok, ErrorText = pcall(Work, Generation)
 if State.PassGeneration == Generation then State.PassInProgress = false end
 if not Ok then
 SilentAim.ClearActorAim()
-warn('[GOLDEN EAGLE HUB] Pass failed: ' .. tostring(ErrorText))
+warn('[SILVER SURFER] Pass failed: ' .. tostring(ErrorText))
 end
 end)
 return true
@@ -19113,7 +19364,7 @@ and UserInputService.TouchEnabled) then return end
 
 local PlayerGui = LP:FindFirstChildOfClass('PlayerGui') or LP:WaitForChild('PlayerGui')
 local Gui = Instance.new('ScreenGui')
-Gui.Name = 'GoldenEagleMobilePass'
+Gui.Name = 'SilverSurferMobilePass'
 Gui.ResetOnSpawn = false
 Gui.IgnoreGuiInset = true
 Gui.DisplayOrder = 9998
@@ -19125,20 +19376,20 @@ Button.Name = 'Pass' .. tostring(Index)
 Button.AnchorPoint = Vector2.new(1, 1)
 Button.Position = UDim2.new(1, -18 - ((Index - 1) * 48), 1, -92)
 Button.Size = UDim2.fromOffset(42, 42)
-Button.BackgroundColor3 = Color3.fromRGB(15, 13, 8)
+Button.BackgroundColor3 = Visuals.Theme.Background
 Button.BackgroundTransparency = 0.12
 Button.BorderSizePixel = 0
 Button.AutoButtonColor = true
 Button.Font = Enum.Font.Code
 Button.Text = tostring(Index)
-Button.TextColor3 = Color3.fromRGB(212, 175, 55)
+Button.TextColor3 = Visuals.Theme.Accent
 Button.TextSize = 18
 Button.Parent = Gui
 local Corner = Instance.new('UICorner')
 Corner.CornerRadius = UDim.new(1, 0)
 Corner.Parent = Button
 local Stroke = Instance.new('UIStroke')
-Stroke.Color = Color3.fromRGB(212, 175, 55)
+Stroke.Color = Visuals.Theme.Accent
 Stroke.Thickness = 1.5
 Stroke.Parent = Button
 Button.Activated:Connect(function() StartTeammatePass(Index) end)
@@ -19260,7 +19511,7 @@ while State.Active and State.RequestedEnabled
 and Generation == AimToggleGeneration and not ActorsAvailable() do
 if ShouldNotify and not WaitingNotified then
 WaitingNotified = true
-Notify('GOLDEN EAGLE HUB', 'Waiting for the shooting actors to load...')
+Notify('SILVER SURFER', 'Waiting for the shooting actors to load...')
 end
 task.wait(0.5)
 end
@@ -19274,7 +19525,7 @@ State.Enabled = Ready == true
 if not Ready then State.RequestedEnabled = false end
 UpdateSilentAimController()
 if HubUI.Sync then HubUI.Sync() end
-if not Ready then Notify('GOLDEN EAGLE HUB', 'Actor hooks unavailable') end
+if not Ready then Notify('SILVER SURFER', 'Actor hooks unavailable') end
 end)
 end
 
@@ -19287,12 +19538,12 @@ local InMatch = State.Movement and State.Movement.IsInMatch and State.Movement.I
 if not InMatch and State.RequestedEnabled then
 State.AimMatchDisarm.Auto = true
 SetSilentAimEnabled(false)
-Notify('GOLDEN EAGLE HUB', 'Silent Aim parked until you enter a match.')
+Notify('SILVER SURFER', 'Silent Aim parked until you enter a match.')
 elseif InMatch and State.AimMatchDisarm.Auto then
 State.AimMatchDisarm.Auto = false
 if not State.RequestedEnabled then
 SetSilentAimEnabled(true)
-Notify('GOLDEN EAGLE HUB', 'Silent Aim re-armed for the match.')
+Notify('SILVER SURFER', 'Silent Aim re-armed for the match.')
 end
 end
 elseif State.AimMatchDisarm.Auto then
@@ -19370,7 +19621,7 @@ ShootDistance = 30,
 DunkDistance = 12,
 InProgress = false,
 ActionType = nil,
-BindName = 'GoldenEagleAutoOffense',
+BindName = 'SilverSurferAutoOffense',
 Generation = 0,
 OriginalAimTargetMode = nil,
 MovementPhase = 'backdown',
@@ -20872,7 +21123,7 @@ function State.AutoOffense.GetPathFolder()
 local Folder = State.AutoOffense.PathFolder
 if Folder and Folder.Parent then return Folder end
 Folder = Instance.new('Folder')
-Folder.Name = 'GoldenEagleAutoOffensePath'
+Folder.Name = 'SilverSurferAutoOffensePath'
 Folder.Parent = Workspace
 State.AutoOffense.PathFolder = Folder
 State.AutoOffense.PathParts = {}
@@ -21347,7 +21598,7 @@ end
 State.AutoOffense.UpdateBinding()
 if HubUI.Sync then HubUI.Sync() end
 if ShouldNotify and Enabled then
-Notify('GOLDEN EAGLE HUB', 'Auto Offense enabled')
+Notify('SILVER SURFER', 'Auto Offense enabled')
 end
 end
 
@@ -21483,7 +21734,7 @@ if not Ghost then
 State.DesyncVisualizer.Status = 'snapshot failed'
 return false
 end
-Ghost.Name = 'GoldenEagleDesyncGhost'
+Ghost.Name = 'SilverSurferDesyncGhost'
 local Transparency = math.clamp(tonumber(CONFIG.DesyncVisualizerTransparency) or 0.8, 0.05, 1)
 for _, Object in ipairs(Ghost:GetDescendants()) do
 if Object:IsA('Script') or Object:IsA('LocalScript') or Object:IsA('ModuleScript')
@@ -21527,7 +21778,7 @@ end
 end
 Ghost.Parent = HiddenWorld()
 local ServerHighlight = Instance.new('Highlight')
-ServerHighlight.Name = 'GoldenEagleDesyncServerHighlight'
+ServerHighlight.Name = 'SilverSurferDesyncServerHighlight'
 ServerHighlight.Adornee = Ghost
 ServerHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 ServerHighlight.FillColor = Color3.fromRGB(255, 64, 64)
@@ -21536,7 +21787,7 @@ ServerHighlight.OutlineColor = Color3.fromRGB(255, 70, 70)
 ServerHighlight.OutlineTransparency = 0
 ServerHighlight.Parent = HiddenGui()
 local ClientHighlight = Instance.new('Highlight')
-ClientHighlight.Name = 'GoldenEagleDesyncClientHighlight'
+ClientHighlight.Name = 'SilverSurferDesyncClientHighlight'
 ClientHighlight.Adornee = Character
 ClientHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 ClientHighlight.FillTransparency = 1
@@ -21618,7 +21869,7 @@ GiveSignal(RunService.RenderStepped:Connect(WYNF_JIT(function()
 local Ok, Err = pcall(State.DesyncVisualizer.Update)
 if not Ok and not State.DesyncVisualizer.WarnedUpdate then
 State.DesyncVisualizer.WarnedUpdate = true
-warn('[GOLDEN EAGLE HUB] Desync visualizer update failed: ' .. tostring(Err))
+warn('[SILVER SURFER] Desync visualizer update failed: ' .. tostring(Err))
 end
 end)))
 
@@ -21637,7 +21888,7 @@ LastPlayerListAt = 0,
 LastMembershipAt = 0,
 Generation = 0,
 LastUpdate = 0,
-BindName = 'GoldenEagleOutline',
+BindName = 'SilverSurferOutline',
 }
 State.OutlineEnabled = State.Outline.Enabled
 State.OutlineMode = State.Outline.Mode
@@ -22266,7 +22517,7 @@ if Watch.AppliedFilter == Filter and Watch.FilterEffect
 and Watch.FilterEffect.Parent and Watch.FilterEffect.Enabled then return end
 if not Watch.FilterEffect or not Watch.FilterEffect.Parent then
 Watch.FilterEffect = Instance.new('ColorCorrectionEffect')
-Watch.FilterEffect.Name = 'GoldenEagleSpectatorFilter'
+Watch.FilterEffect.Name = 'SilverSurferSpectatorFilter'
 Watch.FilterEffect.Parent = Lighting
 end
 Watch.FilterEffect.Enabled = true
@@ -22372,25 +22623,25 @@ end
 
 function State.BuildSilentAimHub()
 local HttpService = game:GetService('HttpService')
-local InterfaceFile = 'GoldenEagleHub_Interface.json'
+local InterfaceFile = 'SilverSurfer_Interface.json'
 local InterfaceDefaults = {
-Version = 7,
-ThemePreset = 'Linoria',
+Version = 8,
+ThemePreset = 'Silver Surfer',
 Theme = {
--- Linoria-inspired charcoal hierarchy with Golden Eagle accents.
-Background = '#080808',
-Panel = '#101010',
-Surface = '#191919',
-SurfaceHover = '#272319',
-Border = '#363636',
-Text = '#F4F4F4',
-Muted = '#9A9A9A',
-Off = '#202020',
-Bad = '#E45A62',
-Success = '#63C58A',
-Warning = '#D9B64B',
-Accent = '#D4AF37',
-AccentBright = '#FFE27A',
+-- Silver Surfer: restrained Dear ImGui graphite with metallic silver focus states.
+Background = '#0B0C0E',
+Panel = '#111318',
+Surface = '#1A1D23',
+SurfaceHover = '#262A32',
+Border = '#4B515C',
+Text = '#F4F7FA',
+Muted = '#9DA4AE',
+Off = '#252932',
+Bad = '#E86670',
+Success = '#67C99A',
+Warning = '#D7B86A',
+Accent = '#BFC7D1',
+AccentBright = '#F7FAFC',
 },
 Scale = 1,
 WindowTransparency = 0,
@@ -22441,12 +22692,12 @@ Success = '#9BE04A', Warning = '#FFC533', Accent = '#FFB000', AccentBright = '#F
 Linoria = {
 Background = '#0D0D0D', Panel = '#151515', Surface = '#1B1B1B', SurfaceHover = '#24211A',
 Border = '#3B3B3B', Text = '#F0F0F0', Muted = '#A7A7A7', Off = '#242424', Bad = '#E45A62',
-Success = '#63C58A', Warning = '#D9B64B', Accent = '#D4AF37', AccentBright = '#FFE27A',
+Success = '#63C58A', Warning = '#D9B64B', Accent = '#BFC7D1', AccentBright = '#F7FAFC',
 },
-['Golden Eagle'] = {
-Background = '#141414', Panel = '#1C1C1C', Surface = '#202020', SurfaceHover = '#282828',
-Border = '#323232', Text = '#F1F1F1', Muted = '#A09CA0', Off = '#252525', Bad = '#FF4152',
-Success = '#57D18A', Warning = '#F3B84B', Accent = '#D4AF37', AccentBright = '#FFE27A',
+['Silver Surfer'] = {
+Background = '#0B0C0E', Panel = '#111318', Surface = '#1A1D23', SurfaceHover = '#262A32',
+Border = '#4B515C', Text = '#F4F7FA', Muted = '#9DA4AE', Off = '#252932', Bad = '#E86670',
+Success = '#67C99A', Warning = '#D7B86A', Accent = '#BFC7D1', AccentBright = '#F7FAFC',
 },
 Midnight = {
 Background = '#070A12', Panel = '#0C1220', Surface = '#151D2D', SurfaceHover = '#202B40',
@@ -22840,9 +23091,9 @@ local InterfaceConfig = DeepCopy(InterfaceDefaults)
 local function NormalizeInterfaceConfig()
 local LoadedVersion = tonumber(InterfaceConfig.Version) or 0
 InterfaceConfig.Version = InterfaceDefaults.Version
-if LoadedVersion < 7 then
-InterfaceConfig.ThemePreset = 'Linoria'
-InterfaceConfig.Theme = DeepCopy(ThemePresets.Linoria)
+if LoadedVersion < 8 then
+InterfaceConfig.ThemePreset = 'Silver Surfer'
+InterfaceConfig.Theme = DeepCopy(ThemePresets['Silver Surfer'])
 InterfaceConfig.Font = 'Code'
 end
 InterfaceConfig.Scale = math.clamp(tonumber(InterfaceConfig.Scale) or 1, 0.65, 1.35)
@@ -22857,7 +23108,7 @@ InterfaceConfig.TabOrder = type(InterfaceConfig.TabOrder) == 'table' and Interfa
 InterfaceConfig.Theme = type(InterfaceConfig.Theme) == 'table' and InterfaceConfig.Theme or DeepCopy(InterfaceDefaults.Theme)
 InterfaceConfig.ThemePreset = tostring(InterfaceConfig.ThemePreset or 'Custom')
 if InterfaceConfig.ThemePreset ~= 'Custom' and not ThemePresets[InterfaceConfig.ThemePreset] then
-InterfaceConfig.ThemePreset = 'Golden Eagle'
+InterfaceConfig.ThemePreset = 'Silver Surfer'
 end
 if InterfaceConfig.ThemePreset ~= 'Custom' and ThemePresets[InterfaceConfig.ThemePreset] then
 InterfaceConfig.Theme = DeepCopy(ThemePresets[InterfaceConfig.ThemePreset])
@@ -22896,15 +23147,15 @@ InterfaceConfig.Theme[Role] = NormalizeHex(InterfaceConfig.Theme[Role], DefaultH
 end
 end
 local function LoadInterfaceConfig()
-local Loaded = type(GlobalEnv.__GOLDEN_EAGLE_INTERFACE_CONFIG) == 'table'
-and GlobalEnv.__GOLDEN_EAGLE_INTERFACE_CONFIG or nil
+local Loaded = type(GlobalEnv.__SILVER_SURFER_INTERFACE_CONFIG) == 'table'
+and GlobalEnv.__SILVER_SURFER_INTERFACE_CONFIG or nil
 if Loaded then MergeConfig(InterfaceConfig, Loaded) end
 NormalizeInterfaceConfig()
 end
 LoadInterfaceConfig()
 
 local function SaveInterfaceConfig()
-GlobalEnv.__GOLDEN_EAGLE_INTERFACE_CONFIG = DeepCopy(InterfaceConfig)
+GlobalEnv.__SILVER_SURFER_INTERFACE_CONFIG = DeepCopy(InterfaceConfig)
 if type(writefile) ~= 'function' then return false end
 local Success, Encoded = pcall(HttpService.JSONEncode, HttpService, InterfaceConfig)
 if not Success then return false end
@@ -22927,9 +23178,9 @@ or Color3.fromRGB(255, 225, 125)
 Theme.White = Theme.White or Visuals.Theme.White or Color3.fromRGB(255, 255, 255)
 Theme.Muted = Theme.Muted or Visuals.Theme.Muted or Color3.fromRGB(146, 146, 155)
 Theme.Background = Theme.Background or Visuals.Theme.Background or Color3.fromRGB(8, 8, 9)
-Theme.Accent = Theme.Accent or Visuals.Theme.Accent or Color3.fromRGB(212, 175, 55)
+Theme.Accent = Theme.Accent or Visuals.Theme.Accent or Color3.fromRGB(191, 199, 209)
 Theme.AccentBright = Theme.AccentBright or Visuals.Theme.AccentBright
-or Color3.fromRGB(255, 226, 122)
+or Color3.fromRGB(247, 250, 252)
 Visuals.Theme = Theme
 if State.Outline then State.Outline.Color = Theme.Accent end
 
@@ -23021,6 +23272,8 @@ InterfaceConfig.Theme[Role] = Hex
 Theme[Role] = HexToColor(Hex, Theme[Role] or HexToColor(DefaultHex))
 end
 if State.Outline then State.Outline.Color = Theme.Accent end
+pcall(RefreshRangeScreenTintTheme)
+if State.MobilePass and State.MobilePass.Refresh then pcall(State.MobilePass.Refresh) end
 for Index = #HubUI.Accents, 1, -1 do
 local Binding = HubUI.Accents[Index]
 if Binding.Object and Binding.Object.Parent then
@@ -23088,7 +23341,7 @@ end
 
 HubUI.ActiveTweens = setmetatable({}, { __mode = 'k' })
 
--- ===== LINORIA MOTION SYSTEM =====
+-- ===== DEAR IMGUI MOTION SYSTEM =====
 -- Five duration tokens and one easing voice replace per-widget timing drift.
 HubUI.Motion = {
 Duration = { Micro = 0.10, Fast = 0.14, Base = 0.20, Slow = 0.28, Panel = 0.38 },
@@ -23240,14 +23493,14 @@ end
 end
 
 local GuiParent = LP:FindFirstChildOfClass('PlayerGui') or LP:WaitForChild('PlayerGui')
-local OldGui = GuiParent:FindFirstChild('GOLDEN_EAGLE_HUB_UI')
+local OldGui = GuiParent:FindFirstChild('SILVER_SURFER_HUB_UI')
 or GuiParent:FindFirstChild('PRISM_HUB_UI')
 or GuiParent:FindFirstChild('OBLITERATE_HUB_V2_UI')
 or GuiParent:FindFirstChild('HOOPZ_SilentAim_UI')
 if OldGui then pcall(function() OldGui:Destroy() end) end
 
 local ScreenGui = New('ScreenGui', {
-Name = 'GOLDEN_EAGLE_HUB_UI',
+Name = 'SILVER_SURFER_HUB_UI',
 DisplayOrder = 10000,
 IgnoreGuiInset = true,
 ResetOnSpawn = false,
@@ -23260,7 +23513,7 @@ HubUI.IntroPlaying = true
 -- Full-screen scrim so the intro reads as a deliberate loading state
 -- rather than a panel floating loose over the game.
 HubUI.IntroScrim = New('Frame', {
-Name = 'GoldenEagleIntroScrim',
+Name = 'SilverSurferIntroScrim',
 Size = UDim2.fromScale(1, 1),
 BackgroundColor3 = Color3.fromRGB(0, 0, 0),
 BackgroundTransparency = 1,
@@ -23269,7 +23522,7 @@ ZIndex = 49,
 }, ScreenGui)
 
 local Intro = New('CanvasGroup', {
-Name = 'GoldenEagleIntro',
+Name = 'SilverSurferIntro',
 AnchorPoint = Vector2.new(0.5, 0.5),
 Position = UDim2.fromScale(0.5, 0.54),
 Size = UDim2.fromOffset(460, 188),
@@ -23289,10 +23542,10 @@ LineJoinMode = Enum.LineJoinMode.Miter,
 }, Intro)
 local IntroStrokeGradient = New('UIGradient', {
 Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0, Color3.fromRGB(66, 44, 0)),
-ColorSequenceKeypoint.new(0.35, Color3.fromRGB(212, 175, 55)),
-ColorSequenceKeypoint.new(0.55, Color3.fromRGB(255, 226, 122)),
-ColorSequenceKeypoint.new(1, Color3.fromRGB(66, 44, 0)),
+ColorSequenceKeypoint.new(0, Color3.fromRGB(55, 60, 68)),
+ColorSequenceKeypoint.new(0.35, Color3.fromRGB(191, 199, 209)),
+ColorSequenceKeypoint.new(0.55, Color3.fromRGB(247, 250, 252)),
+ColorSequenceKeypoint.new(1, Color3.fromRGB(55, 60, 68)),
 }),
 Rotation = 12,
 }, IntroStroke)
@@ -23301,8 +23554,8 @@ Position = UDim2.fromOffset(0, 14),
 Size = UDim2.new(1, 0, 0, 30),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = 'GOLDEN EAGLE',
-TextColor3 = Theme.Accent,
+Text = 'SILVER SURFER',
+TextColor3 = Theme.AccentBright,
 TextSize = 24,
 ZIndex = 51,
 }, Intro)
@@ -23311,7 +23564,7 @@ Position = UDim2.fromOffset(0, 42),
 Size = UDim2.new(1, 0, 0, 15),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = 'EST. 2026  //  PRIVATE EDITION',
+Text = 'DEAR IMGUI  //  SILVER EDITION',
 TextColor3 = Theme.Muted,
 TextSize = 9,
 ZIndex = 51,
@@ -23343,9 +23596,9 @@ ZIndex = 52,
 }, IntroTrack)
 local IntroFillGradient = New('UIGradient', {
 Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0, Color3.fromRGB(92, 61, 0)),
-ColorSequenceKeypoint.new(0.55, Color3.fromRGB(255, 226, 122)),
-ColorSequenceKeypoint.new(1, Color3.fromRGB(184, 134, 11)),
+ColorSequenceKeypoint.new(0, Color3.fromRGB(74, 81, 92)),
+ColorSequenceKeypoint.new(0.55, Color3.fromRGB(247, 250, 252)),
+ColorSequenceKeypoint.new(1, Color3.fromRGB(148, 158, 170)),
 }),
 }, IntroFill)
 -- Live percentage, right-aligned to the progress track.
@@ -23366,13 +23619,13 @@ Position = UDim2.fromOffset(0, 145),
 Size = UDim2.new(1, 0, 0, 18),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = 'RISE ABOVE',
+Text = 'RIDE THE SILVER WAVE',
 TextColor3 = Theme.Muted,
 TextSize = 9,
 ZIndex = 51,
 }, Intro)
 
-local SavedWindowPosition = GlobalEnv.__GOLDEN_EAGLE_UI_POSITION
+local SavedWindowPosition = GlobalEnv.__SILVER_SURFER_UI_POSITION
 local PreferredWindowPosition = UDim2.fromScale(0.5, 0.5)
 if type(SavedWindowPosition) == 'table' then
 PreferredWindowPosition = UDim2.new(
@@ -23408,12 +23661,12 @@ Enabled = false,
 Color = ColorSequence.new({
 ColorSequenceKeypoint.new(0.00, Color3.fromRGB(0, 0, 0)),
 ColorSequenceKeypoint.new(0.16, Color3.fromRGB(0, 0, 0)),
-ColorSequenceKeypoint.new(0.30, Color3.fromRGB(126, 87, 7)),
-ColorSequenceKeypoint.new(0.42, Color3.fromRGB(255, 226, 122)),
+ColorSequenceKeypoint.new(0.30, Color3.fromRGB(92, 100, 112)),
+ColorSequenceKeypoint.new(0.42, Color3.fromRGB(247, 250, 252)),
 ColorSequenceKeypoint.new(0.54, Color3.fromRGB(0, 0, 0)),
 ColorSequenceKeypoint.new(0.70, Color3.fromRGB(0, 0, 0)),
-ColorSequenceKeypoint.new(0.84, Color3.fromRGB(184, 134, 11)),
-ColorSequenceKeypoint.new(0.94, Color3.fromRGB(255, 226, 122)),
+ColorSequenceKeypoint.new(0.84, Color3.fromRGB(148, 158, 170)),
+ColorSequenceKeypoint.new(0.94, Color3.fromRGB(247, 250, 252)),
 ColorSequenceKeypoint.new(1.00, Color3.fromRGB(0, 0, 0)),
 }),
 Rotation = 0,
@@ -23457,8 +23710,8 @@ end
 if HubUI.TitleGradient and HubUI.TitleGradient.Parent then
 HubUI.TitleGradient.Color = ColorSequence.new(Color3.new(1, 1, 1))
 end
-if HubUI.EagleIcon and HubUI.EagleIcon.Parent then
-HubUI.EagleIcon.ImageColor3 = Theme.Accent
+if HubUI.SurferMark and HubUI.SurferMark.Parent then
+HubUI.SurferMark.ImageColor3 = Theme.Accent
 end
 for Index = #(HubUI.GroupGradients or {}), 1, -1 do
 local Gradient = HubUI.GroupGradients[Index]
@@ -23491,7 +23744,7 @@ HubUI.Window = Main
 New('UICorner', { CornerRadius = UDim.new(0, 2) }, Main)
 local MainScale = New('UIScale', { Scale = 1 }, Main)
 local MainAccentLine = New('Frame', {
-Name = 'LinoriaAccent', Position = UDim2.fromOffset(1, 1),
+Name = 'ImGuiSilverAccent', Position = UDim2.fromOffset(1, 1),
 Size = UDim2.new(1, -2, 0, 2), BackgroundColor3 = Theme.Accent,
 BorderSizePixel = 0, ZIndex = 101,
 }, Main)
@@ -23514,24 +23767,24 @@ BackgroundColor3 = Theme.Border,
 BorderSizePixel = 0,
 ZIndex = 4,
 }, Topbar)
-local EagleIcon = New('ImageLabel', {
+local SurferMark = New('ImageLabel', {
 Position = UDim2.fromOffset(0, 0),
 Size = UDim2.fromOffset(0, 0),
 BackgroundTransparency = 1,
--- This original eagle asset is publicly loadable; the later replacement did not render reliably.
-Image = 'rbxassetid://100996548484098',
+-- Reserved zero-size theme mark. It stays hidden until a Silver Surfer icon is assigned.
+Image = '',
 -- Theme-bound tint: New() registers ImageColor3 against the Accent role.
 ImageColor3 = Theme.Accent,
 ScaleType = Enum.ScaleType.Fit,
 ZIndex = 5,
 }, Topbar)
-HubUI.EagleIcon = EagleIcon
+HubUI.SurferMark = SurferMark
 local HubTitle = New('TextLabel', {
 Position = UDim2.fromOffset(7, 0),
 Size = UDim2.fromOffset(250, 27),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = 'Golden Eagle Hub',
+Text = 'Silver Surfer',
 TextColor3 = Color3.new(1, 1, 1),
 __SkipThemeBinding = true,
 TextSize = 10,
@@ -23664,9 +23917,9 @@ local MenuDefinitions = {
 Name = 'File', Items = {
 { 'Save interface', function() SaveInterfaceConfig(); MenuStatus('[file] interface saved') end },
 { 'Reset Dear ImGui theme', function()
-InterfaceConfig.ThemePreset = 'Linoria'
-HubUI.ApplyTheme(ThemePresets.Linoria, true)
-MenuStatus('[file] Linoria black/gold restored')
+InterfaceConfig.ThemePreset = 'Silver Surfer'
+HubUI.ApplyTheme(ThemePresets['Silver Surfer'], true)
+MenuStatus('[file] Silver Surfer graphite theme restored')
 end },
 { 'Hide window', function() Main.Visible = false end },
 }},
@@ -23690,7 +23943,7 @@ Name = 'View', Items = {
 Name = 'Window', Items = {
 { 'Center window', function()
 Main.Position = UDim2.fromScale(0.5, 0.5)
-GlobalEnv.__GOLDEN_EAGLE_UI_POSITION = nil
+GlobalEnv.__SILVER_SURFER_UI_POSITION = nil
 MenuStatus('[window] centered')
 end },
 { 'Scale 100%', function()
@@ -23718,7 +23971,7 @@ Name = 'Help', Items = {
 MenuStatus('goto <tab> | find <text> | theme <name> | close')
 if HubUI.TerminalInput then HubUI.TerminalInput:CaptureFocus() end
 end },
-{ 'About', function() MenuStatus('Golden Eagle Hub  |  Dear ImGui UI v6') end },
+{ 'About', function() MenuStatus('Silver Surfer  |  Dear ImGui UI v6') end },
 }},
 }
 
@@ -24086,7 +24339,7 @@ table.insert(TabOrder, Definition.Name)
 table.insert(InterfaceConfig.TabOrder, Definition.Name)
 end
 
-local SavedTab = tostring(GlobalEnv.__GOLDEN_EAGLE_UI_TAB or 'Aim')
+local SavedTab = tostring(GlobalEnv.__SILVER_SURFER_UI_TAB or 'Aim')
 if not Pages[SavedTab] or (InterfaceConfig.HiddenTabs[SavedTab] and SavedTab ~= 'Interface') then
 SavedTab = 'Interface'
 for _, Name in ipairs(TabOrder) do
@@ -24287,7 +24540,7 @@ local PreviousName = HubUI.ActiveTab
 local PreviousPage = Pages[PreviousName]
 local NextPage = Pages[Name]
 HubUI.ActiveTab = Name
-GlobalEnv.__GOLDEN_EAGLE_UI_TAB = Name
+GlobalEnv.__SILVER_SURFER_UI_TAB = Name
 EnsureTabVisible(Name)
 
 PageLabelSerial += 1
@@ -24384,7 +24637,7 @@ HubUI.ApplyTheme(ThemePresets[PresetName], true)
 SetTerminalStatus('[theme] ' .. PresetName, true)
 else SetTerminalStatus('[error] unknown theme', false) end
 elseif Command == 'clear' then
-SetTerminalStatus('[ready]  LINORIA / GOLD', true)
+SetTerminalStatus('[ready]  DEAR IMGUI / SILVER', true)
 elseif Command == 'close' or Command == 'hide' then
 Main.Visible = false
 else
@@ -24807,7 +25060,7 @@ System = CreateGroup('Transfer & Lifecycle', Pages.Configs, UDim2.fromOffset(Rig
 
 local StaticGradientLayer = New('Frame', {
 __SkipThemeBinding = true,
-Name = 'StaticBlackGoldGradient', Size = UDim2.fromScale(1, 1),
+Name = 'StaticSilverThemeGradient', Size = UDim2.fromScale(1, 1),
 -- Visible themed backdrop beneath the now-translucent feature panels.
 BackgroundColor3 = Theme.Background, BackgroundTransparency = 0.10,
 BorderSizePixel = 0, Active = false, Visible = true, ZIndex = 2,
@@ -25660,7 +25913,7 @@ return Button
 end
 
 local ThemePresetNames = {
-'Linoria', 'Golden Eagle', 'Midnight', 'Crimson', 'Emerald', 'Arctic', 'Purple Neon', 'Monochrome', 'High Contrast',
+'Silver Surfer', 'Silver Surfer', 'Midnight', 'Crimson', 'Emerald', 'Arctic', 'Purple Neon', 'Monochrome', 'High Contrast',
 'Solar Flare', 'Oceanic', 'Cyber Lime', 'Rose Quartz', 'Sakura Night', 'Tangerine', 'Cobalt', 'Teal Circuit',
 'Lavender Mist', 'Sandstone', 'Forest Dusk', 'Ice Mint', 'Cherry Cola', 'Deep Space', 'Synthwave', 'Vaporwave',
 'Amber Terminal', 'Matrix', 'Nordic', 'Coffee', 'Slate Blue', 'Coral Reef', 'Royal Velvet', 'Toxic Purple',
@@ -25673,7 +25926,7 @@ local ThemePresetNames = {
 }
 local ThemePresetControl = CreateDropdown(
 InterfaceThemeGroup, 10, 'Theme preset', ThemePresetNames,
-table.find(ThemePresetNames, InterfaceConfig.ThemePreset) and InterfaceConfig.ThemePreset or 'Golden Eagle',
+table.find(ThemePresetNames, InterfaceConfig.ThemePreset) and InterfaceConfig.ThemePreset or 'Silver Surfer',
 function(Value)
 if Value == 'Custom' then
 InterfaceConfig.ThemePreset = 'Custom'
@@ -25989,27 +26242,27 @@ local HiddenTabControl
 
 CreateActionButton(InterfaceThemeGroup, UDim2.fromOffset(8, 306), UDim2.fromOffset(72, 25), 'SAVE', function()
 local Stored = SaveInterfaceConfig()
-Notify('GOLDEN EAGLE HUB', Stored and 'Interface profile saved.' or 'Profile kept for this session; file API unavailable.')
+Notify('SILVER SURFER', Stored and 'Interface profile saved.' or 'Profile kept for this session; file API unavailable.')
 end)
 CreateActionButton(InterfaceThemeGroup, UDim2.fromOffset(85, 306), UDim2.fromOffset(73, 25), 'EXPORT', function()
 local Success, Encoded = pcall(HttpService.JSONEncode, HttpService, InterfaceConfig)
 if Success and type(setclipboard) == 'function' then
 pcall(setclipboard, Encoded)
-Notify('GOLDEN EAGLE HUB', 'Interface JSON copied.')
+Notify('SILVER SURFER', 'Interface JSON copied.')
 else
-Notify('GOLDEN EAGLE HUB', 'Clipboard export unavailable.')
+Notify('SILVER SURFER', 'Clipboard export unavailable.')
 end
 end)
 CreateActionButton(InterfaceThemeGroup, UDim2.fromOffset(163, 306), UDim2.fromOffset(78, 25), 'IMPORT', function()
 if type(getclipboard) ~= 'function' then
-Notify('GOLDEN EAGLE HUB', 'Clipboard import unavailable.')
+Notify('SILVER SURFER', 'Clipboard import unavailable.')
 return
 end
 local ReadSuccess, Raw = pcall(getclipboard)
 local DecodeSuccess, Decoded = false, nil
 if ReadSuccess then DecodeSuccess, Decoded = pcall(HttpService.JSONDecode, HttpService, Raw) end
 if not DecodeSuccess or type(Decoded) ~= 'table' then
-Notify('GOLDEN EAGLE HUB', 'Clipboard does not contain valid profile JSON.')
+Notify('SILVER SURFER', 'Clipboard does not contain valid profile JSON.')
 return
 end
 MergeConfig(InterfaceConfig, Decoded)
@@ -26032,7 +26285,7 @@ Sidebar.BackgroundTransparency = 0
 Content.BackgroundTransparency = 0
 if HubUI.FitScale then MainScale.Scale = HubUI.FitScale * InterfaceConfig.Scale end
 SaveInterfaceConfig()
-Notify('GOLDEN EAGLE HUB', 'Interface profile imported.')
+Notify('SILVER SURFER', 'Interface profile imported.')
 end)
 
 HubUI.Controls.InterfaceScale = CreateNumberInput(
@@ -26103,7 +26356,7 @@ InterfaceLayoutGroup, 280, 'Hide selected tab', InterfaceConfig.HiddenTabs[Selec
 function(Value)
 if SelectedTab == 'Interface' then
 HiddenTabControl:Set(false, false)
-Notify('GOLDEN EAGLE HUB', 'The Interface tab cannot be hidden.')
+Notify('SILVER SURFER', 'The Interface tab cannot be hidden.')
 return
 end
 HubUI.SetTabHidden(SelectedTab, Value)
@@ -26111,9 +26364,9 @@ end
 )
 HubUI.Controls.InterfaceHideTab = HiddenTabControl
 CreateActionButton(InterfaceLayoutGroup, UDim2.fromOffset(8, 310), UDim2.fromOffset(116, 23), 'RESET THEME', function()
-InterfaceConfig.ThemePreset = 'Golden Eagle'
-ThemePresetControl:Set('Golden Eagle', false)
-HubUI.ApplyTheme(DeepCopy(ThemePresets['Golden Eagle']), true)
+InterfaceConfig.ThemePreset = 'Silver Surfer'
+ThemePresetControl:Set('Silver Surfer', false)
+HubUI.ApplyTheme(DeepCopy(ThemePresets['Silver Surfer']), true)
 end)
 CreateActionButton(InterfaceLayoutGroup, UDim2.fromOffset(132, 310), UDim2.fromOffset(116, 23), 'RESET LAYOUT', function()
 HubUI.ResetTabLayout()
@@ -26135,7 +26388,7 @@ Sidebar.BackgroundTransparency = 0
 Content.BackgroundTransparency = 0
 if HubUI.FitScale then MainScale.Scale = HubUI.FitScale end
 SaveInterfaceConfig()
-Notify('GOLDEN EAGLE HUB', 'Layout and navigation reset.')
+Notify('SILVER SURFER', 'Layout and navigation reset.')
 end)
 
 end
@@ -26525,7 +26778,7 @@ end
 if HubUI.Controls.WalkSpeed and HubUI.Controls.WalkSpeed.Set and not HubUI.Controls.WalkSpeed.Value then
 HubUI.Controls.WalkSpeed:Set(true, true)
 end
-Notify('GOLDEN EAGLE HUB', 'Speed preset: ' .. Value .. ' (' .. PresetSpeed .. ' walkspeed)')
+Notify('SILVER SURFER', 'Speed preset: ' .. Value .. ' (' .. PresetSpeed .. ' walkspeed)')
 end,
 118
 )
@@ -26630,7 +26883,7 @@ State.Movement.LastFlightTapAt = 0
 local FlightControl = HubUI.Controls.Flight
 if FlightControl and FlightControl.Set then
 FlightControl:Set(not FlightControl.Value, true)
-Notify('GOLDEN EAGLE HUB', FlightControl.Value and 'Flight on (double-tap).' or 'Flight off (double-tap).')
+Notify('SILVER SURFER', FlightControl.Value and 'Flight on (double-tap).' or 'Flight off (double-tap).')
 end
 else
 State.Movement.LastFlightTapAt = Now
@@ -26915,10 +27168,10 @@ end, 145
 )
 -- Named custom-goal presets persist separately so effects can be switched
 -- without repeatedly pasting Lua into the editor.
-HubUI.CustomGoalPresetFile = 'GoldenEagleHub_GoalEffectPresets.json'
-HubUI.CustomGoalPresets = type(GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS) == 'table'
-and GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS or {}
-GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS = HubUI.CustomGoalPresets
+HubUI.CustomGoalPresetFile = 'SilverSurfer_GoalEffectPresets.json'
+HubUI.CustomGoalPresets = type(GlobalEnv.__SILVER_SURFER_GOAL_EFFECT_PRESETS) == 'table'
+and GlobalEnv.__SILVER_SURFER_GOAL_EFFECT_PRESETS or {}
+GlobalEnv.__SILVER_SURFER_GOAL_EFFECT_PRESETS = HubUI.CustomGoalPresets
 HubUI.SanitizeCustomGoalPresetName = function(Value)
 Value = tostring(Value or ''):gsub('[^%w _%-]', '')
 Value = Value:match('^%s*(.-)%s*$') or ''
@@ -26946,7 +27199,7 @@ end
 end
 end
 HubUI.WriteCustomGoalPresets = function()
-GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS = HubUI.CustomGoalPresets
+GlobalEnv.__SILVER_SURFER_GOAL_EFFECT_PRESETS = HubUI.CustomGoalPresets
 if type(writefile) ~= 'function' then return false end
 local EncodeOk, Encoded = pcall(State.Utility.HttpService.JSONEncode,
 State.Utility.HttpService, HubUI.CustomGoalPresets)
@@ -27220,7 +27473,7 @@ end
 if type(writefile) == 'function' then
 local FileName = HubUI.SanitizeCustomGoalPresetName(ExtractedGoalSourceName or State.LocalGoalEffect):gsub('%s+', '_')
 if FileName == '' then FileName = 'GoalEffect' end
-local Ok, FileError = pcall(writefile, 'GoldenEagleHub_Extracted_'..FileName..'.lua', Source)
+local Ok, FileError = pcall(writefile, 'SilverSurfer_Extracted_'..FileName..'.lua', Source)
 if Ok then
 CustomGoalStatus.Text = 'CLIPBOARD UNAVAILABLE  /  SOURCE SAVED TO FILE'
 CustomGoalStatus.TextColor3 = Theme.Success
@@ -27846,10 +28099,10 @@ HubUI.Controls.ShotSound = CreateCheckbox(HubUI.BallTrailGroup, 459, 'Play sound
 CONFIG.ShotSoundEnabled = Value == true
 end)
 
-HubUI.BallPresetFile = 'GoldenEagleHub_BallPresets.json'
-HubUI.BallPresets = type(GlobalEnv.__GOLDEN_EAGLE_BALL_PRESETS) == 'table'
-and GlobalEnv.__GOLDEN_EAGLE_BALL_PRESETS or {}
-GlobalEnv.__GOLDEN_EAGLE_BALL_PRESETS = HubUI.BallPresets
+HubUI.BallPresetFile = 'SilverSurfer_BallPresets.json'
+HubUI.BallPresets = type(GlobalEnv.__SILVER_SURFER_BALL_PRESETS) == 'table'
+and GlobalEnv.__SILVER_SURFER_BALL_PRESETS or {}
+GlobalEnv.__SILVER_SURFER_BALL_PRESETS = HubUI.BallPresets
 
 HubUI.SanitizeBallPresetName = function(Value)
 Value = tostring(Value or ''):gsub('[^%w _%-]', '')
@@ -27884,7 +28137,7 @@ end
 end
 
 HubUI.WriteBallPresets = function()
-GlobalEnv.__GOLDEN_EAGLE_BALL_PRESETS = HubUI.BallPresets
+GlobalEnv.__SILVER_SURFER_BALL_PRESETS = HubUI.BallPresets
 if type(writefile) ~= 'function' then return false end
 local EncodeOk, Encoded = pcall(State.Utility.HttpService.JSONEncode,
 State.Utility.HttpService, HubUI.BallPresets)
@@ -28141,28 +28394,81 @@ State.LocalCosmeticExtras.DescribeChatTagStyles(),
 function(Value) State.LocalCosmeticExtras.ToggleChatTagStyle(Value, true) end, 130
 )
 
-CreateSectionHeader(CosmeticsGroup, 263, 'Profile logos')
-HubUI.Controls.LogoVIP = CreateCheckbox(CosmeticsGroup, 283, 'VIP', State.LocalLogos.VIP, function(Value) State.Cosmetics.SetLocalLogoSpoof('VIP', Value) end)
-HubUI.Controls.LogoYoutube = CreateCheckbox(CosmeticsGroup, 305, 'YouTube', State.LocalLogos.Youtuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('Youtuber', Value) end)
-HubUI.Controls.LogoTwitch = CreateCheckbox(CosmeticsGroup, 327, 'Twitch', State.LocalLogos.Twitch, function(Value) State.Cosmetics.SetLocalLogoSpoof('Twitch', Value) end)
-HubUI.Controls.LogoBooster = CreateCheckbox(CosmeticsGroup, 349, 'Booster', State.LocalLogos.Booster, function(Value) State.Cosmetics.SetLocalLogoSpoof('Booster', Value) end)
-HubUI.Controls.LogoTester = CreateCheckbox(CosmeticsGroup, 371, 'Tester', State.LocalLogos.Tester, function(Value) State.Cosmetics.SetLocalLogoSpoof('Tester', Value) end)
-HubUI.Controls.LogoStaff = CreateCheckbox(CosmeticsGroup, 393, 'Staff', State.LocalLogos.Staff, function(Value) State.Cosmetics.SetLocalLogoSpoof('Staff', Value) end)
+
+-- Universal cosmetic Lua launches directly into the live editor. The old
+-- The separate preview panel was removed: effects can be saved and applied to the
+-- actual local character immediately.
+do
+local LuaButton = New('TextButton', {
+Position = UDim2.fromOffset(8, 263), Size = UDim2.new(1, -16, 0, 28),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = '</> CUSTOM COSMETIC LUA  /  LIVE', TextColor3 = Theme.AccentBright,
+TextSize = 9, ZIndex = 12,
+}, CosmeticsGroup)
+AccentStroke(LuaButton, 1, 0.12)
+
+-- One editor for every cosmetic category, with independent source per category.
+local LuaOverlay=New('CanvasGroup',{Name='UniversalCosmeticLuaEditor',Size=UDim2.fromScale(1,1),BackgroundColor3=Theme.Background,
+BackgroundTransparency=0.12,BorderSizePixel=0,Visible=false,GroupTransparency=1,Active=true,ZIndex=360},Main)
+local LuaCard=New('Frame',{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(590,480),
+BackgroundColor3=Theme.Panel,BorderSizePixel=0,ZIndex=361},LuaOverlay); AccentStroke(LuaCard,1.5,0.04)
+New('TextLabel',{Position=UDim2.fromOffset(14,9),Size=UDim2.new(1,-28,0,20),BackgroundTransparency=1,Font=Enum.Font.Code,
+Text='UNIVERSAL COSMETIC LUA  //  ALL CATEGORIES',TextColor3=Theme.Text,TextSize=13,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=362},LuaCard)
+local CategoryIndex=table.find(State.Cosmetics.CustomLua.Categories,CONFIG.CustomCosmeticLuaCategory) or 1
+local Category=New('TextButton',{Position=UDim2.fromOffset(14,39),Size=UDim2.fromOffset(250,27),BackgroundColor3=Theme.Surface,
+BorderSizePixel=0,AutoButtonColor=false,Font=Enum.Font.Code,Text='CATEGORY  < '..State.Cosmetics.CustomLua.Categories[CategoryIndex]..' >',
+TextColor3=Theme.AccentBright,TextSize=9,ZIndex=362},LuaCard); AccentStroke(Category,1,0.1)
+local Enabled=New('TextButton',{Position=UDim2.fromOffset(274,39),Size=UDim2.fromOffset(144,27),BackgroundColor3=Theme.Surface,
+BorderSizePixel=0,AutoButtonColor=false,Font=Enum.Font.Code,Text='',TextColor3=Theme.Text,TextSize=9,ZIndex=362},LuaCard); AccentStroke(Enabled,1,0.1)
+local CloseLua=New('TextButton',{Position=UDim2.fromOffset(428,39),Size=UDim2.fromOffset(148,27),BackgroundColor3=Theme.Surface,
+BorderSizePixel=0,AutoButtonColor=false,Font=Enum.Font.Code,Text='CLOSE',TextColor3=Theme.Text,TextSize=9,ZIndex=362},LuaCard); DarkStroke(CloseLua)
+local Code=New('TextBox',{Position=UDim2.fromOffset(14,78),Size=UDim2.new(1,-28,0,310),BackgroundColor3=Theme.Background,
+BorderSizePixel=0,ClearTextOnFocus=false,MultiLine=true,TextWrapped=false,TextEditable=true,ClipsDescendants=true,
+Font=Enum.Font.Code,PlaceholderText='-- Live: Context.Character, Context.Ball, Context.Selection, Context.Services, Context.Theme',
+PlaceholderColor3=Theme.Muted,Text='',TextColor3=Theme.Text,TextSize=10,TextXAlignment=Enum.TextXAlignment.Left,
+TextYAlignment=Enum.TextYAlignment.Top,ZIndex=362},LuaCard); DarkStroke(Code)
+New('UIPadding',{PaddingLeft=UDim.new(0,8),PaddingRight=UDim.new(0,8),PaddingTop=UDim.new(0,7)},Code)
+local LuaStatus=New('TextLabel',{Position=UDim2.fromOffset(14,394),Size=UDim2.new(1,-28,0,18),BackgroundTransparency=1,
+Font=Enum.Font.Code,Text='READY',TextColor3=Theme.Muted,TextSize=9,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=362},LuaCard)
+local function EditorButton(X,W,Text) local B=New('TextButton',{Position=UDim2.fromOffset(X,426),Size=UDim2.fromOffset(W,36),BackgroundColor3=Theme.Surface,
+BorderSizePixel=0,AutoButtonColor=false,Font=Enum.Font.Code,Text=Text,TextColor3=Theme.Text,TextSize=9,ZIndex=362},LuaCard);AccentStroke(B,1,0.1);return B end
+local Save=EditorButton(14,176,'SAVE SOURCE'); local Run=EditorButton(199,176,'RUN LIVE'); local Clear=EditorButton(384,192,'CLEAR')
+local function CurrentCategory() return State.Cosmetics.CustomLua.Categories[CategoryIndex] end
+local function LoadCategory() local Name=CurrentCategory();CONFIG.CustomCosmeticLuaCategory=Name;Category.Text='CATEGORY  < '..Name..' >';
+CONFIG.CustomCosmeticLuaSources=type(CONFIG.CustomCosmeticLuaSources)=='table' and CONFIG.CustomCosmeticLuaSources or {};Code.Text=tostring(CONFIG.CustomCosmeticLuaSources[Name] or '');end
+local function PaintEnabled() Enabled.Text=CONFIG.CustomCosmeticLuaEnabled~=false and '[x] LUA ENABLED' or '[ ] LUA DISABLED';Enabled.TextColor3=CONFIG.CustomCosmeticLuaEnabled~=false and Theme.Success or Theme.Muted end
+GiveSignal(Category.MouseButton1Click:Connect(function() CategoryIndex=CategoryIndex%#State.Cosmetics.CustomLua.Categories+1;LoadCategory() end))
+GiveSignal(Enabled.MouseButton1Click:Connect(function() CONFIG.CustomCosmeticLuaEnabled=not(CONFIG.CustomCosmeticLuaEnabled~=false);PaintEnabled() end))
+GiveSignal(Save.MouseButton1Click:Connect(function() local Name=CurrentCategory();local Fn,Err=State.Cosmetics.CompileCustomLua(Name,Code.Text);if not Fn then LuaStatus.Text='COMPILE ERROR: '..tostring(Err);LuaStatus.TextColor3=Theme.Bad;return end;CONFIG.CustomCosmeticLuaSources[Name]=Code.Text;LuaStatus.Text='SAVED  //  '..string.upper(Name);LuaStatus.TextColor3=Theme.Success end))
+GiveSignal(Run.MouseButton1Click:Connect(function() CONFIG.CustomCosmeticLuaSources[CurrentCategory()]=Code.Text;local Ok,Err=State.Cosmetics.RunCustomLua(CurrentCategory(),LP.Character,false,nil);LuaStatus.Text=Ok and 'RAN LIVE SUCCESSFULLY' or ('RUNTIME ERROR: '..tostring(Err));LuaStatus.TextColor3=Ok and Theme.Success or Theme.Bad end))
+GiveSignal(Clear.MouseButton1Click:Connect(function() Code.Text='';CONFIG.CustomCosmeticLuaSources[CurrentCategory()]='';LuaStatus.Text='SOURCE CLEARED';LuaStatus.TextColor3=Theme.Muted end))
+local function SetLuaVisible(Value) LuaOverlay.Visible=Value;LuaOverlay.GroupTransparency=Value and 0 or 1;if Value then LoadCategory();PaintEnabled() else Code:ReleaseFocus() end end
+GiveSignal(LuaButton.MouseButton1Click:Connect(function() SetLuaVisible(true) end));GiveSignal(CloseLua.MouseButton1Click:Connect(function() SetLuaVisible(false) end))
+HubUI.Controls.UniversalCosmeticLua={SearchRoot=LuaButton,SearchParent=CosmeticsGroup,SearchLabel='Custom Lua for every cosmetic category',Kind='Action',Trigger=function() SetLuaVisible(true) end}
+end
+
+CreateSectionHeader(CosmeticsGroup, 311, 'Profile logos')
+HubUI.Controls.LogoVIP = CreateCheckbox(CosmeticsGroup, 331, 'VIP', State.LocalLogos.VIP, function(Value) State.Cosmetics.SetLocalLogoSpoof('VIP', Value) end)
+HubUI.Controls.LogoYoutube = CreateCheckbox(CosmeticsGroup, 353, 'YouTube', State.LocalLogos.Youtuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('Youtuber', Value) end)
+HubUI.Controls.LogoTwitch = CreateCheckbox(CosmeticsGroup, 375, 'Twitch', State.LocalLogos.Twitch, function(Value) State.Cosmetics.SetLocalLogoSpoof('Twitch', Value) end)
+HubUI.Controls.LogoBooster = CreateCheckbox(CosmeticsGroup, 397, 'Booster', State.LocalLogos.Booster, function(Value) State.Cosmetics.SetLocalLogoSpoof('Booster', Value) end)
+HubUI.Controls.LogoTester = CreateCheckbox(CosmeticsGroup, 419, 'Tester', State.LocalLogos.Tester, function(Value) State.Cosmetics.SetLocalLogoSpoof('Tester', Value) end)
+HubUI.Controls.LogoStaff = CreateCheckbox(CosmeticsGroup, 441, 'Staff', State.LocalLogos.Staff, function(Value) State.Cosmetics.SetLocalLogoSpoof('Staff', Value) end)
 State.LogoBadges.CustomBox = New('TextBox', {
-Position = UDim2.fromOffset(8, 419), Size = UDim2.new(0.58, -10, 0, 20),
+Position = UDim2.fromOffset(8, 467), Size = UDim2.new(0.58, -10, 0, 20),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, ClearTextOnFocus = false,
 Font = Enum.Font.Code, PlaceholderText = 'Custom logo asset ID', Text = '',
 TextColor3 = Theme.Text, PlaceholderColor3 = Theme.Muted, TextSize = 11, ZIndex = 6,
 }, CosmeticsGroup)
 AccentStroke(State.LogoBadges.CustomBox, 1, 0.18)
 State.LogoBadges.AddButton = New('TextButton', {
-Position = UDim2.new(0.58, 2, 0, 419), Size = UDim2.new(0.42, -10, 0, 20),
+Position = UDim2.new(0.58, 2, 0, 467), Size = UDim2.new(0.42, -10, 0, 20),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'Add logo', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, CosmeticsGroup)
 AccentStroke(State.LogoBadges.AddButton, 1, 0.2)
 State.LogoBadges.ClearButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 443), Size = UDim2.new(1, -18, 0, 20),
+Position = UDim2.fromOffset(8, 491), Size = UDim2.new(1, -18, 0, 20),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'Clear custom logos (0)', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, CosmeticsGroup)
@@ -28214,7 +28520,7 @@ CONFIG.PerfectReleaseAutoCalibrate = Value
 if Value then
 State.PerfectRelease.Hook()
 end
-Notify('GOLDEN EAGLE HUB', Value
+Notify('SILVER SURFER', Value
 and 'Release timing will tune itself from Perfect Shot feedback.'
 or 'Release timing locked to the manual value.')
 end
@@ -28241,7 +28547,7 @@ CONFIG.SilentMode = Value
 SilentAim.ArcSolveCache = {}
 SilentAim.ArcSolveCacheCount = 0
 SilentAim.ClearActorAim()
-Notify('GOLDEN EAGLE HUB', 'Arc: ' .. Value .. (Value == 'Low' and ' (flat)' or ' (lobbed)'))
+Notify('SILVER SURFER', 'Arc: ' .. Value .. (Value == 'Low' and ' (flat)' or ' (lobbed)'))
 end,
 118,
 true
@@ -28255,7 +28561,7 @@ CONFIG.BackboardEnabled = Value == true
 SilentAim.ArcSolveCache = {}
 SilentAim.ArcSolveCacheCount = 0
 SilentAim.ClearActorAim()
-Notify('GOLDEN EAGLE HUB', Value
+Notify('SILVER SURFER', Value
 and 'Bank shots: aiming off the backboard mirror point.'
 or 'Bank shots disabled: aiming directly at the rim.')
 end
@@ -28276,7 +28582,7 @@ CONFIG.ClickToShoot = Value == true
 State.ClickShoot.Armed = false
 State.ClickShoot.Status = 'IDLE'
 pcall(SilentAim.ClearActorAim)
-Notify('GOLDEN EAGLE HUB', CONFIG.ClickToShoot
+Notify('SILVER SURFER', CONFIG.ClickToShoot
 and 'Click to shoot: jump, then LEFT CLICK to release. Silent Aim still guides the ball.'
 or 'Click to shoot off: shots release automatically at the peak again.')
 end
@@ -28290,7 +28596,7 @@ CONFIG.MatchArcEnabled = Value == true
 SilentAim.ArcSolveCache = {}
 SilentAim.ArcSolveCacheCount = 0
 SilentAim.ClearActorAim()
-Notify('GOLDEN EAGLE HUB', CONFIG.MatchArcEnabled
+Notify('SILVER SURFER', CONFIG.MatchArcEnabled
 and string.format('Match Arc: aiming the nearest makeable arc to %d degrees and auto-setting its power.',
 math.floor(tonumber(CONFIG.MatchArcAngle) or 62))
 or 'Match Arc off: arc follows the High/Low mode at the current power.')
@@ -28326,7 +28632,7 @@ State.Humanize.NewShot()
 SilentAim.ArcSolveCache = {}
 SilentAim.ArcSolveCacheCount = 0
 pcall(SilentAim.ClearActorAim)
-Notify('GOLDEN EAGLE HUB', CONFIG.HumanizeEnabled
+Notify('SILVER SURFER', CONFIG.HumanizeEnabled
 and 'Humanizer on: shots now miss on purpose and only assist inside the cone.'
 or 'Humanizer off: full-accuracy silent aim at any angle.')
 end
@@ -28374,7 +28680,7 @@ SaveInterfaceConfig()
 if HubUI.KeybindManager and HubUI.KeybindManager.RefreshMobileQuick then
 HubUI.KeybindManager:RefreshMobileQuick(true)
 end
-Notify('GOLDEN EAGLE HUB', Value
+Notify('SILVER SURFER', Value
 and 'On-screen buttons shown.'
 or 'On-screen buttons hidden. Use the GE launcher to open the menu.')
 end
@@ -28387,7 +28693,7 @@ SaveInterfaceConfig()
 if HubUI.KeybindManager and HubUI.KeybindManager.RefreshMobileQuick then
 HubUI.KeybindManager:RefreshMobileQuick(true)
 end
-Notify('GOLDEN EAGLE HUB', Value
+Notify('SILVER SURFER', Value
 and 'Only keybinds pinned with RUN on the Keybinds tab get a button.'
 or 'Every bound keybind gets a button.')
 end
@@ -29206,10 +29512,10 @@ function HubUI.BuildConfigControls()
 local Groups = HubUI.ConfigGroups
 if not (Groups and Groups.Profiles and Groups.System) then return end
 
-local ConfigFolder = 'GoldenEagleHub_Configs'
-local SessionStore = type(GlobalEnv.__GOLDEN_EAGLE_CONFIGS) == 'table'
-and GlobalEnv.__GOLDEN_EAGLE_CONFIGS or {}
-GlobalEnv.__GOLDEN_EAGLE_CONFIGS = SessionStore
+local ConfigFolder = 'SilverSurfer_Configs'
+local SessionStore = type(GlobalEnv.__SILVER_SURFER_CONFIGS) == 'table'
+and GlobalEnv.__SILVER_SURFER_CONFIGS or {}
+GlobalEnv.__SILVER_SURFER_CONFIGS = SessionStore
 
 local function CreateConfigButton(Parent, Position, Size, Text, Callback, Danger)
 local Button = New('TextButton', {
@@ -29649,7 +29955,7 @@ HubUI.Controls.ConfigImportAction = { SearchRoot = ImportButton, SearchParent = 
 
 CreateSectionHeader(Groups.System, 72, 'Lifecycle')
 local UnloadButton = CreateConfigButton(
-Groups.System, UDim2.fromOffset(8, 92), UDim2.new(1, -16, 0, 42), 'UNLOAD GOLDEN EAGLE HUB',
+Groups.System, UDim2.fromOffset(8, 92), UDim2.new(1, -16, 0, 42), 'UNLOAD SILVER SURFER',
 function() if HubUI.AnimateUnload then HubUI.AnimateUnload() end end,
 true
 )
@@ -29862,7 +30168,7 @@ self:ScheduleSave()
 task.defer(function()
 if State.Active and self.RefreshMobileQuick then self:RefreshMobileQuick(true) end
 end)
-Notify('GOLDEN EAGLE HUB', Entry.Label .. ' button removed. Pin it again in Keybinds to restore it.')
+Notify('SILVER SURFER', Entry.Label .. ' button removed. Pin it again in Keybinds to restore it.')
 end
 
 local CaptureOverlay = New('CanvasGroup', {
@@ -29904,7 +30210,7 @@ TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 362,
 function KeybindManager:BeginCapture(Entry)
 if not Entry then return end
 if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
-Notify('GOLDEN EAGLE HUB', 'A hardware keyboard is required to assign a physical key. Use RUN to activate this entry.')
+Notify('SILVER SURFER', 'A hardware keyboard is required to assign a physical key. Use RUN to activate this entry.')
 return
 end
 self.Capture = Entry
@@ -30077,7 +30383,7 @@ local OverlayRowHeight = 18
 local OverlayMaxRows = 12
 
 local Overlay = New('CanvasGroup', {
-Name = 'GoldenEagleKeybindMenu', AnchorPoint = Vector2.new(1, 0),
+Name = 'SilverSurferKeybindMenu', AnchorPoint = Vector2.new(1, 0),
 Position = UDim2.new(1, InterfaceConfig.KeybindMenuPosition.X, 0, InterfaceConfig.KeybindMenuPosition.Y),
 Size = UDim2.fromOffset(OverlayWidth, OverlayHeaderHeight + OverlayRowHeight + 1),
 BackgroundColor3 = Theme.Background, BackgroundTransparency = 0.02,
@@ -30447,7 +30753,7 @@ Kind = 'Action', DefaultKey = KeyCodeToken(CONFIG.NoJumpShotKey),
 Show = true, MobileQuick = true,
 Trigger = function()
 if not State.NoJump.IsEnabled() then
-Notify('GOLDEN EAGLE HUB', 'Enable No Jump Shot under Silent Aim first.')
+Notify('SILVER SURFER', 'Enable No Jump Shot under Silent Aim first.')
 return
 end
 task.spawn(State.NoJump.Fire)
@@ -30483,7 +30789,7 @@ tonumber(SavedLauncher.YOffset) or tonumber(SavedLauncher.Y) or 0
 )
 
 local Launcher = New('TextButton', {
-Name = 'GoldenEagleDesktopLauncher',
+Name = 'SilverSurferDesktopLauncher',
 AnchorPoint = Vector2.new(0.5, 0.5),
 Position = LauncherPosition,
 Size = UDim2.fromOffset(54, 54),
@@ -30661,7 +30967,7 @@ end
 end))
 
 local FlightFrame = New('Frame', {
-Name = 'GoldenEagleFlightTouch',
+Name = 'SilverSurferFlightTouch',
 AnchorPoint = Vector2.new(1, 1),
 Position = UDim2.new(1, -20, 1, -150),
 Size = UDim2.fromOffset(54, 114),
@@ -30950,8 +31256,8 @@ local Open = HubUI.Open == true
 local FlightVisible = State.Movement.FlightEnabled and not Open
 if Open ~= LastOpen then
 LastOpen = Open
-Launcher.Text = Open and '  ' or 'GE'
-LauncherCaption.Text = Open and 'CLOSE' or 'MENU'
+Launcher.Text = Open and '  ' or 'SS'
+LauncherCaption.Text = Open and 'CLOSE' or 'SURFER'
 Tween(Launcher, 0.16, {
 BackgroundColor3 = Open and Theme.SurfaceHover or Theme.Panel,
 TextColor3 = Open and Theme.Text or Theme.Accent,
@@ -31027,7 +31333,7 @@ KeybindManager:RefreshOverlay()
 if KeybindManager.RefreshMobileQuick then KeybindManager:RefreshMobileQuick() end
 if KeybindManager.RefreshMobileFilter then KeybindManager:RefreshMobileFilter() end
 KeybindManager:ScheduleSave()
-Notify('GOLDEN EAGLE HUB', 'Keybinds reset to defaults.')
+Notify('SILVER SURFER', 'Keybinds reset to defaults.')
 end))
 
 task.spawn(function()
@@ -31141,10 +31447,10 @@ end
 local function FlashSearchTarget(Entry)
 local Root = Entry and Entry.Root
 if not (Root and Root.Parent and Root:IsA('GuiObject')) then return end
-local Existing = Root:FindFirstChild('GoldenEagleSearchHighlight')
+local Existing = Root:FindFirstChild('SilverSurferSearchHighlight')
 if Existing then Existing:Destroy() end
 local Highlight = New('UIStroke', {
-Name = 'GoldenEagleSearchHighlight',
+Name = 'SilverSurferSearchHighlight',
 Color = Theme.Accent,
 Thickness = 2.6,
 Transparency = 0,
@@ -31543,7 +31849,7 @@ end
 
 local function SaveWindowPosition()
 PreferredWindowPosition = Main.Position
-GlobalEnv.__GOLDEN_EAGLE_UI_POSITION = {
+GlobalEnv.__SILVER_SURFER_UI_POSITION = {
 XScale = Main.Position.X.Scale,
 XOffset = Main.Position.X.Offset,
 YScale = Main.Position.Y.Scale,
@@ -32009,7 +32315,7 @@ local Ok = pcall(function() Control:Set(Value, true) end)
 if Ok then Changed += 1 end
 end
 end
-Notify('GOLDEN EAGLE HUB', Preset.Name .. ' applied. ' .. Changed .. ' settings changed.')
+Notify('SILVER SURFER', Preset.Name .. ' applied. ' .. Changed .. ' settings changed.')
 end
 
 -- Active features HUD -------------------------------------------------------
@@ -32123,7 +32429,7 @@ Hud.Visible = InterfaceConfig.ActiveHudVisible
 HudSignature = nil
 if Hud.Visible then pcall(RefreshHud) end
 SaveInterfaceConfig()
-Notify('GOLDEN EAGLE HUB', Hud.Visible and 'Active Features HUD shown. Drag its header to move it.' or 'Active Features HUD hidden.')
+Notify('SILVER SURFER', Hud.Visible and 'Active Features HUD shown. Drag its header to move it.' or 'Active Features HUD hidden.')
 end
 if Hud.Visible then pcall(RefreshHud) end
 
@@ -32236,7 +32542,7 @@ InterfaceConfig.ThemePreset = 'Custom'
 HubUI.ApplyTheme(Custom, true)
 if ThemePresetControl and ThemePresetControl.Set then ThemePresetControl:Set('Custom', false) end
 if HubUI.RefreshThemeEditor then pcall(HubUI.RefreshThemeEditor) end
-Notify('GOLDEN EAGLE HUB', 'Custom accent ' .. Custom.Accent .. ' applied.')
+Notify('SILVER SURFER', 'Custom accent ' .. Custom.Accent .. ' applied.')
 end)
 MakeButton(AccentModal, UDim2.fromOffset(200, 144), UDim2.fromOffset(100, 24), 'FROM THEME', ResetAccentPicker)
 New('TextLabel', {
@@ -32313,7 +32619,7 @@ end
 local function ExportCode()
 local Ok, Encoded = pcall(HttpService.JSONEncode, HttpService, BuildSnapshot())
 if not Ok then
-Notify('GOLDEN EAGLE HUB', 'Could not encode the current config.')
+Notify('SILVER SURFER', 'Could not encode the current config.')
 return
 end
 local Code = 'GEH1.' .. B64Encode(Encoded)
@@ -32322,9 +32628,9 @@ ClearDiff()
 AddDiffRow('Share code generated: ' .. #Code .. ' characters.', true)
 if type(setclipboard) == 'function' then
 pcall(setclipboard, Code)
-Notify('GOLDEN EAGLE HUB', 'Share code copied to clipboard.')
+Notify('SILVER SURFER', 'Share code copied to clipboard.')
 else
-Notify('GOLDEN EAGLE HUB', 'Share code placed in the box. Copy it manually.')
+Notify('SILVER SURFER', 'Share code placed in the box. Copy it manually.')
 end
 end
 local function DecodeCode(Text)
@@ -32383,7 +32689,7 @@ end
 local function ApplyCode()
 if not PendingImport then PreviewCode() end
 if not PendingImport then
-Notify('GOLDEN EAGLE HUB', 'Preview a valid share code before applying.')
+Notify('SILVER SURFER', 'Preview a valid share code before applying.')
 return
 end
 local Data = PendingImport
@@ -32421,7 +32727,7 @@ end
 PendingImport = nil
 ClearDiff()
 AddDiffRow('Applied. ' .. Changed .. ' settings changed.', true)
-Notify('GOLDEN EAGLE HUB', 'Share code applied. ' .. Changed .. ' settings changed.')
+Notify('SILVER SURFER', 'Share code applied. ' .. Changed .. ' settings changed.')
 end
 MakeButton(ShareModal, UDim2.fromOffset(12, 102), UDim2.fromOffset(96, 24), 'EXPORT', ExportCode)
 MakeButton(ShareModal, UDim2.fromOffset(116, 102), UDim2.fromOffset(96, 24), 'PREVIEW', PreviewCode)
@@ -32665,7 +32971,7 @@ if string.find(Message, 'success', 1, true) or string.find(Message, 'saved', 1, 
 return '•', Theme.Accent
 end
 function HubUI.ShowToast(Title, Text)
-Title = tostring(Title or 'GOLDEN EAGLE HUB')
+Title = tostring(Title or 'SILVER SURFER')
 Text = tostring(Text or '')
 local Glyph, SeverityColor = HubUI.GetToastStyle(Title, Text)
 -- Refresh an identical live toast instead of stacking duplicates.
@@ -32811,7 +33117,7 @@ local Unload = GlobalEnv.__HOOPZ_SILENTAIM_UNLOAD
 if type(Unload) == 'function' then
 local Ok, ErrorText = pcall(Unload)
 if not Ok then
-warn('[GOLDEN EAGLE HUB] Unload failed: ' .. tostring(ErrorText))
+warn('[SILVER SURFER] Unload failed: ' .. tostring(ErrorText))
 HubUI.UnloadAnimating = false
 if Main and Main.Parent then
 Main.Rotation = 0
@@ -33006,15 +33312,15 @@ if HubNow - (HubUI.HubRenderAt or 0) < HubInterval then return end
 HubUI.HubRenderAt = HubNow
 local RenderOk, RenderError = pcall(function()
 local Now = os.clock()
-local LinoriaStatic = InterfaceConfig.ThemePreset == 'Linoria'
+local LinoriaStatic = InterfaceConfig.ThemePreset == 'Silver Surfer'
 local MotionEnabled = not InterfaceConfig.ReducedMotion and not LinoriaStatic
 local PrismActive = InterfaceConfig.ThemePreset == 'Prism'
 local GradientSpeed = math.max(0.01, tonumber(CONFIG.GradientCycleSpeed) or 0.18) * math.max(0.25, tonumber(InterfaceConfig.AnimationSpeed) or 1)
-local GoldPhase = MotionEnabled and (Now * GradientSpeed * math.pi * 2) or 0
-local GoldAlpha = MotionEnabled and (math.sin(GoldPhase) + 1) * 0.5 or 0
+local AccentPhase = MotionEnabled and (Now * GradientSpeed * math.pi * 2) or 0
+local AccentBlend = MotionEnabled and (math.sin(AccentPhase) + 1) * 0.5 or 0
 local Accent = PrismActive
 and Color3.fromHSV(MotionEnabled and ((Now * GradientSpeed * 0.16) % 1) or 0.86, 0.96, 1)
-or (MotionEnabled and Theme.Accent:Lerp(Theme.AccentBright, GoldAlpha) or Theme.Accent)
+or (MotionEnabled and Theme.Accent:Lerp(Theme.AccentBright, AccentBlend) or Theme.Accent)
 local Pulse = MotionEnabled and (math.sin(Now * 4.2) + 1) * 0.5 or 0.5
 
 MainBorder.Thickness = LinoriaStatic and 1 or 2
@@ -33089,24 +33395,24 @@ end
 HubUI.PrismBorderCursor = ((StartIndex + BatchSize - 1) % BorderCount) + 1
 end
 else
-local DarkGold = Theme.Accent:Lerp(Theme.Background, 0.72)
-local DeepGold = Theme.Accent:Lerp(Theme.Background, 0.48)
-local RichGold = Theme.Accent:Lerp(Theme.AccentBright, 0.25)
-local MetallicGold = Theme.Accent
-local BrightGold = Theme.AccentBright
-local function CycleGold(Offset, LowColor, HighColor)
-local Alpha = (math.sin(GoldPhase + Offset) + 1) * 0.5
+local DarkAccent = Theme.Accent:Lerp(Theme.Background, 0.72)
+local DeepAccent = Theme.Accent:Lerp(Theme.Background, 0.48)
+local RichAccent = Theme.Accent:Lerp(Theme.AccentBright, 0.25)
+local MetallicAccent = Theme.Accent
+local BrightAccent = Theme.AccentBright
+local function CycleAccent(Offset, LowColor, HighColor)
+local Alpha = (math.sin(AccentPhase + Offset) + 1) * 0.5
 return LowColor:Lerp(HighColor, Alpha)
 end
 MainFlameGradient.Color = ColorSequence.new({
 ColorSequenceKeypoint.new(0.00, Theme.Background),
 ColorSequenceKeypoint.new(0.14, Theme.Background),
-ColorSequenceKeypoint.new(0.27, CycleGold(0.00, DarkGold, DeepGold)),
-ColorSequenceKeypoint.new(0.39, CycleGold(1.05, MetallicGold, BrightGold)),
+ColorSequenceKeypoint.new(0.27, CycleAccent(0.00, DarkAccent, DeepAccent)),
+ColorSequenceKeypoint.new(0.39, CycleAccent(1.05, MetallicAccent, BrightAccent)),
 ColorSequenceKeypoint.new(0.50, Theme.Background),
 ColorSequenceKeypoint.new(0.64, Theme.Background),
-ColorSequenceKeypoint.new(0.77, CycleGold(3.15, DeepGold, MetallicGold)),
-ColorSequenceKeypoint.new(0.90, CycleGold(4.20, MetallicGold, BrightGold)),
+ColorSequenceKeypoint.new(0.77, CycleAccent(3.15, DeepAccent, MetallicAccent)),
+ColorSequenceKeypoint.new(0.90, CycleAccent(4.20, MetallicAccent, BrightAccent)),
 ColorSequenceKeypoint.new(1.00, Theme.Background),
 })
 BackgroundGradient.Color = ColorSequence.new({
@@ -33118,15 +33424,15 @@ ColorSequenceKeypoint.new(1.00, Theme.Background),
 })
 if Intro and Intro.Parent then
 IntroStrokeGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, CycleGold(0.00, DarkGold, RichGold)),
-ColorSequenceKeypoint.new(0.36, CycleGold(1.40, RichGold, MetallicGold)),
-ColorSequenceKeypoint.new(0.58, CycleGold(2.80, MetallicGold, BrightGold)),
-ColorSequenceKeypoint.new(1.00, CycleGold(4.20, DarkGold, RichGold)),
+ColorSequenceKeypoint.new(0.00, CycleAccent(0.00, DarkAccent, RichAccent)),
+ColorSequenceKeypoint.new(0.36, CycleAccent(1.40, RichAccent, MetallicAccent)),
+ColorSequenceKeypoint.new(0.58, CycleAccent(2.80, MetallicAccent, BrightAccent)),
+ColorSequenceKeypoint.new(1.00, CycleAccent(4.20, DarkAccent, RichAccent)),
 })
 IntroFillGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, CycleGold(0.00, DarkGold, RichGold)),
-ColorSequenceKeypoint.new(0.55, CycleGold(2.10, MetallicGold, BrightGold)),
-ColorSequenceKeypoint.new(1.00, CycleGold(4.20, DeepGold, MetallicGold)),
+ColorSequenceKeypoint.new(0.00, CycleAccent(0.00, DarkAccent, RichAccent)),
+ColorSequenceKeypoint.new(0.55, CycleAccent(2.10, MetallicAccent, BrightAccent)),
+ColorSequenceKeypoint.new(1.00, CycleAccent(4.20, DeepAccent, MetallicAccent)),
 })
 end
 end
@@ -33459,7 +33765,7 @@ RangeText.TextColor3 = Supported and Accent or Theme.Muted
 end)
 if not RenderOk and not HubUI.RenderFailed then
 HubUI.RenderFailed = true
-warn('[GOLDEN EAGLE HUB] UI update paused: ' .. tostring(RenderError))
+warn('[SILVER SURFER] UI update paused: ' .. tostring(RenderError))
 end
 end)))
 
@@ -33636,7 +33942,7 @@ if not State.Watch.Active then return end
 local WatchOk, WatchError = pcall(State.Watch.Update, DeltaTime)
 if not WatchOk and State.Watch.Active then
 State.Watch.SetActive(false)
-warn('[GOLDEN EAGLE HUB] Watch camera stopped: ' .. tostring(WatchError))
+warn('[SILVER SURFER] Watch camera stopped: ' .. tostring(WatchError))
 end
 end)))
 
@@ -33649,7 +33955,7 @@ local PassRangeOk, PassRangeError = pcall(State.PassRange.Update)
 if not PassRangeOk and not State.PassRange.Disabled then
 State.PassRange.Disabled = true
 State.PassRange.Destroy()
-warn('[GOLDEN EAGLE HUB] Pass range indicator disabled: ' .. tostring(PassRangeError))
+warn('[SILVER SURFER] Pass range indicator disabled: ' .. tostring(PassRangeError))
 end
 end
 if not State.PassRange.Disabled then pcall(State.PassRange.Render) end
@@ -33673,7 +33979,7 @@ Visuals.FailStreak = (Visuals.FailStreak or 0) + 1
 DestroyVisuals()
 Visuals.Disabled = true
 Visuals.RetryAt = os.clock() + math.min(10, Visuals.FailStreak * 2)
-warn('[GOLDEN EAGLE HUB] Visual overlay error (retrying in '
+warn('[SILVER SURFER] Visual overlay error (retrying in '
 .. tostring(math.min(10, Visuals.FailStreak * 2)) .. 's): ' .. tostring(ErrorText))
 end
 end)))
@@ -34499,7 +34805,7 @@ pcall(function() State.BallAssist.SetTipOff(false) end)
 pcall(function() State.Movement.SetBodyColliders(false) end)
 table.clear(State.BallAssist.Candidates)
 table.clear(State.BallAssist.LastTouchAt)
-pcall(function() RunService:UnbindFromRenderStep('GoldenEagleLogoBadges') end)
+pcall(function() RunService:UnbindFromRenderStep('SilverSurferLogoBadges') end)
 for LogoName, OriginalValue in pairs(State.Cosmetics.Originals) do
 pcall(function() safe_set_attribute(LP, LogoName, OriginalValue) end)
 end
@@ -34551,7 +34857,7 @@ State.AutoOffense and State.AutoOffense.BindName,
 State.Outline and State.Outline.BindName,
 State.Movement and State.Movement.FlightRenderName,
 State.AutoMix and State.AutoMix.ShiftLockBindName,
-'GoldenEagleProfileStatsLock',
+'SilverSurferProfileStatsLock',
 }) do
 if BindName then pcall(function() RunService:UnbindFromRenderStep(BindName) end) end
 end
@@ -34590,14 +34896,14 @@ if State.AutoBody.Enabled then UpdateAutoBodyBinding() end
 if State.AutoGetOpenEnabled then UpdateAutoGetOpenBinding() end
 if State.AutoDunkEnabled then State.AutoDunk.UpdateBinding() end
 if State.AutoOffense.Enabled then State.AutoOffense.UpdateBinding() end
-pcall(function() if type(writefile) == 'function' then writefile('GoldenEagleHub_Crash.txt', '[STAGE] Building safe interface.\n') end end)
+pcall(function() if type(writefile) == 'function' then writefile('SilverSurfer_Crash.txt', '[STAGE] Building safe interface.\n') end end)
 State.UiBuildResult = table.pack(pcall(State.BuildSilentAimHub))
 if not State.UiBuildResult[1] then
 if HubUI.ScreenGui then pcall(function() HubUI.ScreenGui:Destroy() end) end
-pcall(function() if type(writefile) == 'function' then writefile('GoldenEagleHub_Crash.txt', '[UI ERROR] ' .. tostring(State.UiBuildResult[2]) .. '\n') end end)
-warn('[GOLDEN EAGLE HUB] UI unavailable: ' .. tostring(State.UiBuildResult[2]))
+pcall(function() if type(writefile) == 'function' then writefile('SilverSurfer_Crash.txt', '[UI ERROR] ' .. tostring(State.UiBuildResult[2]) .. '\n') end end)
+warn('[SILVER SURFER] UI unavailable: ' .. tostring(State.UiBuildResult[2]))
 else
-pcall(function() if type(writefile) == 'function' then writefile('GoldenEagleHub_Crash.txt', '[STAGE] Safe interface built.\n') end end)
+pcall(function() if type(writefile) == 'function' then writefile('SilverSurfer_Crash.txt', '[STAGE] Safe interface built.\n') end end)
 end
 State.UiBuildResult = nil
 if State.RequestedEnabled then
@@ -34609,12 +34915,12 @@ end
 task.defer(function()
 local Ok, Loaded, Name = pcall(State.AutoConfig.LoadLatest)
 if Ok and Loaded then
-Notify('GOLDEN EAGLE HUB', 'Auto-loaded config: ' .. tostring(Name))
+Notify('SILVER SURFER', 'Auto-loaded config: ' .. tostring(Name))
 end
 end)
 
 if GlobalEnv.__HOOPZ_SILENTAIM_REINJECTING then
-Notify('GOLDEN EAGLE HUB', 'Previous instance unloaded. Reload complete.')
+Notify('SILVER SURFER', 'Previous instance unloaded. Reload complete.')
 end
 GlobalEnv.__HOOPZ_SILENTAIM_REINJECTING = false
-pcall(function() if type(writefile) == 'function' then writefile('GoldenEagleHub_Crash.txt', '[OK] Initial injection completed.\n') end end)
+pcall(function() if type(writefile) == 'function' then writefile('SilverSurfer_Crash.txt', '[OK] Initial injection completed.\n') end end)
