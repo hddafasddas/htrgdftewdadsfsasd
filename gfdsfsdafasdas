@@ -40,6 +40,7 @@ ClickToShoot = false,
 TrickshotEnabled = false,
 TrickshotAngle = 360,
 TrickshotDuration = 0.28,
+TrickshotRotationMode = 'Spin',
 AutoEBL = false,
 AutoFadeaway = false,
 FadeawayDirection = 'Away from defender',
@@ -208,6 +209,10 @@ AutoGuardAdaptiveOnBallDistance = 14,
 AutoGuardAdaptiveIntentSlack = 3,
 AutoGuardNoJump = false,
 AutoGuardBallCheckOnly = false,
+AutoGuardDefenseMode = 'Normal',
+AutoGuardDefenseSpinSpeed = 540,
+AutoGuardDefenseJitterSpeed = 14,
+AutoGuardDefenseJitterAngle = 35,
 AutoDefense = false,
 AutoDefenseNoclip = true,
 
@@ -12493,6 +12498,8 @@ StartedAt = 0, EndsAt = 0, SavedHumanoid = nil, SavedAutoRotate = nil,
 EBLPhase = 'READY', EBLGeneration = 0, EBLStatus = 'OFF', ForceAutoRelease = false,
 MovementActive = false, MovementGeneration = 0, MovementEndsAt = 0,
 MovementStatus = 'OFF', LastRandomAngle = nil, LastFadeDirection = nil,
+FlipAngle = 0, RotationMode = 'Off',
+SavedRootMotor = nil, SavedRootTransform = nil,
 }
 
 function State.Trickshot.ResolveAngle()
@@ -12606,12 +12613,33 @@ local H = State.Trickshot.SavedHumanoid
 if H and H.Parent and State.Trickshot.SavedAutoRotate ~= nil then
 pcall(function() H.AutoRotate = State.Trickshot.SavedAutoRotate end)
 end
+local RootMotor = State.Trickshot.SavedRootMotor
+if RootMotor and RootMotor.Parent and State.Trickshot.SavedRootTransform then
+pcall(function() RootMotor.Transform = State.Trickshot.SavedRootTransform end)
+end
 State.Trickshot.SavedHumanoid, State.Trickshot.SavedAutoRotate = nil, nil
+State.Trickshot.SavedRootMotor, State.Trickshot.SavedRootTransform = nil, nil
 State.Trickshot.Status = Status or (CONFIG.TrickshotEnabled and 'READY' or 'OFF')
 end
 
+local function FindCharacterRootMotor(Character, Root)
+local Motor = Root and safe_find(Root, 'RootJoint')
+if Motor and Motor:IsA('Motor6D') then return Motor end
+local LowerTorso = Character and safe_find(Character, 'LowerTorso')
+Motor = LowerTorso and safe_find(LowerTorso, 'Root')
+if Motor and Motor:IsA('Motor6D') then return Motor end
+local Torso = Character and safe_find(Character, 'Torso')
+Motor = Torso and (safe_find(Torso, 'RootJoint') or safe_find(Torso, 'Root'))
+if Motor and Motor:IsA('Motor6D') then return Motor end
+return nil
+end
+
 function State.Trickshot.StartSpin(Character, Root)
-if not CONFIG.TrickshotEnabled then State.Trickshot.Status = 'OFF'; return false end
+local Mode = tostring(CONFIG.TrickshotRotationMode or 'Spin')
+if not CONFIG.TrickshotEnabled or Mode == 'Off' then
+State.Trickshot.Status = 'OFF'
+return false
+end
 if State.Trickshot.Active then State.Trickshot.CancelSpin('RESTARTING') end
 Character = Character or LP.Character
 Root = Root or (Character and safe_find(Character, 'HumanoidRootPart'))
@@ -12619,38 +12647,85 @@ local H = Character and Character:FindFirstChildOfClass('Humanoid')
 if not (Character and Root and H and H.Health > 0) then
 State.Trickshot.Status = 'CHARACTER NOT READY'; return false
 end
-local Angle = State.Trickshot.ResolveAngle()
-if math.abs(Angle) < 0.01 then State.Trickshot.Status = '0 DEG - NORMAL SHOT'; return false end
+
+local ResolvedAngle = State.Trickshot.ResolveAngle()
+local Magnitude = math.abs(ResolvedAngle)
+local YawAngle, FlipAngle = 0, 0
+local EffectiveMode = Mode
+if Mode == 'Random Flip' then
+EffectiveMode = math.random() < 0.5 and 'Frontflip' or 'Backflip'
+end
+if EffectiveMode == 'Spin' then
+YawAngle = ResolvedAngle
+elseif EffectiveMode == 'Frontflip' then
+FlipAngle = Magnitude
+elseif EffectiveMode == 'Backflip' then
+FlipAngle = -Magnitude
+elseif EffectiveMode == 'Spin + Frontflip' then
+YawAngle, FlipAngle = ResolvedAngle, Magnitude
+elseif EffectiveMode == 'Spin + Backflip' then
+YawAngle, FlipAngle = ResolvedAngle, -Magnitude
+end
+if math.abs(YawAngle) < 0.01 and math.abs(FlipAngle) < 0.01 then
+State.Trickshot.Status = '0 DEG - NORMAL SHOT'
+return false
+end
+
+local RootMotor = math.abs(FlipAngle) > 0.01 and FindCharacterRootMotor(Character, Root) or nil
+if math.abs(FlipAngle) > 0.01 and not RootMotor then
+State.Trickshot.Status = 'FLIP FAILED - ROOT MOTOR NOT FOUND'
+return false
+end
+local SavedRootTransform = RootMotor and RootMotor.Transform or nil
 local Duration = math.clamp(tonumber(CONFIG.TrickshotDuration) or 0.28, 0.08, 1.2)
 State.Trickshot.Generation += 1
 local Generation = State.Trickshot.Generation
-State.Trickshot.Active, State.Trickshot.Angle = true, Angle
+State.Trickshot.Active = true
+State.Trickshot.Angle = YawAngle
+State.Trickshot.FlipAngle = FlipAngle
+State.Trickshot.RotationMode = EffectiveMode
 State.Trickshot.StartedAt, State.Trickshot.EndsAt = os.clock(), os.clock() + Duration
 State.Trickshot.SavedHumanoid, State.Trickshot.SavedAutoRotate = H, H.AutoRotate
-State.Trickshot.Status = string.format('SPINNING %.0f DEG', Angle)
+State.Trickshot.SavedRootMotor, State.Trickshot.SavedRootTransform = RootMotor, SavedRootTransform
+State.Trickshot.Status = string.format('%s %.0f DEG', string.upper(EffectiveMode), Magnitude)
 H.AutoRotate = false
 local StartRotation = Root.CFrame - Root.Position
+local StepSignal = RunService.PreSimulation or RunService.Heartbeat
+
 task.spawn(function()
 while State.Active and State.Trickshot.Active and State.Trickshot.Generation == Generation
 and Root and Root.Parent and H and H.Parent do
+StepSignal:Wait()
+if State.Trickshot.Generation ~= Generation or not State.Trickshot.Active then return end
 local A = math.clamp((os.clock() - State.Trickshot.StartedAt) / Duration, 0, 1)
 local E = A * A * (3 - 2 * A)
 pcall(function()
-Root.CFrame = CFrame.new(Root.Position) * StartRotation * CFrame.Angles(0, math.rad(Angle * E), 0)
+if math.abs(YawAngle) > 0.01 then
+Root.CFrame = CFrame.new(Root.Position) * StartRotation
+* CFrame.Angles(0, math.rad(YawAngle * E), 0)
+end
+if RootMotor and RootMotor.Parent and SavedRootTransform then
+RootMotor.Transform = SavedRootTransform
+* CFrame.Angles(math.rad(FlipAngle * E), 0, 0)
+end
 Root.AssemblyAngularVelocity = Vector3.zero
 end)
 if A >= 1 then break end
-RunService.Heartbeat:Wait()
 end
 if State.Trickshot.Generation ~= Generation then return end
-if Root and Root.Parent then pcall(function()
-Root.CFrame = CFrame.new(Root.Position) * StartRotation * CFrame.Angles(0, math.rad(Angle), 0)
+if Root and Root.Parent and math.abs(YawAngle) > 0.01 then pcall(function()
+Root.CFrame = CFrame.new(Root.Position) * StartRotation
+* CFrame.Angles(0, math.rad(YawAngle), 0)
 Root.AssemblyAngularVelocity = Vector3.zero
 end) end
+if RootMotor and RootMotor.Parent and SavedRootTransform then
+pcall(function() RootMotor.Transform = SavedRootTransform end)
+end
 State.Trickshot.Active = false
 if H and H.Parent then pcall(function() H.AutoRotate = State.Trickshot.SavedAutoRotate ~= false end) end
 State.Trickshot.SavedHumanoid, State.Trickshot.SavedAutoRotate = nil, nil
-State.Trickshot.Status = string.format('COMPLETE %.0f DEG', Angle)
+State.Trickshot.SavedRootMotor, State.Trickshot.SavedRootTransform = nil, nil
+State.Trickshot.Status = string.format('COMPLETE %s %.0f DEG', string.upper(EffectiveMode), Magnitude)
 end)
 return true
 end
@@ -16219,6 +16294,50 @@ local Desired = TargetPosition
 return Vector3.new(Desired.X, TargetPosition.Y, Desired.Z)
 end
 
+local function ApplyGuardDefenseRotation(LocalRoot, Target)
+if not (LocalRoot and LocalRoot.Parent and Target and Target.Character) then return end
+local Mode = tostring(CONFIG.AutoGuardDefenseMode or 'Normal')
+if Mode == 'Normal' then return end
+
+local TargetRoot = safe_find(Target.Character, 'HumanoidRootPart')
+if not TargetRoot then return end
+local Origin = LocalRoot.Position
+local Focus = TargetRoot.Position
+
+if Mode == 'Ball Defense' then
+local Basketball = safe_find(Target.Character, 'Basketball')
+local Ball = Basketball and (safe_find(Basketball, 'Ball') or Basketball:FindFirstChildWhichIsA('BasePart', true))
+if Ball then Focus = Ball.Position end
+end
+
+if Mode == 'Spin Defense' then
+local Speed = math.clamp(tonumber(CONFIG.AutoGuardDefenseSpinSpeed) or 540, 45, 1440)
+local Angle = math.rad((os.clock() * Speed) % 360)
+pcall(function()
+LocalRoot.CFrame = CFrame.new(Origin) * CFrame.Angles(0, Angle, 0)
+LocalRoot.AssemblyAngularVelocity = Vector3.zero
+end)
+return
+end
+
+local Direction = Vector3.new(Focus.X - Origin.X, 0, Focus.Z - Origin.Z)
+if Direction.Magnitude <= 0.001 then return end
+Direction = Direction.Unit
+if Mode == 'Backwards Defense' then
+Direction = -Direction
+elseif Mode == 'Jitter Defense' then
+local Speed = math.clamp(tonumber(CONFIG.AutoGuardDefenseJitterSpeed) or 14, 1, 40)
+local Angle = math.clamp(tonumber(CONFIG.AutoGuardDefenseJitterAngle) or 35, 5, 90)
+local Sign = math.floor(os.clock() * Speed) % 2 == 0 and -1 or 1
+Direction = CFrame.Angles(0, math.rad(Angle * Sign), 0):VectorToWorldSpace(Direction)
+end
+
+pcall(function()
+LocalRoot.CFrame = CFrame.lookAt(Origin, Origin + Direction, Vector3.new(0, 1, 0))
+LocalRoot.AssemblyAngularVelocity = Vector3.zero
+end)
+end
+
 local function UpdateAutoGuardBinding()
 pcall(function()
 RunService:UnbindFromRenderStep(AUTO_GUARD_BIND_NAME)
@@ -16362,6 +16481,10 @@ end
 elseif State.Runtime.MovementOwner == 'Guard' then
 State.Runtime.ReleaseMovement('Guard')
 LocalHumanoid:Move(Vector3.zero, false)
+end
+
+if Target then
+ApplyGuardDefenseRotation(LocalRoot, Target)
 end
 end)
 )
@@ -28568,17 +28691,24 @@ if not Value and not CONFIG.AutoFadeaway then State.Trickshot.CancelShotMovement
 end)
 
 CreateSectionHeader(HubUI.ShotVariantGroup, 358, 'Trickshots / EBL')
-HubUI.Controls.TrickshotEnabled = CreateCheckbox(HubUI.ShotVariantGroup, 378, 'Spin before jump shot', CONFIG.TrickshotEnabled == true, function(Value)
-CONFIG.TrickshotEnabled = Value == true
-if not Value then State.Trickshot.CancelSpin('OFF') end
-Notify('SILVER SURFER', Value and 'Trickshot spin enabled.' or 'Trickshots disabled.')
-end)
+HubUI.Controls.TrickshotRotationMode = CreateSelector(
+HubUI.ShotVariantGroup, 378, 'Auto rotation',
+{ 'Off', 'Spin', 'Frontflip', 'Backflip', 'Spin + Frontflip', 'Spin + Backflip', 'Random Flip' },
+CONFIG.TrickshotEnabled and (CONFIG.TrickshotRotationMode or 'Spin') or 'Off',
+function(Value)
+CONFIG.TrickshotRotationMode = Value
+CONFIG.TrickshotEnabled = Value ~= 'Off'
+if Value == 'Off' then State.Trickshot.CancelSpin('OFF') end
+Notify('SILVER SURFER', Value == 'Off' and 'Automatic shot rotation disabled.' or ('Auto rotation: ' .. Value))
+end,
+126
+)
 HubUI.Controls.RandomTrickshotMode = CreateCheckbox(HubUI.ShotVariantGroup, 405, 'Random 360 / 720 / 1080', CONFIG.RandomTrickshotMode == true, function(Value)
 CONFIG.RandomTrickshotMode = Value == true
 Notify('SILVER SURFER', Value and 'Random trickshot angles and directions enabled.' or 'Using the custom trickshot angle.')
 end)
-HubUI.Controls.TrickshotAngle = CreateNumberInput(HubUI.ShotVariantGroup, 432, 'Custom angle (deg)', CONFIG.TrickshotAngle, -2160, 2160, 0, function(Value) CONFIG.TrickshotAngle = Value end)
-HubUI.Controls.TrickshotDuration = CreateNumberInput(HubUI.ShotVariantGroup, 459, 'Spin time (sec)', CONFIG.TrickshotDuration, 0.08, 1.2, 2, function(Value) CONFIG.TrickshotDuration = Value end)
+HubUI.Controls.TrickshotAngle = CreateNumberInput(HubUI.ShotVariantGroup, 432, 'Rotation angle (deg)', CONFIG.TrickshotAngle, -2160, 2160, 0, function(Value) CONFIG.TrickshotAngle = Value end)
+HubUI.Controls.TrickshotDuration = CreateNumberInput(HubUI.ShotVariantGroup, 459, 'Rotation time (sec)', CONFIG.TrickshotDuration, 0.08, 1.2, 2, function(Value) CONFIG.TrickshotDuration = Value end)
 HubUI.Controls.AutoEBL = CreateCheckbox(HubUI.ShotVariantGroup, 486, 'Auto EBL double jump shot', CONFIG.AutoEBL == true, function(Value)
 CONFIG.AutoEBL = Value == true
 State.Trickshot.ResetAutoEBL(Value and 'READY' or 'OFF')
@@ -28965,6 +29095,27 @@ function(Value)
 CONFIG.AutoDefenseNoclip = Value
 if State.AutoDefense.Enabled then State.Movement.SetNoclip(Value) end
 end
+)
+
+CreateSectionHeader(GuardGroup, 295, 'Defense rotation')
+HubUI.Controls.AutoGuardDefenseMode = CreateSelector(
+GuardGroup, 315, 'Rotation mode',
+{ 'Normal', 'Backwards Defense', 'Spin Defense', 'Jitter Defense', 'Ball Defense', 'Carrier Defense' },
+CONFIG.AutoGuardDefenseMode or 'Normal',
+function(Value) CONFIG.AutoGuardDefenseMode = Value end,
+142
+)
+HubUI.Controls.AutoGuardDefenseSpinSpeed = CreateNumberInput(
+GuardGroup, 345, 'Spin speed (deg/sec)', CONFIG.AutoGuardDefenseSpinSpeed, 45, 1440, 0,
+function(Value) CONFIG.AutoGuardDefenseSpinSpeed = Value end
+)
+HubUI.Controls.AutoGuardDefenseJitterSpeed = CreateNumberInput(
+GuardGroup, 375, 'Jitter speed', CONFIG.AutoGuardDefenseJitterSpeed, 1, 40, 0,
+function(Value) CONFIG.AutoGuardDefenseJitterSpeed = Value end
+)
+HubUI.Controls.AutoGuardDefenseJitterAngle = CreateNumberInput(
+GuardGroup, 405, 'Jitter angle', CONFIG.AutoGuardDefenseJitterAngle, 5, 90, 0,
+function(Value) CONFIG.AutoGuardDefenseJitterAngle = Value end
 )
 
 CreateSectionHeader(GuardRideGroup, 11, 'Off-ball Head Ride')
@@ -31680,7 +31831,7 @@ CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.Backboard, CONFIG.BackboardEnabled == true },
 { HubUI.Controls.MatchArc, CONFIG.MatchArcEnabled == true },
 { HubUI.Controls.MatchArcAngle, CONFIG.MatchArcAngle },
-{ HubUI.Controls.TrickshotEnabled, CONFIG.TrickshotEnabled == true },
+{ HubUI.Controls.TrickshotRotationMode, CONFIG.TrickshotEnabled and (CONFIG.TrickshotRotationMode or 'Spin') or 'Off' },
 { HubUI.Controls.RandomTrickshotMode, CONFIG.RandomTrickshotMode == true },
 { HubUI.Controls.AutoFadeaway, CONFIG.AutoFadeaway == true },
 { HubUI.Controls.AutoStop, CONFIG.AutoStop == true },
