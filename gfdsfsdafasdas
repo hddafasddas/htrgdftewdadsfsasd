@@ -10,7 +10,7 @@ function WYNF_INLINE(Fn) return Fn end
 function WYNF_NO_VIRTUALIZE(Fn) return Fn end
 end
 
-pcall(function() if type(writefile) == 'function' then writefile('SilverSurfer_Crash.txt', '[STARTED] Silver Surfer theme-synced UI chunk began execution.\n') end end)
+pcall(function() if type(writefile) == 'function' then writefile('SilverSurfer_Crash.txt', '[STARTED] Linoria black-gold fixed UI chunk began execution.\n') end end)
 
 local CONFIG = {
 ToggleKey = Enum.KeyCode.RightControl,
@@ -37,6 +37,16 @@ AimMode = 'Legit',
 SilentMode = 'High',
 SilentAimMethod = 'Camera Ray Spoof',
 ClickToShoot = false,
+TrickshotEnabled = false,
+TrickshotAngle = 360,
+TrickshotDuration = 0.28,
+AutoEBL = false,
+AutoFadeaway = false,
+FadeawayDirection = 'Away from defender',
+FadeawayDistance = 4.5,
+FadeawayDuration = 0.28,
+AutoStop = false,
+RandomTrickshotMode = false,
 HumanizeEnabled = false,
 HumanizeAccuracy = 92,
 HumanizeMaxAngle = 25,
@@ -461,186 +471,6 @@ CosmeticTintEnabled = false,
 CosmeticTintR = 255,
 CosmeticTintG = 200,
 CosmeticTintB = 60,
-CustomCosmeticLuaEnabled = true,
-CustomCosmeticLuaCategory = 'Body Aura',
-CustomCosmeticLuaPresetName = '',
-CustomCosmeticLuaSources = { ['Body Aura'] = [==[
--- SILVER SURFER: MERCURY WAKE BODY AURA
--- Paste this into: Cosmetics > Cosmetic Lua > Body Aura
--- Then press SAVE SOURCE and RUN LIVE.
-
-local Character = Context.Character
-if not Character then return end
-
-local AURA_TAG = "SilverSurfer_MercuryWake"
-
--- Idempotent cleanup: refreshing the preview or running live never stacks copies.
-for _, Object in ipairs(Character:GetDescendants()) do
-    if Object:GetAttribute(AURA_TAG) then
-        Object:Destroy()
-    end
-end
-
-local Silver = Color3.fromRGB(198, 207, 218)
-local Chrome = Color3.fromRGB(240, 246, 252)
-local Shadow = Color3.fromRGB(92, 104, 120)
-local PreviewBoost = 1
-
-local function Mark(Object)
-    Object:SetAttribute(AURA_TAG, true)
-    return Object
-end
-
-local function FindPart(...)
-    for Index = 1, select("#", ...) do
-        local Part = Character:FindFirstChild(select(Index, ...), true)
-        if Part and Part:IsA("BasePart") then return Part end
-    end
-end
-
-local Root = FindPart("HumanoidRootPart", "Torso", "UpperTorso")
-if not Root then return end
-
--- Clean silver silhouette.
-local Highlight = Mark(Instance.new("Highlight"))
-Highlight.Name = "MercuryWakeHighlight"
-Highlight.Adornee = Character
-Highlight.FillColor = Silver
-Highlight.FillTransparency = 0.78
-Highlight.OutlineColor = Chrome
-Highlight.OutlineTransparency = 0.08
-Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-Highlight.Parent = Character
-
--- Metallic core glow.
-local Light = Mark(Instance.new("PointLight"))
-Light.Name = "MercuryCore"
-Light.Color = Chrome
-Light.Brightness = 1.65 * PreviewBoost
-Light.Range = 11
-Light.Shadows = false
-Light.Parent = Root
-
-local BodyParts = {
-    FindPart("Head"),
-    FindPart("UpperTorso", "Torso"),
-    FindPart("LowerTorso", "Torso"),
-    FindPart("LeftHand", "Left Arm"),
-    FindPart("RightHand", "Right Arm"),
-    FindPart("LeftFoot", "Left Leg"),
-    FindPart("RightFoot", "Right Leg"),
-}
-
--- Fine chrome sparks shed from the whole body.
-for _, Part in ipairs(BodyParts) do
-    if Part then
-        local Attachment = Mark(Instance.new("Attachment"))
-        Attachment.Name = "MercurySparkPoint"
-        Attachment.Parent = Part
-
-        local Sparks = Mark(Instance.new("ParticleEmitter"))
-        Sparks.Name = "ChromeSparks"
-        Sparks.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-        Sparks.Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0, Chrome),
-            ColorSequenceKeypoint.new(0.55, Silver),
-            ColorSequenceKeypoint.new(1, Shadow),
-        })
-        Sparks.Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 0.12),
-            NumberSequenceKeypoint.new(0.35, 0.28),
-            NumberSequenceKeypoint.new(1, 1),
-        })
-        Sparks.Size = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 0.16),
-            NumberSequenceKeypoint.new(0.45, 0.08),
-            NumberSequenceKeypoint.new(1, 0),
-        })
-        Sparks.Lifetime = NumberRange.new(0.45, 0.9)
-        Sparks.Rate = math.floor(7 * PreviewBoost)
-        Sparks.Speed = NumberRange.new(0.35, 1.4)
-        Sparks.Drag = 1.5
-        Sparks.Acceleration = Vector3.new(0, 1.8, 0)
-        Sparks.SpreadAngle = Vector2.new(180, 180)
-        Sparks.Rotation = NumberRange.new(0, 360)
-        Sparks.RotSpeed = NumberRange.new(-120, 120)
-        Sparks.LightEmission = 0.85
-        Sparks.LightInfluence = 0
-        Sparks.LockedToPart = false
-        Sparks.Parent = Attachment
-    end
-end
-
--- Dense mercury mist around the core.
-local CoreAttachment = Mark(Instance.new("Attachment"))
-CoreAttachment.Name = "MercuryCorePoint"
-CoreAttachment.Parent = Root
-
-local Mist = Mark(Instance.new("ParticleEmitter"))
-Mist.Name = "MercuryMist"
-Mist.Texture = "rbxasset://textures/particles/smoke_main.dds"
-Mist.Color = ColorSequence.new(Silver, Chrome)
-Mist.Transparency = NumberSequence.new({
-    NumberSequenceKeypoint.new(0, 0.76),
-    NumberSequenceKeypoint.new(0.5, 0.86),
-    NumberSequenceKeypoint.new(1, 1),
-})
-Mist.Size = NumberSequence.new({
-    NumberSequenceKeypoint.new(0, 1.5),
-    NumberSequenceKeypoint.new(0.5, 2.4),
-    NumberSequenceKeypoint.new(1, 3.3),
-})
-Mist.Lifetime = NumberRange.new(0.65, 1.15)
-Mist.Rate = math.floor(10 * PreviewBoost)
-Mist.Speed = NumberRange.new(0.15, 0.55)
-Mist.Drag = 2
-Mist.Acceleration = Vector3.new(0, 1.1, 0)
-Mist.SpreadAngle = Vector2.new(70, 70)
-Mist.LightEmission = 0.45
-Mist.LightInfluence = 0
-Mist.Parent = CoreAttachment
-
--- Twin attachments produce a chrome wake while the character moves.
-local WakeLeft = Mark(Instance.new("Attachment"))
-WakeLeft.Name = "MercuryWakeLeft"
-WakeLeft.Position = Vector3.new(-1.15, -1.45, 0.35)
-WakeLeft.Parent = Root
-
-local WakeRight = Mark(Instance.new("Attachment"))
-WakeRight.Name = "MercuryWakeRight"
-WakeRight.Position = Vector3.new(1.15, -1.45, 0.35)
-WakeRight.Parent = Root
-
-local Wake = Mark(Instance.new("Trail"))
-Wake.Name = "MercuryWake"
-Wake.Attachment0 = WakeLeft
-Wake.Attachment1 = WakeRight
-Wake.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Chrome),
-    ColorSequenceKeypoint.new(0.45, Silver),
-    ColorSequenceKeypoint.new(1, Shadow),
-})
-Wake.Transparency = NumberSequence.new({
-    NumberSequenceKeypoint.new(0, 0.18),
-    NumberSequenceKeypoint.new(0.55, 0.56),
-    NumberSequenceKeypoint.new(1, 1),
-})
-Wake.Lifetime = 0.42
-Wake.MinLength = 0.05
-Wake.LightEmission = 0.75
-Wake.LightInfluence = 0
-Wake.FaceCamera = true
-Wake.Parent = Root
-
--- One immediate burst makes the effect visible as soon as it is applied.
-Mist:Emit(10)
-for _, Object in ipairs(Character:GetDescendants()) do
-    if Object.Name == "ChromeSparks" and Object:IsA("ParticleEmitter") then
-        Object:Emit(4)
-    end
-end
-
-]==] },
 LocalCourtSkinSpoof = false,
 LocalCourtSkin = 'CourtSkin_Default',
 LocalClanTagSpoof = false,
@@ -3571,16 +3401,16 @@ end
 function State.Utility.SetAntiTravel(Enabled)
 State.AntiTravelEnabled = Enabled == true
 CONFIG.AntiTravel = State.AntiTravelEnabled
-GlobalEnv.__SILVER_SURFER_TRAVEL_RUNTIME = State
+GlobalEnv.__GOLDEN_EAGLE_TRAVEL_RUNTIME = State
 if State.AntiTravelEnabled then State.Utility.InstallAntiTravelHook() end
 end
 
 function State.Utility.InstallAntiTravelHook()
-GlobalEnv.__SILVER_SURFER_TRAVEL_RUNTIME = State
-if GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_INSTALLED then
-State.Utility.TravelFireServerOriginal = GlobalEnv.__SILVER_SURFER_TRAVEL_ORIGINAL
+GlobalEnv.__GOLDEN_EAGLE_TRAVEL_RUNTIME = State
+if GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_INSTALLED then
+State.Utility.TravelFireServerOriginal = GlobalEnv.__GOLDEN_EAGLE_TRAVEL_ORIGINAL
 State.Utility.TravelHookMode =
-GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_MODE or 'INSTALLED'
+GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_MODE or 'INSTALLED'
 return true
 end
 
@@ -3591,7 +3421,7 @@ end
 local TargetEvent = State.Utility.SBEvent
 
 local function ShouldBlock(Self, First)
-local Runtime = GlobalEnv.__SILVER_SURFER_TRAVEL_RUNTIME
+local Runtime = GlobalEnv.__GOLDEN_EAGLE_TRAVEL_RUNTIME
 if not (Runtime and Runtime.Active and Runtime.AntiTravelEnabled) then
 return false
 end
@@ -3603,7 +3433,7 @@ end
 if type(hookmetamethod) == 'function'
 and type(getnamecallmethod) == 'function' then
 local function NamecallHandler(Self, ...)
-local Original = GlobalEnv.__SILVER_SURFER_TRAVEL_ORIGINAL
+local Original = GlobalEnv.__GOLDEN_EAGLE_TRAVEL_ORIGINAL
 local Method
 local Read = pcall(function() Method = getnamecallmethod() end)
 if Read and Method == 'FireServer'
@@ -3622,9 +3452,9 @@ return hookmetamethod(game, '__namecall', Callback)
 end)
 
 if Success and Original then
-GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_INSTALLED = true
-GlobalEnv.__SILVER_SURFER_TRAVEL_ORIGINAL = Original
-GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_MODE = 'NAMECALL'
+GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_INSTALLED = true
+GlobalEnv.__GOLDEN_EAGLE_TRAVEL_ORIGINAL = Original
+GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_MODE = 'NAMECALL'
 State.Utility.TravelFireServerOriginal = Original
 State.Utility.TravelHookMode = 'NAMECALL'
 return true
@@ -3641,9 +3471,9 @@ end))
 return Previous
 end)
 if Success and Original then
-GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_INSTALLED = true
-GlobalEnv.__SILVER_SURFER_TRAVEL_ORIGINAL = Original
-GlobalEnv.__SILVER_SURFER_TRAVEL_HOOK_MODE = 'FIRESERVER'
+GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_INSTALLED = true
+GlobalEnv.__GOLDEN_EAGLE_TRAVEL_ORIGINAL = Original
+GlobalEnv.__GOLDEN_EAGLE_TRAVEL_HOOK_MODE = 'FIRESERVER'
 State.Utility.TravelFireServerOriginal = Original
 State.Utility.TravelHookMode = 'FIRESERVER (WEAK)'
 return true
@@ -4085,60 +3915,6 @@ State.Cosmetics.Runtime.BodyAura = State.LocalBodyAura
 elseif Character and BodyCheckDue and State.LocalBodyAura ~= 'None' then
 State.Cosmetics.ForceBodyAuraVisible(Character)
 State.Cosmetics.Runtime.LastBodyCheckAt = Now
-end
-end
-
-
--- Universal cosmetic Lua runtime. Every cosmetic family receives the same
--- constrained context object, so presets can target the live character or the
--- the live local character without duplicating editor code.
-State.Cosmetics.CustomLua = State.Cosmetics.CustomLua or {
-Categories = { 'Ball Aura', 'Ball Trail', 'Ball Skin', 'Body Aura', 'Court Skin', 'Chat Tag', 'Profile Logo', 'Goal Effect', 'Character' },
-Compiled = {}, Cleanup = {}, LastError = nil,
-}
-function State.Cosmetics.CompileCustomLua(Category, Source)
-Category = tostring(Category or 'Character')
-Source = tostring(Source or '')
-if Source == '' then return function() end end
-if type(loadstring) ~= 'function' then return nil, 'loadstring is unavailable in this executor' end
-local Wrapped = 'return function(Context)\n' .. Source .. '\nend'
-local Chunk, CompileError = loadstring(Wrapped, '=SilverSurferCosmetic/' .. Category)
-if not Chunk then return nil, CompileError end
-local Ok, Handler = pcall(Chunk)
-if not Ok or type(Handler) ~= 'function' then return nil, Handler end
-return Handler
-end
-function State.Cosmetics.RunCustomLua(Category, Target, IsPreview, Extra)
-if CONFIG.CustomCosmeticLuaEnabled == false then return true end
-Category = tostring(Category or CONFIG.CustomCosmeticLuaCategory or 'Character')
-local Sources = type(CONFIG.CustomCosmeticLuaSources) == 'table' and CONFIG.CustomCosmeticLuaSources or {}
-CONFIG.CustomCosmeticLuaSources = Sources
-local Source = tostring(Sources[Category] or '')
-if Source == '' then return true end
-local Handler, CompileError = State.Cosmetics.CompileCustomLua(Category, Source)
-if not Handler then State.Cosmetics.CustomLua.LastError = tostring(CompileError); return false, CompileError end
-State.Cosmetics.CustomLua.Compiled[Category] = Handler
-local Character = Target or LP.Character
-local Ball = (Extra and Extra.Ball) or (not IsPreview and GetLocalBallHandle() or nil)
-local Context = {
-Category = Category, IsPreview = IsPreview == true, Character = Character, Ball = Ball,
-Player = LP, Selection = {
-Aura = State.LocalAura, Trail = State.LocalTrail, Ball = State.LocalBall,
-BodyAura = State.LocalBodyAura, CourtSkin = State.LocalCourtSkin,
-GoalEffect = State.LocalGoalEffect,
-},
-Services = { TweenService = TweenService, RunService = RunService, Debris = game:GetService('Debris'),
-Lighting = Lighting, ReplicatedStorage = ReplicatedStorage },
-Theme = { Silver = Color3.fromRGB(191, 199, 209), Bright = Color3.fromRGB(247, 250, 252),
-Graphite = Color3.fromRGB(17, 19, 24) },
-}
-local Ok, Result = pcall(Handler, Context)
-State.Cosmetics.CustomLua.LastError = Ok and nil or tostring(Result)
-return Ok, Result
-end
-function State.Cosmetics.ApplyAllCustomLua(Target, IsPreview, Extra)
-for _, Category in ipairs(State.Cosmetics.CustomLua.Categories) do
-pcall(State.Cosmetics.RunCustomLua, Category, Target, IsPreview, Extra)
 end
 end
 
@@ -10895,11 +10671,11 @@ Disabled = false,
 Visible = false,
 GroundY = nil,
 Theme = {
-Background = Color3.fromRGB(8, 8, 9),
-Muted = Color3.fromRGB(146, 146, 155),
-Accent = Color3.fromRGB(191, 199, 209),
-AccentBright = Color3.fromRGB(247, 250, 252),
-HighlightFill = Color3.fromRGB(218, 224, 231),
+Background = Color3.fromRGB(238, 241, 244),
+Muted = Color3.fromRGB(91, 101, 112),
+Accent = Color3.fromRGB(135, 147, 161),
+AccentBright = Color3.fromRGB(58, 70, 83),
+HighlightFill = Color3.fromRGB(183, 192, 201),
 White = Color3.fromRGB(255, 255, 255),
 },
 All = {},
@@ -10925,12 +10701,9 @@ DunkRangeCore = nil,
 local RangeScreenTint = {
 Gui = nil,
 Group = nil,
-ShadowHalf = nil,
-AccentHalf = nil,
+BlackHalf = nil,
+GoldHalf = nil,
 CenterBlend = nil,
-ShadowGradient = nil,
-AccentGradient = nil,
-CenterGradient = nil,
 ColorCorrection = nil,
 GroupTween = nil,
 CorrectionTween = nil,
@@ -10965,51 +10738,11 @@ Frame.Parent = Parent
 return Frame
 end
 
-local function RefreshRangeScreenTintTheme()
-local T = Visuals.Theme
-if not T then return end
-local Background = T.Background or Color3.fromRGB(11, 12, 14)
-local Accent = T.Accent or Color3.fromRGB(191, 199, 209)
-local Bright = T.AccentBright or Color3.fromRGB(247, 250, 252)
-local DeepAccent = Accent:Lerp(Background, 0.72)
-local MidAccent = Accent:Lerp(Background, 0.38)
-
-if RangeScreenTint.ShadowHalf then RangeScreenTint.ShadowHalf.BackgroundColor3 = Background end
-if RangeScreenTint.AccentHalf then RangeScreenTint.AccentHalf.BackgroundColor3 = Accent end
-if RangeScreenTint.CenterBlend then RangeScreenTint.CenterBlend.BackgroundColor3 = MidAccent end
-if RangeScreenTint.ShadowGradient then
-RangeScreenTint.ShadowGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Background:Lerp(Color3.new(0, 0, 0), 0.36)),
-ColorSequenceKeypoint.new(0.70, Background),
-ColorSequenceKeypoint.new(1.00, DeepAccent),
-})
-end
-if RangeScreenTint.AccentGradient then
-RangeScreenTint.AccentGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, DeepAccent),
-ColorSequenceKeypoint.new(0.20, MidAccent),
-ColorSequenceKeypoint.new(0.58, Accent),
-ColorSequenceKeypoint.new(1.00, Bright),
-})
-end
-if RangeScreenTint.CenterGradient then
-RangeScreenTint.CenterGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Background),
-ColorSequenceKeypoint.new(0.48, MidAccent),
-ColorSequenceKeypoint.new(1.00, Bright),
-})
-end
-if RangeScreenTint.ColorCorrection and RangeScreenTint.ColorCorrection.Enabled then
-RangeScreenTint.ColorCorrection.TintColor = Bright:Lerp(Color3.new(1, 1, 1), 0.22)
-end
-end
-
 local function InitializeRangeScreenTint()
 if not CONFIG.RangeScreenTintEnabled then return false end
 if RangeScreenTint.Gui and RangeScreenTint.Gui.Parent
 and RangeScreenTint.Group and RangeScreenTint.Group.Parent
 and RangeScreenTint.ColorCorrection and RangeScreenTint.ColorCorrection.Parent then
-RefreshRangeScreenTintTheme()
 return true
 end
 
@@ -11037,7 +10770,7 @@ Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 Gui.Parent = PlayerGui
 
 local Group = Instance.new('CanvasGroup')
-Group.Name = 'BlendedThemeAccentCanvas'
+Group.Name = 'BlendedBlackGoldCanvas'
 Group.Size = UDim2.fromScale(1, 1)
 Group.Position = UDim2.fromScale(0, 0)
 Group.BackgroundTransparency = 1
@@ -11048,55 +10781,85 @@ Group.Active = false
 Group.ZIndex = 1
 Group.Parent = Gui
 
-local T = Visuals.Theme
-local Background = T.Background or Color3.fromRGB(11, 12, 14)
-local Accent = T.Accent or Color3.fromRGB(191, 199, 209)
-local ShadowHalf = NewRangeTintFrame(
-'ThemeShadowHalf', UDim2.fromScale(0, 0), UDim2.fromScale(0.565, 1),
-Background, 0.05, Group)
-local ShadowGradient = Instance.new('UIGradient')
-ShadowGradient.Rotation = 0
-ShadowGradient.Transparency = NumberSequence.new({
-NumberSequenceKeypoint.new(0.00, 0.00), NumberSequenceKeypoint.new(0.72, 0.05),
-NumberSequenceKeypoint.new(0.86, 0.18), NumberSequenceKeypoint.new(1.00, 1.00),
+local BlackHalf = NewRangeTintFrame(
+'BlackHueHalf',
+UDim2.fromScale(0, 0),
+UDim2.fromScale(0.565, 1),
+Color3.fromRGB(0, 0, 0),
+0.05,
+Group
+)
+local BlackGradient = Instance.new('UIGradient')
+BlackGradient.Rotation = 0
+BlackGradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Color3.fromRGB(0, 0, 0)),
+ColorSequenceKeypoint.new(0.70, Color3.fromRGB(4, 4, 5)),
+ColorSequenceKeypoint.new(1.00, Color3.fromRGB(17, 14, 8)),
 })
-ShadowGradient.Parent = ShadowHalf
+BlackGradient.Transparency = NumberSequence.new({
+NumberSequenceKeypoint.new(0.00, 0.00),
+NumberSequenceKeypoint.new(0.72, 0.05),
+NumberSequenceKeypoint.new(0.86, 0.18),
+NumberSequenceKeypoint.new(1.00, 1.00),
+})
+BlackGradient.Parent = BlackHalf
 
-local AccentHalf = NewRangeTintFrame(
-'ThemeAccentHalf', UDim2.fromScale(0.435, 0), UDim2.fromScale(0.565, 1),
-Accent, 0.18, Group)
-local AccentGradient = Instance.new('UIGradient')
-AccentGradient.Rotation = 0
-AccentGradient.Transparency = NumberSequence.new({
-NumberSequenceKeypoint.new(0.00, 1.00), NumberSequenceKeypoint.new(0.14, 0.30),
-NumberSequenceKeypoint.new(0.28, 0.10), NumberSequenceKeypoint.new(1.00, 0.02),
+local GoldHalf = NewRangeTintFrame(
+'GoldHueHalf',
+UDim2.fromScale(0.435, 0),
+UDim2.fromScale(0.565, 1),
+Color3.fromRGB(220, 171, 42),
+0.18,
+Group
+)
+local GoldGradient = Instance.new('UIGradient')
+GoldGradient.Rotation = 0
+GoldGradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Color3.fromRGB(70, 48, 9)),
+ColorSequenceKeypoint.new(0.20, Color3.fromRGB(155, 108, 18)),
+ColorSequenceKeypoint.new(0.55, Color3.fromRGB(220, 171, 42)),
+ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 211, 91)),
 })
-AccentGradient.Parent = AccentHalf
+GoldGradient.Transparency = NumberSequence.new({
+NumberSequenceKeypoint.new(0.00, 1.00),
+NumberSequenceKeypoint.new(0.14, 0.30),
+NumberSequenceKeypoint.new(0.28, 0.10),
+NumberSequenceKeypoint.new(1.00, 0.02),
+})
+GoldGradient.Parent = GoldHalf
 
 local CenterBlend = NewRangeTintFrame(
-'CenterThemeBlend', UDim2.fromScale(0.455, 0), UDim2.fromScale(0.09, 1),
-Accent:Lerp(Background, 0.38), 0.62, Group)
+'CenterHueBlend',
+UDim2.fromScale(0.455, 0),
+UDim2.fromScale(0.09, 1),
+Color3.fromRGB(105, 76, 20),
+0.62,
+Group
+)
 CenterBlend.ZIndex = 2
 local CenterGradient = Instance.new('UIGradient')
 CenterGradient.Rotation = 0
+CenterGradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0.00, Color3.fromRGB(2, 2, 2)),
+ColorSequenceKeypoint.new(0.48, Color3.fromRGB(55, 39, 10)),
+ColorSequenceKeypoint.new(1.00, Color3.fromRGB(224, 173, 42)),
+})
 CenterGradient.Transparency = NumberSequence.new({
-NumberSequenceKeypoint.new(0.00, 1.00), NumberSequenceKeypoint.new(0.30, 0.72),
-NumberSequenceKeypoint.new(0.50, 0.58), NumberSequenceKeypoint.new(0.70, 0.72),
+NumberSequenceKeypoint.new(0.00, 1.00),
+NumberSequenceKeypoint.new(0.30, 0.72),
+NumberSequenceKeypoint.new(0.50, 0.58),
+NumberSequenceKeypoint.new(0.70, 0.72),
 NumberSequenceKeypoint.new(1.00, 1.00),
 })
 CenterGradient.Parent = CenterBlend
 
 RangeScreenTint.Gui = Gui
 RangeScreenTint.Group = Group
-RangeScreenTint.ShadowHalf = ShadowHalf
-RangeScreenTint.AccentHalf = AccentHalf
+RangeScreenTint.BlackHalf = BlackHalf
+RangeScreenTint.GoldHalf = GoldHalf
 RangeScreenTint.CenterBlend = CenterBlend
-RangeScreenTint.ShadowGradient = ShadowGradient
-RangeScreenTint.AccentGradient = AccentGradient
-RangeScreenTint.CenterGradient = CenterGradient
 RangeScreenTint.ColorCorrection = Correction
 RangeScreenTint.TargetVisible = false
-RefreshRangeScreenTintTheme()
 return true
 end
 
@@ -11140,7 +10903,7 @@ TweenInfo.new(InTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 Saturation = -1,
 Contrast = 0.16,
 Brightness = -0.035,
-TintColor = Visuals.Theme.AccentBright:Lerp(Color3.new(1, 1, 1), 0.22),
+TintColor = Color3.fromRGB(244, 240, 228),
 }
 )
 RangeScreenTint.GroupTween:Play()
@@ -11162,7 +10925,7 @@ TweenInfo.new(SettleTime, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
 Saturation = -0.94,
 Contrast = 0.12,
 Brightness = -0.02,
-TintColor = Visuals.Theme.AccentBright:Lerp(Color3.new(1, 1, 1), 0.34),
+TintColor = Color3.fromRGB(250, 246, 235),
 }
 )
 RangeScreenTint.GroupTween:Play()
@@ -11210,12 +10973,9 @@ pcall(function() RangeScreenTint.ColorCorrection:Destroy() end)
 end
 RangeScreenTint.Gui = nil
 RangeScreenTint.Group = nil
-RangeScreenTint.ShadowHalf = nil
-RangeScreenTint.AccentHalf = nil
+RangeScreenTint.BlackHalf = nil
+RangeScreenTint.GoldHalf = nil
 RangeScreenTint.CenterBlend = nil
-RangeScreenTint.ShadowGradient = nil
-RangeScreenTint.AccentGradient = nil
-RangeScreenTint.CenterGradient = nil
 RangeScreenTint.ColorCorrection = nil
 end
 
@@ -12727,6 +12487,249 @@ end
 return Target, nil
 end)
 
+State.Trickshot = {
+Active = false, Generation = 0, Status = 'OFF', Angle = 0,
+StartedAt = 0, EndsAt = 0, SavedHumanoid = nil, SavedAutoRotate = nil,
+EBLPhase = 'READY', EBLGeneration = 0, EBLStatus = 'OFF', ForceAutoRelease = false,
+MovementActive = false, MovementGeneration = 0, MovementEndsAt = 0,
+MovementStatus = 'OFF', LastRandomAngle = nil, LastFadeDirection = nil,
+}
+
+function State.Trickshot.ResolveAngle()
+local Configured = math.clamp(tonumber(CONFIG.TrickshotAngle) or 360, -2160, 2160)
+if not CONFIG.RandomTrickshotMode then return Configured end
+local Angles = { 360, 720, 1080 }
+local Pick = Angles[math.random(1, #Angles)]
+if math.random() < 0.5 then Pick = -Pick end
+State.Trickshot.LastRandomAngle = Pick
+return Pick
+end
+
+function State.Trickshot.ResolveFadeDirection(Root)
+local Mode = tostring(CONFIG.FadeawayDirection or 'Away from defender')
+local Direction
+if Mode == 'Left' then
+Direction = -Root.CFrame.RightVector
+elseif Mode == 'Right' then
+Direction = Root.CFrame.RightVector
+elseif Mode == 'Random' then
+local Pick = math.random(1, 3)
+Direction = Pick == 1 and -Root.CFrame.RightVector
+or (Pick == 2 and Root.CFrame.RightVector or -Root.CFrame.LookVector)
+elseif Mode == 'Away from defender' then
+local Defender
+pcall(function()
+local Player = State.AutoBody and State.AutoBody.FindDefender
+and select(1, State.AutoBody.FindDefender(Root))
+local Character = Player and Player.Character
+Defender = Character and safe_find(Character, 'HumanoidRootPart')
+end)
+if Defender then
+Direction = Root.Position - Defender.Position
+else
+Direction = -Root.CFrame.LookVector
+end
+else
+Direction = -Root.CFrame.LookVector
+end
+Direction = Vector3.new(Direction.X, 0, Direction.Z)
+if Direction.Magnitude <= 0.01 then Direction = Vector3.new(0, 0, 1) end
+State.Trickshot.LastFadeDirection = Mode
+return Direction.Unit
+end
+
+function State.Trickshot.CancelShotMovement(Status)
+State.Trickshot.MovementGeneration += 1
+State.Trickshot.MovementActive = false
+State.Trickshot.MovementStatus = Status or ((CONFIG.AutoFadeaway or CONFIG.AutoStop) and 'READY' or 'OFF')
+end
+
+function State.Trickshot.StartShotMovement(Character, Root)
+if not (CONFIG.AutoFadeaway or CONFIG.AutoStop) then
+State.Trickshot.MovementStatus = 'OFF'
+return false
+end
+Character = Character or LP.Character
+Root = Root or (Character and safe_find(Character, 'HumanoidRootPart'))
+local H = Character and Character:FindFirstChildOfClass('Humanoid')
+if not (Root and H and H.Health > 0) then return false end
+State.Trickshot.CancelShotMovement('STARTING')
+State.Trickshot.MovementGeneration += 1
+local Generation = State.Trickshot.MovementGeneration
+local FadeEnabled = CONFIG.AutoFadeaway == true
+local StopEnabled = CONFIG.AutoStop == true
+local Distance = math.clamp(tonumber(CONFIG.FadeawayDistance) or 4.5, 0, 12)
+local Duration = FadeEnabled
+and math.clamp(tonumber(CONFIG.FadeawayDuration) or 0.28, 0.08, 0.65)
+or 0.14
+local Direction = FadeEnabled and State.Trickshot.ResolveFadeDirection(Root) or Vector3.zero
+State.Trickshot.MovementActive = true
+State.Trickshot.MovementEndsAt = os.clock() + Duration
+State.Trickshot.MovementStatus = FadeEnabled
+and ('FADING ' .. string.upper(tostring(CONFIG.FadeawayDirection)))
+or 'QUICK STOP'
+
+task.spawn(function()
+local StartedAt = os.clock()
+local LastEased = 0
+while State.Active and State.Trickshot.MovementActive
+and State.Trickshot.MovementGeneration == Generation
+and Root and Root.Parent and H and H.Parent do
+local Alpha = math.clamp((os.clock() - StartedAt) / Duration, 0, 1)
+local Eased = Alpha * Alpha * (3 - 2 * Alpha)
+if StopEnabled then
+pcall(function()
+local Velocity = Root.AssemblyLinearVelocity
+Root.AssemblyLinearVelocity = Vector3.new(0, Velocity.Y, 0)
+H:Move(Vector3.zero, false)
+end)
+end
+if FadeEnabled and Eased > LastEased then
+local Step = Direction * Distance * (Eased - LastEased)
+pcall(function() Root.CFrame = Root.CFrame + Step end)
+end
+LastEased = Eased
+if Alpha >= 1 then break end
+RunService.Heartbeat:Wait()
+end
+if State.Trickshot.MovementGeneration ~= Generation then return end
+State.Trickshot.MovementActive = false
+State.Trickshot.MovementStatus = FadeEnabled and 'FADE COMPLETE' or 'STOPPED'
+end)
+return true
+end
+
+function State.Trickshot.CancelSpin(Status)
+State.Trickshot.Generation += 1
+State.Trickshot.Active = false
+local H = State.Trickshot.SavedHumanoid
+if H and H.Parent and State.Trickshot.SavedAutoRotate ~= nil then
+pcall(function() H.AutoRotate = State.Trickshot.SavedAutoRotate end)
+end
+State.Trickshot.SavedHumanoid, State.Trickshot.SavedAutoRotate = nil, nil
+State.Trickshot.Status = Status or (CONFIG.TrickshotEnabled and 'READY' or 'OFF')
+end
+
+function State.Trickshot.StartSpin(Character, Root)
+if not CONFIG.TrickshotEnabled then State.Trickshot.Status = 'OFF'; return false end
+if State.Trickshot.Active then State.Trickshot.CancelSpin('RESTARTING') end
+Character = Character or LP.Character
+Root = Root or (Character and safe_find(Character, 'HumanoidRootPart'))
+local H = Character and Character:FindFirstChildOfClass('Humanoid')
+if not (Character and Root and H and H.Health > 0) then
+State.Trickshot.Status = 'CHARACTER NOT READY'; return false
+end
+local Angle = State.Trickshot.ResolveAngle()
+if math.abs(Angle) < 0.01 then State.Trickshot.Status = '0 DEG - NORMAL SHOT'; return false end
+local Duration = math.clamp(tonumber(CONFIG.TrickshotDuration) or 0.28, 0.08, 1.2)
+State.Trickshot.Generation += 1
+local Generation = State.Trickshot.Generation
+State.Trickshot.Active, State.Trickshot.Angle = true, Angle
+State.Trickshot.StartedAt, State.Trickshot.EndsAt = os.clock(), os.clock() + Duration
+State.Trickshot.SavedHumanoid, State.Trickshot.SavedAutoRotate = H, H.AutoRotate
+State.Trickshot.Status = string.format('SPINNING %.0f DEG', Angle)
+H.AutoRotate = false
+local StartRotation = Root.CFrame - Root.Position
+task.spawn(function()
+while State.Active and State.Trickshot.Active and State.Trickshot.Generation == Generation
+and Root and Root.Parent and H and H.Parent do
+local A = math.clamp((os.clock() - State.Trickshot.StartedAt) / Duration, 0, 1)
+local E = A * A * (3 - 2 * A)
+pcall(function()
+Root.CFrame = CFrame.new(Root.Position) * StartRotation * CFrame.Angles(0, math.rad(Angle * E), 0)
+Root.AssemblyAngularVelocity = Vector3.zero
+end)
+if A >= 1 then break end
+RunService.Heartbeat:Wait()
+end
+if State.Trickshot.Generation ~= Generation then return end
+if Root and Root.Parent then pcall(function()
+Root.CFrame = CFrame.new(Root.Position) * StartRotation * CFrame.Angles(0, math.rad(Angle), 0)
+Root.AssemblyAngularVelocity = Vector3.zero
+end) end
+State.Trickshot.Active = false
+if H and H.Parent then pcall(function() H.AutoRotate = State.Trickshot.SavedAutoRotate ~= false end) end
+State.Trickshot.SavedHumanoid, State.Trickshot.SavedAutoRotate = nil, nil
+State.Trickshot.Status = string.format('COMPLETE %.0f DEG', Angle)
+end)
+return true
+end
+
+function State.Trickshot.WaitForStyle()
+local Deadline = math.max(
+State.Trickshot.EndsAt or 0,
+State.Trickshot.MovementEndsAt or 0,
+os.clock()) + 0.18
+while State.Active and (State.Trickshot.Active or State.Trickshot.MovementActive)
+and os.clock() < Deadline do
+RunService.Heartbeat:Wait()
+end
+return not State.Trickshot.Active and not State.Trickshot.MovementActive
+end
+
+function State.Trickshot.WaitForSpin()
+return State.Trickshot.WaitForStyle()
+end
+
+function State.Trickshot.ResetAutoEBL(Status)
+State.Trickshot.EBLGeneration += 1
+State.Trickshot.EBLPhase, State.Trickshot.ForceAutoRelease = 'READY', false
+State.Trickshot.EBLStatus = Status or (CONFIG.AutoEBL and 'READY' or 'OFF')
+end
+
+-- True means this is the blank first EBL jump and the shot pipeline must stop.
+function State.Trickshot.HandleAutoEBLJump(H)
+if not CONFIG.AutoEBL then State.Trickshot.EBLStatus = 'OFF'; return false end
+if not (H and H.Parent) then return false end
+local Phase = State.Trickshot.EBLPhase
+if Phase == 'SECOND_JUMP' then
+State.Trickshot.EBLPhase, State.Trickshot.EBLStatus = 'SHOOTING', 'SECOND JUMP - SHOOTING'
+State.Trickshot.ForceAutoRelease = true
+local G = State.Trickshot.EBLGeneration
+task.delay(3, function()
+if State.Trickshot.EBLGeneration == G and State.Trickshot.EBLPhase == 'SHOOTING' then
+State.Trickshot.ResetAutoEBL('READY')
+end end)
+return false
+end
+if Phase == 'FIRST_JUMP' or Phase == 'WAITING_FOR_LAND' then return true end
+if Phase == 'SHOOTING' then return false end
+State.Trickshot.EBLGeneration += 1
+local G = State.Trickshot.EBLGeneration
+State.Trickshot.EBLPhase, State.Trickshot.EBLStatus = 'FIRST_JUMP', 'FIRST JUMP - NO SHOT'
+State.Trickshot.ForceAutoRelease = false
+task.spawn(function()
+local T = os.clock() + 1.5
+while State.Active and CONFIG.AutoEBL and State.Trickshot.EBLGeneration == G
+and H and H.Parent and H.FloorMaterial ~= Enum.Material.Air and os.clock() < T do
+RunService.Heartbeat:Wait()
+end
+if not (State.Active and CONFIG.AutoEBL and State.Trickshot.EBLGeneration == G and H and H.Parent)
+or H.FloorMaterial ~= Enum.Material.Air then
+if State.Trickshot.EBLGeneration == G then State.Trickshot.ResetAutoEBL('READY') end
+return
+end
+State.Trickshot.EBLPhase, State.Trickshot.EBLStatus = 'WAITING_FOR_LAND', 'WAITING FOR LAND'
+T = os.clock() + 4
+while State.Active and CONFIG.AutoEBL and State.Trickshot.EBLGeneration == G
+and H and H.Parent and H.FloorMaterial == Enum.Material.Air and os.clock() < T do
+RunService.Heartbeat:Wait()
+end
+if not (State.Active and CONFIG.AutoEBL and State.Trickshot.EBLGeneration == G and H and H.Parent)
+or H.FloorMaterial == Enum.Material.Air then
+if State.Trickshot.EBLGeneration == G then State.Trickshot.ResetAutoEBL('READY') end
+return
+end
+State.Trickshot.EBLPhase, State.Trickshot.EBLStatus = 'SECOND_JUMP', 'LANDED - JUMPING NEXT FRAME'
+pcall(function() H.Jump = false end)
+RunService.Heartbeat:Wait()
+if not (State.Active and CONFIG.AutoEBL and State.Trickshot.EBLGeneration == G
+and State.Trickshot.EBLPhase == 'SECOND_JUMP' and H and H.Parent) then return end
+pcall(function() H.Jump = true; H:ChangeState(Enum.HumanoidStateType.Jumping) end)
+end)
+return true
+end
+
 State.ClickShoot = {
 Armed = false,
 Target = nil,
@@ -12804,6 +12807,12 @@ State.Humanize.Roll = nil
 State.Humanize.Tallied = true
 end
 end)
+end
+if ClickOk and CONFIG.AutoEBL and State.Trickshot.EBLPhase == 'SHOOTING' then
+local G = State.Trickshot.EBLGeneration
+State.Trickshot.EBLPhase, State.Trickshot.EBLStatus = 'COMPLETE', 'SHOT FIRED'
+State.Trickshot.ForceAutoRelease = false
+task.delay(0.35, function() if State.Trickshot.EBLGeneration == G then State.Trickshot.ResetAutoEBL('READY') end end)
 end
 State.silentShootActive = false
 return ClickOk
@@ -13161,6 +13170,15 @@ return
 end
 local Basketball = safe_find(Char, 'Basketball')
 if Basketball or not CONFIG.AimRequireBall then
+if State.Trickshot.HandleAutoEBLJump(Humanoid) then
+SilentAim.ReleasePredictionDeadline = 0
+SilentAim.ClearActorAim()
+return
+end
+if CONFIG.AutoFadeaway or CONFIG.AutoStop then
+pcall(State.Trickshot.StartShotMovement, Char, HumanoidRootPart)
+end
+if CONFIG.TrickshotEnabled then pcall(State.Trickshot.StartSpin, Char, HumanoidRootPart) end
 local groundRim, groundDist = FindConfiguredGoal()
 if groundRim then
 SilentAim.groundDist = groundDist
@@ -13195,6 +13213,7 @@ local function AttemptPeakShot()
 if PeakHandled then return end
 PeakHandled = true
 if CheckPeakJump then CheckPeakJump:Disconnect() end
+if CONFIG.TrickshotEnabled or CONFIG.AutoFadeaway then State.Trickshot.WaitForStyle() end
 
 local PeakShotAttempted = false
 local Rim, Dist = FindConfiguredGoal()
@@ -13254,7 +13273,7 @@ end
 -- Manual release: never auto-shoot at the peak. The aim target keeps
 -- re-arming every frame while airborne, so the player's own left click is
 -- the release and they own the timing.
-if CONFIG.ClickToShoot then
+if CONFIG.ClickToShoot and not State.Trickshot.ForceAutoRelease then
 State.ClickShoot.Armed = true
 State.ClickShoot.Target = JumpArmTarget
 State.ClickShoot.Status = 'ARMED - LEFT CLICK TO RELEASE'
@@ -13575,8 +13594,8 @@ end
 end
 end
 
-if LatestName == nil and type(GlobalEnv.__SILVER_SURFER_CONFIGS) == 'table' then
-for Name, Profile in pairs(GlobalEnv.__SILVER_SURFER_CONFIGS) do
+if LatestName == nil and type(GlobalEnv.__GOLDEN_EAGLE_CONFIGS) == 'table' then
+for Name, Profile in pairs(GlobalEnv.__GOLDEN_EAGLE_CONFIGS) do
 local SavedAt = type(Profile) == 'table' and tonumber(Profile.SavedAt) or 0
 if LatestName == nil or SavedAt > LatestTime then
 LatestName = tostring(Name)
@@ -13812,35 +13831,7 @@ State.AutoBody.TrackedHumanoid = HumanoidObject
 State.AutoBody.OriginalAutoRotate = HumanoidObject.AutoRotate
 end
 if HumanoidObject.AutoRotate then HumanoidObject.AutoRotate = false end
-local Method = CONFIG.AutoBodyMethod or 'CFrame Rotation'
-if Method == 'AlignOrientation' or Method == 'BodyGyro' then
-local Root = HumanoidObject.Parent
-and safe_find(HumanoidObject.Parent, 'HumanoidRootPart')
-if Root then
-if Method == 'AlignOrientation' and not Root:FindFirstChild('GEAutoBodyAlign') then
-pcall(function()
-local Attachment = Instance.new('Attachment')
-Attachment.Name = 'GEAutoBodyAttachment'
-Attachment.Parent = Root
-local Align = Instance.new('AlignOrientation')
-Align.Name = 'GEAutoBodyAlign'
-Align.Attachment0 = Attachment
-Align.MaxTorque = math.huge
-Align.Responsiveness = 30
-Align.Parent = Root
-end)
-elseif Method == 'BodyGyro' and not Root:FindFirstChild('GEAutoBodyGyro') then
-pcall(function()
-local Gyro = Instance.new('BodyGyro')
-Gyro.Name = 'GEAutoBodyGyro'
-Gyro.MaxTorque = Vector3.new(0, math.huge, 0)
-Gyro.P = 3000
-Gyro.D = 500
-Gyro.Parent = Root
-end)
-end
-end
-end
+CONFIG.AutoBodyMethod = 'CFrame Rotation'
 end
 
 function State.AutoBody.ResetRuntime()
@@ -19035,9 +19026,9 @@ State.PassRange = {
 Highlight = nil,
 Maximum = nil,
 ReceiverInRange = false,
-FillA = Color3.fromRGB(191, 199, 209),
-FillB = Color3.fromRGB(247, 250, 252),
-OutlineColor = Color3.fromRGB(11, 12, 14),
+FillA = Color3.fromRGB(212, 175, 55),
+FillB = Color3.fromRGB(255, 226, 122),
+OutlineColor = Color3.fromRGB(7, 7, 8),
 }
 
 function State.PassRange.GetMaximum()
@@ -19126,9 +19117,8 @@ local Range = State.PassRange
 local Highlight = Range.Highlight
 if not (Range.ReceiverInRange and Highlight and Highlight.Parent and Highlight.Enabled) then return end
 local Pulse = (math.sin(os.clock() * 4.2) + 1) * 0.5
-local T = Visuals.Theme
-Highlight.FillColor = T.Accent:Lerp(T.AccentBright, Pulse)
-Highlight.OutlineColor = T.Background
+Highlight.FillColor = Range.FillA:Lerp(Range.FillB, Pulse)
+Highlight.OutlineColor = Range.OutlineColor
 Highlight.FillTransparency = 0.76 - Pulse * 0.12
 Highlight.OutlineTransparency = 0.03
 end
@@ -19145,8 +19135,8 @@ while #State.PassLabels > Count do
 DestroyPassLabel(table.remove(State.PassLabels))
 end
 
-local AccentAlpha = (math.sin(os.clock() * 1.8) + 1) * 0.5
-local Accent = Visuals.Theme.Accent:Lerp(Visuals.Theme.AccentBright, AccentAlpha)
+local GoldAlpha = (math.sin(os.clock() * 1.8) + 1) * 0.5
+local Accent = Color3.fromRGB(212, 175, 55):Lerp(Color3.fromRGB(255, 226, 122), GoldAlpha)
 for Index = 1, Count do
 local Teammate = Teammates[Index]
 local Head = Teammate.Character and Teammate.Character:FindFirstChild('Head')
@@ -19376,20 +19366,20 @@ Button.Name = 'Pass' .. tostring(Index)
 Button.AnchorPoint = Vector2.new(1, 1)
 Button.Position = UDim2.new(1, -18 - ((Index - 1) * 48), 1, -92)
 Button.Size = UDim2.fromOffset(42, 42)
-Button.BackgroundColor3 = Visuals.Theme.Background
+Button.BackgroundColor3 = Color3.fromRGB(15, 13, 8)
 Button.BackgroundTransparency = 0.12
 Button.BorderSizePixel = 0
 Button.AutoButtonColor = true
 Button.Font = Enum.Font.Code
 Button.Text = tostring(Index)
-Button.TextColor3 = Visuals.Theme.Accent
+Button.TextColor3 = Color3.fromRGB(212, 175, 55)
 Button.TextSize = 18
 Button.Parent = Gui
 local Corner = Instance.new('UICorner')
 Corner.CornerRadius = UDim.new(1, 0)
 Corner.Parent = Button
 local Stroke = Instance.new('UIStroke')
-Stroke.Color = Visuals.Theme.Accent
+Stroke.Color = Color3.fromRGB(212, 175, 55)
 Stroke.Thickness = 1.5
 Stroke.Parent = Button
 Button.Activated:Connect(function() StartTeammatePass(Index) end)
@@ -22625,23 +22615,23 @@ function State.BuildSilentAimHub()
 local HttpService = game:GetService('HttpService')
 local InterfaceFile = 'SilverSurfer_Interface.json'
 local InterfaceDefaults = {
-Version = 8,
+Version = 7,
 ThemePreset = 'Silver Surfer',
 Theme = {
--- Silver Surfer: restrained Dear ImGui graphite with metallic silver focus states.
-Background = '#0B0C0E',
-Panel = '#111318',
-Surface = '#1A1D23',
-SurfaceHover = '#262A32',
-Border = '#4B515C',
-Text = '#F4F7FA',
-Muted = '#9DA4AE',
-Off = '#252932',
-Bad = '#E86670',
-Success = '#67C99A',
-Warning = '#D7B86A',
-Accent = '#BFC7D1',
-AccentBright = '#F7FAFC',
+-- Silver Surfer light mode: polished silver panels with dark chrome text.
+Background = '#EEF1F4',
+Panel = '#F8FAFC',
+Surface = '#DEE3E8',
+SurfaceHover = '#CDD4DB',
+Border = '#A8B1BC',
+Text = '#18202A',
+Muted = '#5B6570',
+Off = '#C6CDD5',
+Bad = '#B8323E',
+Success = '#24734A',
+Warning = '#8A6512',
+Accent = '#8793A1',
+AccentBright = '#3A4653',
 },
 Scale = 1,
 WindowTransparency = 0,
@@ -22668,6 +22658,11 @@ HiddenTabs = {},
 TabOrder = {},
 }
 local ThemePresets = {
+['Silver Surfer'] = {
+Background = '#EEF1F4', Panel = '#F8FAFC', Surface = '#DEE3E8', SurfaceHover = '#CDD4DB',
+Border = '#A8B1BC', Text = '#18202A', Muted = '#5B6570', Off = '#C6CDD5', Bad = '#B8323E',
+Success = '#24734A', Warning = '#8A6512', Accent = '#8793A1', AccentBright = '#3A4653',
+},
 ['Dear ImGui Dark'] = InterfaceDefaults.Theme,
 ['ImGui Classic'] = {
 Background = '#0A0A14', Panel = '#12121F', Surface = '#3A3A6B', SurfaceHover = '#5050A0',
@@ -22692,12 +22687,12 @@ Success = '#9BE04A', Warning = '#FFC533', Accent = '#FFB000', AccentBright = '#F
 Linoria = {
 Background = '#0D0D0D', Panel = '#151515', Surface = '#1B1B1B', SurfaceHover = '#24211A',
 Border = '#3B3B3B', Text = '#F0F0F0', Muted = '#A7A7A7', Off = '#242424', Bad = '#E45A62',
-Success = '#63C58A', Warning = '#D9B64B', Accent = '#BFC7D1', AccentBright = '#F7FAFC',
+Success = '#63C58A', Warning = '#D9B64B', Accent = '#D4AF37', AccentBright = '#FFE27A',
 },
-['Silver Surfer'] = {
+['Silver Surfer Dark'] = {
 Background = '#0B0C0E', Panel = '#111318', Surface = '#1A1D23', SurfaceHover = '#262A32',
-Border = '#4B515C', Text = '#F4F7FA', Muted = '#9DA4AE', Off = '#252932', Bad = '#E86670',
-Success = '#67C99A', Warning = '#D7B86A', Accent = '#BFC7D1', AccentBright = '#F7FAFC',
+Border = '#4B515C', Text = '#F4F7FA', Muted = '#9DA4AE', Off = '#252932', Bad = '#E45A62',
+Success = '#63C58A', Warning = '#D9B64B', Accent = '#BFC7D1', AccentBright = '#F7FAFC',
 },
 Midnight = {
 Background = '#070A12', Panel = '#0C1220', Surface = '#151D2D', SurfaceHover = '#202B40',
@@ -23091,7 +23086,7 @@ local InterfaceConfig = DeepCopy(InterfaceDefaults)
 local function NormalizeInterfaceConfig()
 local LoadedVersion = tonumber(InterfaceConfig.Version) or 0
 InterfaceConfig.Version = InterfaceDefaults.Version
-if LoadedVersion < 8 then
+if LoadedVersion < 7 then
 InterfaceConfig.ThemePreset = 'Silver Surfer'
 InterfaceConfig.Theme = DeepCopy(ThemePresets['Silver Surfer'])
 InterfaceConfig.Font = 'Code'
@@ -23147,15 +23142,15 @@ InterfaceConfig.Theme[Role] = NormalizeHex(InterfaceConfig.Theme[Role], DefaultH
 end
 end
 local function LoadInterfaceConfig()
-local Loaded = type(GlobalEnv.__SILVER_SURFER_INTERFACE_CONFIG) == 'table'
-and GlobalEnv.__SILVER_SURFER_INTERFACE_CONFIG or nil
+local Loaded = type(GlobalEnv.__GOLDEN_EAGLE_INTERFACE_CONFIG) == 'table'
+and GlobalEnv.__GOLDEN_EAGLE_INTERFACE_CONFIG or nil
 if Loaded then MergeConfig(InterfaceConfig, Loaded) end
 NormalizeInterfaceConfig()
 end
 LoadInterfaceConfig()
 
 local function SaveInterfaceConfig()
-GlobalEnv.__SILVER_SURFER_INTERFACE_CONFIG = DeepCopy(InterfaceConfig)
+GlobalEnv.__GOLDEN_EAGLE_INTERFACE_CONFIG = DeepCopy(InterfaceConfig)
 if type(writefile) ~= 'function' then return false end
 local Success, Encoded = pcall(HttpService.JSONEncode, HttpService, InterfaceConfig)
 if not Success then return false end
@@ -23178,9 +23173,9 @@ or Color3.fromRGB(255, 225, 125)
 Theme.White = Theme.White or Visuals.Theme.White or Color3.fromRGB(255, 255, 255)
 Theme.Muted = Theme.Muted or Visuals.Theme.Muted or Color3.fromRGB(146, 146, 155)
 Theme.Background = Theme.Background or Visuals.Theme.Background or Color3.fromRGB(8, 8, 9)
-Theme.Accent = Theme.Accent or Visuals.Theme.Accent or Color3.fromRGB(191, 199, 209)
+Theme.Accent = Theme.Accent or Visuals.Theme.Accent or Color3.fromRGB(212, 175, 55)
 Theme.AccentBright = Theme.AccentBright or Visuals.Theme.AccentBright
-or Color3.fromRGB(247, 250, 252)
+or Color3.fromRGB(255, 226, 122)
 Visuals.Theme = Theme
 if State.Outline then State.Outline.Color = Theme.Accent end
 
@@ -23272,8 +23267,6 @@ InterfaceConfig.Theme[Role] = Hex
 Theme[Role] = HexToColor(Hex, Theme[Role] or HexToColor(DefaultHex))
 end
 if State.Outline then State.Outline.Color = Theme.Accent end
-pcall(RefreshRangeScreenTintTheme)
-if State.MobilePass and State.MobilePass.Refresh then pcall(State.MobilePass.Refresh) end
 for Index = #HubUI.Accents, 1, -1 do
 local Binding = HubUI.Accents[Index]
 if Binding.Object and Binding.Object.Parent then
@@ -23341,7 +23334,7 @@ end
 
 HubUI.ActiveTweens = setmetatable({}, { __mode = 'k' })
 
--- ===== DEAR IMGUI MOTION SYSTEM =====
+-- ===== LINORIA MOTION SYSTEM =====
 -- Five duration tokens and one easing voice replace per-widget timing drift.
 HubUI.Motion = {
 Duration = { Micro = 0.10, Fast = 0.14, Base = 0.20, Slow = 0.28, Panel = 0.38 },
@@ -23493,14 +23486,14 @@ end
 end
 
 local GuiParent = LP:FindFirstChildOfClass('PlayerGui') or LP:WaitForChild('PlayerGui')
-local OldGui = GuiParent:FindFirstChild('SILVER_SURFER_HUB_UI')
+local OldGui = GuiParent:FindFirstChild('GOLDEN_EAGLE_HUB_UI')
 or GuiParent:FindFirstChild('PRISM_HUB_UI')
 or GuiParent:FindFirstChild('OBLITERATE_HUB_V2_UI')
 or GuiParent:FindFirstChild('HOOPZ_SilentAim_UI')
 if OldGui then pcall(function() OldGui:Destroy() end) end
 
 local ScreenGui = New('ScreenGui', {
-Name = 'SILVER_SURFER_HUB_UI',
+Name = 'GOLDEN_EAGLE_HUB_UI',
 DisplayOrder = 10000,
 IgnoreGuiInset = true,
 ResetOnSpawn = false,
@@ -23542,10 +23535,10 @@ LineJoinMode = Enum.LineJoinMode.Miter,
 }, Intro)
 local IntroStrokeGradient = New('UIGradient', {
 Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0, Color3.fromRGB(55, 60, 68)),
-ColorSequenceKeypoint.new(0.35, Color3.fromRGB(191, 199, 209)),
-ColorSequenceKeypoint.new(0.55, Color3.fromRGB(247, 250, 252)),
-ColorSequenceKeypoint.new(1, Color3.fromRGB(55, 60, 68)),
+ColorSequenceKeypoint.new(0, Color3.fromRGB(66, 44, 0)),
+ColorSequenceKeypoint.new(0.35, Color3.fromRGB(212, 175, 55)),
+ColorSequenceKeypoint.new(0.55, Color3.fromRGB(255, 226, 122)),
+ColorSequenceKeypoint.new(1, Color3.fromRGB(66, 44, 0)),
 }),
 Rotation = 12,
 }, IntroStroke)
@@ -23555,7 +23548,7 @@ Size = UDim2.new(1, 0, 0, 30),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = 'SILVER SURFER',
-TextColor3 = Theme.AccentBright,
+TextColor3 = Theme.Accent,
 TextSize = 24,
 ZIndex = 51,
 }, Intro)
@@ -23564,7 +23557,7 @@ Position = UDim2.fromOffset(0, 42),
 Size = UDim2.new(1, 0, 0, 15),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = 'DEAR IMGUI  //  SILVER EDITION',
+Text = 'EST. 2026  //  PRIVATE EDITION',
 TextColor3 = Theme.Muted,
 TextSize = 9,
 ZIndex = 51,
@@ -23596,9 +23589,9 @@ ZIndex = 52,
 }, IntroTrack)
 local IntroFillGradient = New('UIGradient', {
 Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0, Color3.fromRGB(74, 81, 92)),
-ColorSequenceKeypoint.new(0.55, Color3.fromRGB(247, 250, 252)),
-ColorSequenceKeypoint.new(1, Color3.fromRGB(148, 158, 170)),
+ColorSequenceKeypoint.new(0, Color3.fromRGB(92, 61, 0)),
+ColorSequenceKeypoint.new(0.55, Color3.fromRGB(255, 226, 122)),
+ColorSequenceKeypoint.new(1, Color3.fromRGB(184, 134, 11)),
 }),
 }, IntroFill)
 -- Live percentage, right-aligned to the progress track.
@@ -23619,13 +23612,13 @@ Position = UDim2.fromOffset(0, 145),
 Size = UDim2.new(1, 0, 0, 18),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = 'RIDE THE SILVER WAVE',
+Text = 'RISE ABOVE',
 TextColor3 = Theme.Muted,
 TextSize = 9,
 ZIndex = 51,
 }, Intro)
 
-local SavedWindowPosition = GlobalEnv.__SILVER_SURFER_UI_POSITION
+local SavedWindowPosition = GlobalEnv.__GOLDEN_EAGLE_UI_POSITION
 local PreferredWindowPosition = UDim2.fromScale(0.5, 0.5)
 if type(SavedWindowPosition) == 'table' then
 PreferredWindowPosition = UDim2.new(
@@ -23661,12 +23654,12 @@ Enabled = false,
 Color = ColorSequence.new({
 ColorSequenceKeypoint.new(0.00, Color3.fromRGB(0, 0, 0)),
 ColorSequenceKeypoint.new(0.16, Color3.fromRGB(0, 0, 0)),
-ColorSequenceKeypoint.new(0.30, Color3.fromRGB(92, 100, 112)),
-ColorSequenceKeypoint.new(0.42, Color3.fromRGB(247, 250, 252)),
+ColorSequenceKeypoint.new(0.30, Color3.fromRGB(126, 87, 7)),
+ColorSequenceKeypoint.new(0.42, Color3.fromRGB(255, 226, 122)),
 ColorSequenceKeypoint.new(0.54, Color3.fromRGB(0, 0, 0)),
 ColorSequenceKeypoint.new(0.70, Color3.fromRGB(0, 0, 0)),
-ColorSequenceKeypoint.new(0.84, Color3.fromRGB(148, 158, 170)),
-ColorSequenceKeypoint.new(0.94, Color3.fromRGB(247, 250, 252)),
+ColorSequenceKeypoint.new(0.84, Color3.fromRGB(184, 134, 11)),
+ColorSequenceKeypoint.new(0.94, Color3.fromRGB(255, 226, 122)),
 ColorSequenceKeypoint.new(1.00, Color3.fromRGB(0, 0, 0)),
 }),
 Rotation = 0,
@@ -23710,8 +23703,8 @@ end
 if HubUI.TitleGradient and HubUI.TitleGradient.Parent then
 HubUI.TitleGradient.Color = ColorSequence.new(Color3.new(1, 1, 1))
 end
-if HubUI.SurferMark and HubUI.SurferMark.Parent then
-HubUI.SurferMark.ImageColor3 = Theme.Accent
+if HubUI.EagleIcon and HubUI.EagleIcon.Parent then
+HubUI.EagleIcon.ImageColor3 = Theme.Accent
 end
 for Index = #(HubUI.GroupGradients or {}), 1, -1 do
 local Gradient = HubUI.GroupGradients[Index]
@@ -23744,7 +23737,7 @@ HubUI.Window = Main
 New('UICorner', { CornerRadius = UDim.new(0, 2) }, Main)
 local MainScale = New('UIScale', { Scale = 1 }, Main)
 local MainAccentLine = New('Frame', {
-Name = 'ImGuiSilverAccent', Position = UDim2.fromOffset(1, 1),
+Name = 'LinoriaAccent', Position = UDim2.fromOffset(1, 1),
 Size = UDim2.new(1, -2, 0, 2), BackgroundColor3 = Theme.Accent,
 BorderSizePixel = 0, ZIndex = 101,
 }, Main)
@@ -23767,18 +23760,18 @@ BackgroundColor3 = Theme.Border,
 BorderSizePixel = 0,
 ZIndex = 4,
 }, Topbar)
-local SurferMark = New('ImageLabel', {
+local EagleIcon = New('ImageLabel', {
 Position = UDim2.fromOffset(0, 0),
 Size = UDim2.fromOffset(0, 0),
 BackgroundTransparency = 1,
--- Reserved zero-size theme mark. It stays hidden until a Silver Surfer icon is assigned.
-Image = '',
+-- This original eagle asset is publicly loadable; the later replacement did not render reliably.
+Image = 'rbxassetid://100996548484098',
 -- Theme-bound tint: New() registers ImageColor3 against the Accent role.
 ImageColor3 = Theme.Accent,
 ScaleType = Enum.ScaleType.Fit,
 ZIndex = 5,
 }, Topbar)
-HubUI.SurferMark = SurferMark
+HubUI.EagleIcon = EagleIcon
 local HubTitle = New('TextLabel', {
 Position = UDim2.fromOffset(7, 0),
 Size = UDim2.fromOffset(250, 27),
@@ -23919,7 +23912,7 @@ Name = 'File', Items = {
 { 'Reset Dear ImGui theme', function()
 InterfaceConfig.ThemePreset = 'Silver Surfer'
 HubUI.ApplyTheme(ThemePresets['Silver Surfer'], true)
-MenuStatus('[file] Silver Surfer graphite theme restored')
+MenuStatus('[file] Linoria black/gold restored')
 end },
 { 'Hide window', function() Main.Visible = false end },
 }},
@@ -23943,7 +23936,7 @@ Name = 'View', Items = {
 Name = 'Window', Items = {
 { 'Center window', function()
 Main.Position = UDim2.fromScale(0.5, 0.5)
-GlobalEnv.__SILVER_SURFER_UI_POSITION = nil
+GlobalEnv.__GOLDEN_EAGLE_UI_POSITION = nil
 MenuStatus('[window] centered')
 end },
 { 'Scale 100%', function()
@@ -24339,7 +24332,7 @@ table.insert(TabOrder, Definition.Name)
 table.insert(InterfaceConfig.TabOrder, Definition.Name)
 end
 
-local SavedTab = tostring(GlobalEnv.__SILVER_SURFER_UI_TAB or 'Aim')
+local SavedTab = tostring(GlobalEnv.__GOLDEN_EAGLE_UI_TAB or 'Aim')
 if not Pages[SavedTab] or (InterfaceConfig.HiddenTabs[SavedTab] and SavedTab ~= 'Interface') then
 SavedTab = 'Interface'
 for _, Name in ipairs(TabOrder) do
@@ -24540,7 +24533,7 @@ local PreviousName = HubUI.ActiveTab
 local PreviousPage = Pages[PreviousName]
 local NextPage = Pages[Name]
 HubUI.ActiveTab = Name
-GlobalEnv.__SILVER_SURFER_UI_TAB = Name
+GlobalEnv.__GOLDEN_EAGLE_UI_TAB = Name
 EnsureTabVisible(Name)
 
 PageLabelSerial += 1
@@ -24637,7 +24630,7 @@ HubUI.ApplyTheme(ThemePresets[PresetName], true)
 SetTerminalStatus('[theme] ' .. PresetName, true)
 else SetTerminalStatus('[error] unknown theme', false) end
 elseif Command == 'clear' then
-SetTerminalStatus('[ready]  DEAR IMGUI / SILVER', true)
+SetTerminalStatus('[ready]  LINORIA / GOLD', true)
 elseif Command == 'close' or Command == 'hide' then
 Main.Visible = false
 else
@@ -25060,7 +25053,7 @@ System = CreateGroup('Transfer & Lifecycle', Pages.Configs, UDim2.fromOffset(Rig
 
 local StaticGradientLayer = New('Frame', {
 __SkipThemeBinding = true,
-Name = 'StaticSilverThemeGradient', Size = UDim2.fromScale(1, 1),
+Name = 'StaticBlackGoldGradient', Size = UDim2.fromScale(1, 1),
 -- Visible themed backdrop beneath the now-translucent feature panels.
 BackgroundColor3 = Theme.Background, BackgroundTransparency = 0.10,
 BorderSizePixel = 0, Active = false, Visible = true, ZIndex = 2,
@@ -25913,7 +25906,7 @@ return Button
 end
 
 local ThemePresetNames = {
-'Silver Surfer', 'Silver Surfer', 'Midnight', 'Crimson', 'Emerald', 'Arctic', 'Purple Neon', 'Monochrome', 'High Contrast',
+'Silver Surfer', 'Linoria', 'Midnight', 'Crimson', 'Emerald', 'Arctic', 'Purple Neon', 'Monochrome', 'High Contrast',
 'Solar Flare', 'Oceanic', 'Cyber Lime', 'Rose Quartz', 'Sakura Night', 'Tangerine', 'Cobalt', 'Teal Circuit',
 'Lavender Mist', 'Sandstone', 'Forest Dusk', 'Ice Mint', 'Cherry Cola', 'Deep Space', 'Synthwave', 'Vaporwave',
 'Amber Terminal', 'Matrix', 'Nordic', 'Coffee', 'Slate Blue', 'Coral Reef', 'Royal Velvet', 'Toxic Purple',
@@ -27169,9 +27162,9 @@ end, 145
 -- Named custom-goal presets persist separately so effects can be switched
 -- without repeatedly pasting Lua into the editor.
 HubUI.CustomGoalPresetFile = 'SilverSurfer_GoalEffectPresets.json'
-HubUI.CustomGoalPresets = type(GlobalEnv.__SILVER_SURFER_GOAL_EFFECT_PRESETS) == 'table'
-and GlobalEnv.__SILVER_SURFER_GOAL_EFFECT_PRESETS or {}
-GlobalEnv.__SILVER_SURFER_GOAL_EFFECT_PRESETS = HubUI.CustomGoalPresets
+HubUI.CustomGoalPresets = type(GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS) == 'table'
+and GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS or {}
+GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS = HubUI.CustomGoalPresets
 HubUI.SanitizeCustomGoalPresetName = function(Value)
 Value = tostring(Value or ''):gsub('[^%w _%-]', '')
 Value = Value:match('^%s*(.-)%s*$') or ''
@@ -27199,7 +27192,7 @@ end
 end
 end
 HubUI.WriteCustomGoalPresets = function()
-GlobalEnv.__SILVER_SURFER_GOAL_EFFECT_PRESETS = HubUI.CustomGoalPresets
+GlobalEnv.__GOLDEN_EAGLE_GOAL_EFFECT_PRESETS = HubUI.CustomGoalPresets
 if type(writefile) ~= 'function' then return false end
 local EncodeOk, Encoded = pcall(State.Utility.HttpService.JSONEncode,
 State.Utility.HttpService, HubUI.CustomGoalPresets)
@@ -28100,9 +28093,9 @@ CONFIG.ShotSoundEnabled = Value == true
 end)
 
 HubUI.BallPresetFile = 'SilverSurfer_BallPresets.json'
-HubUI.BallPresets = type(GlobalEnv.__SILVER_SURFER_BALL_PRESETS) == 'table'
-and GlobalEnv.__SILVER_SURFER_BALL_PRESETS or {}
-GlobalEnv.__SILVER_SURFER_BALL_PRESETS = HubUI.BallPresets
+HubUI.BallPresets = type(GlobalEnv.__GOLDEN_EAGLE_BALL_PRESETS) == 'table'
+and GlobalEnv.__GOLDEN_EAGLE_BALL_PRESETS or {}
+GlobalEnv.__GOLDEN_EAGLE_BALL_PRESETS = HubUI.BallPresets
 
 HubUI.SanitizeBallPresetName = function(Value)
 Value = tostring(Value or ''):gsub('[^%w _%-]', '')
@@ -28137,7 +28130,7 @@ end
 end
 
 HubUI.WriteBallPresets = function()
-GlobalEnv.__SILVER_SURFER_BALL_PRESETS = HubUI.BallPresets
+GlobalEnv.__GOLDEN_EAGLE_BALL_PRESETS = HubUI.BallPresets
 if type(writefile) ~= 'function' then return false end
 local EncodeOk, Encoded = pcall(State.Utility.HttpService.JSONEncode,
 State.Utility.HttpService, HubUI.BallPresets)
@@ -28394,81 +28387,28 @@ State.LocalCosmeticExtras.DescribeChatTagStyles(),
 function(Value) State.LocalCosmeticExtras.ToggleChatTagStyle(Value, true) end, 130
 )
 
-
--- Universal cosmetic Lua launches directly into the live editor. The old
--- The separate preview panel was removed: effects can be saved and applied to the
--- actual local character immediately.
-do
-local LuaButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 263), Size = UDim2.new(1, -16, 0, 28),
-BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
-Font = Enum.Font.Code, Text = '</> CUSTOM COSMETIC LUA  /  LIVE', TextColor3 = Theme.AccentBright,
-TextSize = 9, ZIndex = 12,
-}, CosmeticsGroup)
-AccentStroke(LuaButton, 1, 0.12)
-
--- One editor for every cosmetic category, with independent source per category.
-local LuaOverlay=New('CanvasGroup',{Name='UniversalCosmeticLuaEditor',Size=UDim2.fromScale(1,1),BackgroundColor3=Theme.Background,
-BackgroundTransparency=0.12,BorderSizePixel=0,Visible=false,GroupTransparency=1,Active=true,ZIndex=360},Main)
-local LuaCard=New('Frame',{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(590,480),
-BackgroundColor3=Theme.Panel,BorderSizePixel=0,ZIndex=361},LuaOverlay); AccentStroke(LuaCard,1.5,0.04)
-New('TextLabel',{Position=UDim2.fromOffset(14,9),Size=UDim2.new(1,-28,0,20),BackgroundTransparency=1,Font=Enum.Font.Code,
-Text='UNIVERSAL COSMETIC LUA  //  ALL CATEGORIES',TextColor3=Theme.Text,TextSize=13,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=362},LuaCard)
-local CategoryIndex=table.find(State.Cosmetics.CustomLua.Categories,CONFIG.CustomCosmeticLuaCategory) or 1
-local Category=New('TextButton',{Position=UDim2.fromOffset(14,39),Size=UDim2.fromOffset(250,27),BackgroundColor3=Theme.Surface,
-BorderSizePixel=0,AutoButtonColor=false,Font=Enum.Font.Code,Text='CATEGORY  < '..State.Cosmetics.CustomLua.Categories[CategoryIndex]..' >',
-TextColor3=Theme.AccentBright,TextSize=9,ZIndex=362},LuaCard); AccentStroke(Category,1,0.1)
-local Enabled=New('TextButton',{Position=UDim2.fromOffset(274,39),Size=UDim2.fromOffset(144,27),BackgroundColor3=Theme.Surface,
-BorderSizePixel=0,AutoButtonColor=false,Font=Enum.Font.Code,Text='',TextColor3=Theme.Text,TextSize=9,ZIndex=362},LuaCard); AccentStroke(Enabled,1,0.1)
-local CloseLua=New('TextButton',{Position=UDim2.fromOffset(428,39),Size=UDim2.fromOffset(148,27),BackgroundColor3=Theme.Surface,
-BorderSizePixel=0,AutoButtonColor=false,Font=Enum.Font.Code,Text='CLOSE',TextColor3=Theme.Text,TextSize=9,ZIndex=362},LuaCard); DarkStroke(CloseLua)
-local Code=New('TextBox',{Position=UDim2.fromOffset(14,78),Size=UDim2.new(1,-28,0,310),BackgroundColor3=Theme.Background,
-BorderSizePixel=0,ClearTextOnFocus=false,MultiLine=true,TextWrapped=false,TextEditable=true,ClipsDescendants=true,
-Font=Enum.Font.Code,PlaceholderText='-- Live: Context.Character, Context.Ball, Context.Selection, Context.Services, Context.Theme',
-PlaceholderColor3=Theme.Muted,Text='',TextColor3=Theme.Text,TextSize=10,TextXAlignment=Enum.TextXAlignment.Left,
-TextYAlignment=Enum.TextYAlignment.Top,ZIndex=362},LuaCard); DarkStroke(Code)
-New('UIPadding',{PaddingLeft=UDim.new(0,8),PaddingRight=UDim.new(0,8),PaddingTop=UDim.new(0,7)},Code)
-local LuaStatus=New('TextLabel',{Position=UDim2.fromOffset(14,394),Size=UDim2.new(1,-28,0,18),BackgroundTransparency=1,
-Font=Enum.Font.Code,Text='READY',TextColor3=Theme.Muted,TextSize=9,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=362},LuaCard)
-local function EditorButton(X,W,Text) local B=New('TextButton',{Position=UDim2.fromOffset(X,426),Size=UDim2.fromOffset(W,36),BackgroundColor3=Theme.Surface,
-BorderSizePixel=0,AutoButtonColor=false,Font=Enum.Font.Code,Text=Text,TextColor3=Theme.Text,TextSize=9,ZIndex=362},LuaCard);AccentStroke(B,1,0.1);return B end
-local Save=EditorButton(14,176,'SAVE SOURCE'); local Run=EditorButton(199,176,'RUN LIVE'); local Clear=EditorButton(384,192,'CLEAR')
-local function CurrentCategory() return State.Cosmetics.CustomLua.Categories[CategoryIndex] end
-local function LoadCategory() local Name=CurrentCategory();CONFIG.CustomCosmeticLuaCategory=Name;Category.Text='CATEGORY  < '..Name..' >';
-CONFIG.CustomCosmeticLuaSources=type(CONFIG.CustomCosmeticLuaSources)=='table' and CONFIG.CustomCosmeticLuaSources or {};Code.Text=tostring(CONFIG.CustomCosmeticLuaSources[Name] or '');end
-local function PaintEnabled() Enabled.Text=CONFIG.CustomCosmeticLuaEnabled~=false and '[x] LUA ENABLED' or '[ ] LUA DISABLED';Enabled.TextColor3=CONFIG.CustomCosmeticLuaEnabled~=false and Theme.Success or Theme.Muted end
-GiveSignal(Category.MouseButton1Click:Connect(function() CategoryIndex=CategoryIndex%#State.Cosmetics.CustomLua.Categories+1;LoadCategory() end))
-GiveSignal(Enabled.MouseButton1Click:Connect(function() CONFIG.CustomCosmeticLuaEnabled=not(CONFIG.CustomCosmeticLuaEnabled~=false);PaintEnabled() end))
-GiveSignal(Save.MouseButton1Click:Connect(function() local Name=CurrentCategory();local Fn,Err=State.Cosmetics.CompileCustomLua(Name,Code.Text);if not Fn then LuaStatus.Text='COMPILE ERROR: '..tostring(Err);LuaStatus.TextColor3=Theme.Bad;return end;CONFIG.CustomCosmeticLuaSources[Name]=Code.Text;LuaStatus.Text='SAVED  //  '..string.upper(Name);LuaStatus.TextColor3=Theme.Success end))
-GiveSignal(Run.MouseButton1Click:Connect(function() CONFIG.CustomCosmeticLuaSources[CurrentCategory()]=Code.Text;local Ok,Err=State.Cosmetics.RunCustomLua(CurrentCategory(),LP.Character,false,nil);LuaStatus.Text=Ok and 'RAN LIVE SUCCESSFULLY' or ('RUNTIME ERROR: '..tostring(Err));LuaStatus.TextColor3=Ok and Theme.Success or Theme.Bad end))
-GiveSignal(Clear.MouseButton1Click:Connect(function() Code.Text='';CONFIG.CustomCosmeticLuaSources[CurrentCategory()]='';LuaStatus.Text='SOURCE CLEARED';LuaStatus.TextColor3=Theme.Muted end))
-local function SetLuaVisible(Value) LuaOverlay.Visible=Value;LuaOverlay.GroupTransparency=Value and 0 or 1;if Value then LoadCategory();PaintEnabled() else Code:ReleaseFocus() end end
-GiveSignal(LuaButton.MouseButton1Click:Connect(function() SetLuaVisible(true) end));GiveSignal(CloseLua.MouseButton1Click:Connect(function() SetLuaVisible(false) end))
-HubUI.Controls.UniversalCosmeticLua={SearchRoot=LuaButton,SearchParent=CosmeticsGroup,SearchLabel='Custom Lua for every cosmetic category',Kind='Action',Trigger=function() SetLuaVisible(true) end}
-end
-
-CreateSectionHeader(CosmeticsGroup, 311, 'Profile logos')
-HubUI.Controls.LogoVIP = CreateCheckbox(CosmeticsGroup, 331, 'VIP', State.LocalLogos.VIP, function(Value) State.Cosmetics.SetLocalLogoSpoof('VIP', Value) end)
-HubUI.Controls.LogoYoutube = CreateCheckbox(CosmeticsGroup, 353, 'YouTube', State.LocalLogos.Youtuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('Youtuber', Value) end)
-HubUI.Controls.LogoTwitch = CreateCheckbox(CosmeticsGroup, 375, 'Twitch', State.LocalLogos.Twitch, function(Value) State.Cosmetics.SetLocalLogoSpoof('Twitch', Value) end)
-HubUI.Controls.LogoBooster = CreateCheckbox(CosmeticsGroup, 397, 'Booster', State.LocalLogos.Booster, function(Value) State.Cosmetics.SetLocalLogoSpoof('Booster', Value) end)
-HubUI.Controls.LogoTester = CreateCheckbox(CosmeticsGroup, 419, 'Tester', State.LocalLogos.Tester, function(Value) State.Cosmetics.SetLocalLogoSpoof('Tester', Value) end)
-HubUI.Controls.LogoStaff = CreateCheckbox(CosmeticsGroup, 441, 'Staff', State.LocalLogos.Staff, function(Value) State.Cosmetics.SetLocalLogoSpoof('Staff', Value) end)
+CreateSectionHeader(CosmeticsGroup, 263, 'Profile logos')
+HubUI.Controls.LogoVIP = CreateCheckbox(CosmeticsGroup, 283, 'VIP', State.LocalLogos.VIP, function(Value) State.Cosmetics.SetLocalLogoSpoof('VIP', Value) end)
+HubUI.Controls.LogoYoutube = CreateCheckbox(CosmeticsGroup, 305, 'YouTube', State.LocalLogos.Youtuber, function(Value) State.Cosmetics.SetLocalLogoSpoof('Youtuber', Value) end)
+HubUI.Controls.LogoTwitch = CreateCheckbox(CosmeticsGroup, 327, 'Twitch', State.LocalLogos.Twitch, function(Value) State.Cosmetics.SetLocalLogoSpoof('Twitch', Value) end)
+HubUI.Controls.LogoBooster = CreateCheckbox(CosmeticsGroup, 349, 'Booster', State.LocalLogos.Booster, function(Value) State.Cosmetics.SetLocalLogoSpoof('Booster', Value) end)
+HubUI.Controls.LogoTester = CreateCheckbox(CosmeticsGroup, 371, 'Tester', State.LocalLogos.Tester, function(Value) State.Cosmetics.SetLocalLogoSpoof('Tester', Value) end)
+HubUI.Controls.LogoStaff = CreateCheckbox(CosmeticsGroup, 393, 'Staff', State.LocalLogos.Staff, function(Value) State.Cosmetics.SetLocalLogoSpoof('Staff', Value) end)
 State.LogoBadges.CustomBox = New('TextBox', {
-Position = UDim2.fromOffset(8, 467), Size = UDim2.new(0.58, -10, 0, 20),
+Position = UDim2.fromOffset(8, 419), Size = UDim2.new(0.58, -10, 0, 20),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, ClearTextOnFocus = false,
 Font = Enum.Font.Code, PlaceholderText = 'Custom logo asset ID', Text = '',
 TextColor3 = Theme.Text, PlaceholderColor3 = Theme.Muted, TextSize = 11, ZIndex = 6,
 }, CosmeticsGroup)
 AccentStroke(State.LogoBadges.CustomBox, 1, 0.18)
 State.LogoBadges.AddButton = New('TextButton', {
-Position = UDim2.new(0.58, 2, 0, 467), Size = UDim2.new(0.42, -10, 0, 20),
+Position = UDim2.new(0.58, 2, 0, 419), Size = UDim2.new(0.42, -10, 0, 20),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'Add logo', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, CosmeticsGroup)
 AccentStroke(State.LogoBadges.AddButton, 1, 0.2)
 State.LogoBadges.ClearButton = New('TextButton', {
-Position = UDim2.fromOffset(8, 491), Size = UDim2.new(1, -18, 0, 20),
+Position = UDim2.fromOffset(8, 443), Size = UDim2.new(1, -18, 0, 20),
 BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
 Font = Enum.Font.Code, Text = 'Clear custom logos (0)', TextColor3 = Theme.Text, TextSize = 10, ZIndex = 5,
 }, CosmeticsGroup)
@@ -28612,15 +28552,38 @@ if CONFIG.MatchArcEnabled == true then SilentAim.ClearActorAim() end
 end
 )
 
-CreateParagraph(
-HubUI.ShotVariantGroup,
-UDim2.fromOffset(8, 233),
-UDim2.new(1, -16, 0, 86),
-'Bank shots and No Jump are shot variants.\n'
-.. 'Match Arc forces a chosen arc angle.\n'
-.. 'Click to shoot disables the auto peak\n'
-.. 'release so you time it yourself.'
-)
+CreateSectionHeader(HubUI.ShotVariantGroup, 227, 'Automatic shot movement')
+HubUI.Controls.AutoFadeaway = CreateCheckbox(HubUI.ShotVariantGroup, 247, 'Auto Fadeaway', CONFIG.AutoFadeaway == true, function(Value)
+CONFIG.AutoFadeaway = Value == true
+if not Value then State.Trickshot.CancelShotMovement(CONFIG.AutoStop and 'READY' or 'OFF') end
+Notify('SILVER SURFER', Value and 'Fadeaway movement will run before release.' or 'Auto Fadeaway disabled.')
+end)
+HubUI.Controls.FadeawayDirection = CreateSelector(HubUI.ShotVariantGroup, 274, 'Fade direction',
+{ 'Away from defender', 'Backward', 'Left', 'Right', 'Random' }, CONFIG.FadeawayDirection or 'Away from defender',
+function(Value) CONFIG.FadeawayDirection = Value end, 130)
+HubUI.Controls.FadeawayDistance = CreateNumberInput(HubUI.ShotVariantGroup, 301, 'Fade distance', CONFIG.FadeawayDistance, 0, 12, 1, function(Value) CONFIG.FadeawayDistance = Value end)
+HubUI.Controls.AutoStop = CreateCheckbox(HubUI.ShotVariantGroup, 328, 'Auto Stop before shot', CONFIG.AutoStop == true, function(Value)
+CONFIG.AutoStop = Value == true
+if not Value and not CONFIG.AutoFadeaway then State.Trickshot.CancelShotMovement('OFF') end
+end)
+
+CreateSectionHeader(HubUI.ShotVariantGroup, 358, 'Trickshots / EBL')
+HubUI.Controls.TrickshotEnabled = CreateCheckbox(HubUI.ShotVariantGroup, 378, 'Spin before jump shot', CONFIG.TrickshotEnabled == true, function(Value)
+CONFIG.TrickshotEnabled = Value == true
+if not Value then State.Trickshot.CancelSpin('OFF') end
+Notify('SILVER SURFER', Value and 'Trickshot spin enabled.' or 'Trickshots disabled.')
+end)
+HubUI.Controls.RandomTrickshotMode = CreateCheckbox(HubUI.ShotVariantGroup, 405, 'Random 360 / 720 / 1080', CONFIG.RandomTrickshotMode == true, function(Value)
+CONFIG.RandomTrickshotMode = Value == true
+Notify('SILVER SURFER', Value and 'Random trickshot angles and directions enabled.' or 'Using the custom trickshot angle.')
+end)
+HubUI.Controls.TrickshotAngle = CreateNumberInput(HubUI.ShotVariantGroup, 432, 'Custom angle (deg)', CONFIG.TrickshotAngle, -2160, 2160, 0, function(Value) CONFIG.TrickshotAngle = Value end)
+HubUI.Controls.TrickshotDuration = CreateNumberInput(HubUI.ShotVariantGroup, 459, 'Spin time (sec)', CONFIG.TrickshotDuration, 0.08, 1.2, 2, function(Value) CONFIG.TrickshotDuration = Value end)
+HubUI.Controls.AutoEBL = CreateCheckbox(HubUI.ShotVariantGroup, 486, 'Auto EBL double jump shot', CONFIG.AutoEBL == true, function(Value)
+CONFIG.AutoEBL = Value == true
+State.Trickshot.ResetAutoEBL(Value and 'READY' or 'OFF')
+Notify('SILVER SURFER', Value and 'First jump is blank; landing triggers the shooting jump.' or 'Auto EBL disabled.')
+end)
 
 CreateSectionHeader(HubUI.HumanizerGroup, 11, 'Humanization')
 HubUI.Controls.HumanizeEnabled = CreateCheckbox(
@@ -29123,7 +29086,7 @@ State.AutoBody.LastTargetScan = 0
 end
 )
 HubUI.Controls.AutoBodyMethod = CreateSelector(
-BodySettingsGroup, 121, 'Rotation method', { 'CFrame Rotation', 'AlignOrientation', 'BodyGyro' },
+BodySettingsGroup, 121, 'Rotation method', { 'CFrame Rotation' },
 State.Movement.AutoBodyMethod or 'CFrame Rotation',
 function(Value) State.Movement.SetAutoBodyMethod(Value) end,
 118
@@ -29513,9 +29476,9 @@ local Groups = HubUI.ConfigGroups
 if not (Groups and Groups.Profiles and Groups.System) then return end
 
 local ConfigFolder = 'SilverSurfer_Configs'
-local SessionStore = type(GlobalEnv.__SILVER_SURFER_CONFIGS) == 'table'
-and GlobalEnv.__SILVER_SURFER_CONFIGS or {}
-GlobalEnv.__SILVER_SURFER_CONFIGS = SessionStore
+local SessionStore = type(GlobalEnv.__GOLDEN_EAGLE_CONFIGS) == 'table'
+and GlobalEnv.__GOLDEN_EAGLE_CONFIGS or {}
+GlobalEnv.__GOLDEN_EAGLE_CONFIGS = SessionStore
 
 local function CreateConfigButton(Parent, Position, Size, Text, Callback, Danger)
 local Button = New('TextButton', {
@@ -31256,8 +31219,8 @@ local Open = HubUI.Open == true
 local FlightVisible = State.Movement.FlightEnabled and not Open
 if Open ~= LastOpen then
 LastOpen = Open
-Launcher.Text = Open and '  ' or 'SS'
-LauncherCaption.Text = Open and 'CLOSE' or 'SURFER'
+Launcher.Text = Open and '  ' or 'GE'
+LauncherCaption.Text = Open and 'CLOSE' or 'MENU'
 Tween(Launcher, 0.16, {
 BackgroundColor3 = Open and Theme.SurfaceHover or Theme.Panel,
 TextColor3 = Open and Theme.Text or Theme.Accent,
@@ -31717,6 +31680,11 @@ CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.Backboard, CONFIG.BackboardEnabled == true },
 { HubUI.Controls.MatchArc, CONFIG.MatchArcEnabled == true },
 { HubUI.Controls.MatchArcAngle, CONFIG.MatchArcAngle },
+{ HubUI.Controls.TrickshotEnabled, CONFIG.TrickshotEnabled == true },
+{ HubUI.Controls.RandomTrickshotMode, CONFIG.RandomTrickshotMode == true },
+{ HubUI.Controls.AutoFadeaway, CONFIG.AutoFadeaway == true },
+{ HubUI.Controls.AutoStop, CONFIG.AutoStop == true },
+{ HubUI.Controls.AutoEBL, CONFIG.AutoEBL == true },
 { HubUI.Controls.RangeIndicator, CONFIG.RangeIndicatorEnabled },
 { HubUI.Controls.Trajectory, CONFIG.TrajectoryPreviewEnabled },
 { HubUI.Controls.ArcPreview, CONFIG.ArcPreviewEnabled },
@@ -31784,6 +31752,7 @@ State.AutoGetOpen.NormalizeSpot(CONFIG.AutoGetOpenPreferredSpot) },
 { HubUI.Controls.ReleaseMode, CONFIG.AimReleaseMode },
 { HubUI.Controls.SilentMode, CONFIG.SilentMode },
 { HubUI.Controls.AimMode, CONFIG.AimMode },
+{ HubUI.Controls.FadeawayDirection, CONFIG.FadeawayDirection },
 { HubUI.Controls.OutlineMode, State.Outline.Mode },
 }
 for _, Data in ipairs(SelectValues) do
@@ -31831,6 +31800,9 @@ CONFIG.AutoBodyHandRevertDeadzone },
 { HubUI.Controls.HumanizeMaxAngle, CONFIG.HumanizeMaxAngle },
 { HubUI.Controls.HumanizeErrorRadius, CONFIG.HumanizeErrorRadius },
 { HubUI.Controls.HumanizeMissSeverity, CONFIG.HumanizeMissSeverity },
+{ HubUI.Controls.TrickshotAngle, CONFIG.TrickshotAngle },
+{ HubUI.Controls.TrickshotDuration, CONFIG.TrickshotDuration },
+{ HubUI.Controls.FadeawayDistance, CONFIG.FadeawayDistance },
 }
 for _, Data in ipairs(NumberValues) do
 if Data[1] and Data[1].Value ~= Data[2] then Data[1]:Set(Data[2], false) end
@@ -31849,7 +31821,7 @@ end
 
 local function SaveWindowPosition()
 PreferredWindowPosition = Main.Position
-GlobalEnv.__SILVER_SURFER_UI_POSITION = {
+GlobalEnv.__GOLDEN_EAGLE_UI_POSITION = {
 XScale = Main.Position.X.Scale,
 XOffset = Main.Position.X.Offset,
 YScale = Main.Position.Y.Scale,
@@ -33312,15 +33284,15 @@ if HubNow - (HubUI.HubRenderAt or 0) < HubInterval then return end
 HubUI.HubRenderAt = HubNow
 local RenderOk, RenderError = pcall(function()
 local Now = os.clock()
-local LinoriaStatic = InterfaceConfig.ThemePreset == 'Silver Surfer'
+local LinoriaStatic = InterfaceConfig.ThemePreset == 'Linoria'
 local MotionEnabled = not InterfaceConfig.ReducedMotion and not LinoriaStatic
 local PrismActive = InterfaceConfig.ThemePreset == 'Prism'
 local GradientSpeed = math.max(0.01, tonumber(CONFIG.GradientCycleSpeed) or 0.18) * math.max(0.25, tonumber(InterfaceConfig.AnimationSpeed) or 1)
-local AccentPhase = MotionEnabled and (Now * GradientSpeed * math.pi * 2) or 0
-local AccentBlend = MotionEnabled and (math.sin(AccentPhase) + 1) * 0.5 or 0
+local GoldPhase = MotionEnabled and (Now * GradientSpeed * math.pi * 2) or 0
+local GoldAlpha = MotionEnabled and (math.sin(GoldPhase) + 1) * 0.5 or 0
 local Accent = PrismActive
 and Color3.fromHSV(MotionEnabled and ((Now * GradientSpeed * 0.16) % 1) or 0.86, 0.96, 1)
-or (MotionEnabled and Theme.Accent:Lerp(Theme.AccentBright, AccentBlend) or Theme.Accent)
+or (MotionEnabled and Theme.Accent:Lerp(Theme.AccentBright, GoldAlpha) or Theme.Accent)
 local Pulse = MotionEnabled and (math.sin(Now * 4.2) + 1) * 0.5 or 0.5
 
 MainBorder.Thickness = LinoriaStatic and 1 or 2
@@ -33395,24 +33367,24 @@ end
 HubUI.PrismBorderCursor = ((StartIndex + BatchSize - 1) % BorderCount) + 1
 end
 else
-local DarkAccent = Theme.Accent:Lerp(Theme.Background, 0.72)
-local DeepAccent = Theme.Accent:Lerp(Theme.Background, 0.48)
-local RichAccent = Theme.Accent:Lerp(Theme.AccentBright, 0.25)
-local MetallicAccent = Theme.Accent
-local BrightAccent = Theme.AccentBright
-local function CycleAccent(Offset, LowColor, HighColor)
-local Alpha = (math.sin(AccentPhase + Offset) + 1) * 0.5
+local DarkGold = Theme.Accent:Lerp(Theme.Background, 0.72)
+local DeepGold = Theme.Accent:Lerp(Theme.Background, 0.48)
+local RichGold = Theme.Accent:Lerp(Theme.AccentBright, 0.25)
+local MetallicGold = Theme.Accent
+local BrightGold = Theme.AccentBright
+local function CycleGold(Offset, LowColor, HighColor)
+local Alpha = (math.sin(GoldPhase + Offset) + 1) * 0.5
 return LowColor:Lerp(HighColor, Alpha)
 end
 MainFlameGradient.Color = ColorSequence.new({
 ColorSequenceKeypoint.new(0.00, Theme.Background),
 ColorSequenceKeypoint.new(0.14, Theme.Background),
-ColorSequenceKeypoint.new(0.27, CycleAccent(0.00, DarkAccent, DeepAccent)),
-ColorSequenceKeypoint.new(0.39, CycleAccent(1.05, MetallicAccent, BrightAccent)),
+ColorSequenceKeypoint.new(0.27, CycleGold(0.00, DarkGold, DeepGold)),
+ColorSequenceKeypoint.new(0.39, CycleGold(1.05, MetallicGold, BrightGold)),
 ColorSequenceKeypoint.new(0.50, Theme.Background),
 ColorSequenceKeypoint.new(0.64, Theme.Background),
-ColorSequenceKeypoint.new(0.77, CycleAccent(3.15, DeepAccent, MetallicAccent)),
-ColorSequenceKeypoint.new(0.90, CycleAccent(4.20, MetallicAccent, BrightAccent)),
+ColorSequenceKeypoint.new(0.77, CycleGold(3.15, DeepGold, MetallicGold)),
+ColorSequenceKeypoint.new(0.90, CycleGold(4.20, MetallicGold, BrightGold)),
 ColorSequenceKeypoint.new(1.00, Theme.Background),
 })
 BackgroundGradient.Color = ColorSequence.new({
@@ -33424,15 +33396,15 @@ ColorSequenceKeypoint.new(1.00, Theme.Background),
 })
 if Intro and Intro.Parent then
 IntroStrokeGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, CycleAccent(0.00, DarkAccent, RichAccent)),
-ColorSequenceKeypoint.new(0.36, CycleAccent(1.40, RichAccent, MetallicAccent)),
-ColorSequenceKeypoint.new(0.58, CycleAccent(2.80, MetallicAccent, BrightAccent)),
-ColorSequenceKeypoint.new(1.00, CycleAccent(4.20, DarkAccent, RichAccent)),
+ColorSequenceKeypoint.new(0.00, CycleGold(0.00, DarkGold, RichGold)),
+ColorSequenceKeypoint.new(0.36, CycleGold(1.40, RichGold, MetallicGold)),
+ColorSequenceKeypoint.new(0.58, CycleGold(2.80, MetallicGold, BrightGold)),
+ColorSequenceKeypoint.new(1.00, CycleGold(4.20, DarkGold, RichGold)),
 })
 IntroFillGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, CycleAccent(0.00, DarkAccent, RichAccent)),
-ColorSequenceKeypoint.new(0.55, CycleAccent(2.10, MetallicAccent, BrightAccent)),
-ColorSequenceKeypoint.new(1.00, CycleAccent(4.20, DeepAccent, MetallicAccent)),
+ColorSequenceKeypoint.new(0.00, CycleGold(0.00, DarkGold, RichGold)),
+ColorSequenceKeypoint.new(0.55, CycleGold(2.10, MetallicGold, BrightGold)),
+ColorSequenceKeypoint.new(1.00, CycleGold(4.20, DeepGold, MetallicGold)),
 })
 end
 end
@@ -34761,6 +34733,9 @@ pcall(function() State.Utility.SetAntiTravel(false) end)
 pcall(function() State.Utility.SetAntiFall(false) end)
 pcall(function() State.Utility.SetStreamerMode(false) end)
 pcall(function() State.Extras.SetSpinbot(false) end)
+pcall(function() State.Trickshot.CancelSpin('OFF') end)
+pcall(function() State.Trickshot.CancelShotMovement('OFF') end)
+pcall(function() State.Trickshot.ResetAutoEBL('OFF') end)
 pcall(function() State.AutoMix.SetEnabled(false) end)
 pcall(function() State.Desync.SetEnabled(false) end)
 pcall(function() State.DesyncVisualizer.SetEnabled(false) end)
