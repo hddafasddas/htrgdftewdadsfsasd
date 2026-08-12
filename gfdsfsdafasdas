@@ -168,7 +168,7 @@ AimReleaseMode = 'At Apex',
 AimCustomReleaseVelocity = -0.5,
 AimDistanceOffset = 0,
 AimMinimumDistance = 0,
-AimMaximumDistance = 0,
+AimMaximumDistance = 72.0,
 AimRequireBall = true,
 AimOnlyInMatch = false,
 ArcTableVersion = 2,
@@ -669,6 +669,7 @@ DesyncVisualizerTransparency = 0.8,
 Outline = false,
 OutlineMode = 'both',
 ESPEnabled = false,
+ESPShowCircle = true,
 ESPTeamCheck = false,
 ESPShowName = true,
 ESPShowDistance = true,
@@ -1371,6 +1372,16 @@ FlightRenderName = 'SilverSurferFlight',
 MatchCheckAt = 0,
 MatchCached = false,
 LastManualDirection = Vector3.zero,
+InstantSwitchDirection = Vector3.zero,
+InstantSwitchSpeed = 0,
+InstantSwitchRoot = nil,
+InstantSwitchHumanoid = nil,
+InstantSwitchOriginalWalkSpeed = nil,
+InstantSwitchRaycastParams = nil,
+InstantSwitchRaycastCharacter = nil,
+InstantSwitchAnimationTrack = nil,
+InstantSwitchAnimationAnimator = nil,
+InstantSwitchMethod = 'CFRAME STEP',
 TransientSpeedActive = false,
 AdvancedStatus = 'READY',
 IceMomentum = Vector3.zero,
@@ -1426,6 +1437,10 @@ State.Movement.OriginalUseJumpPower = HumanoidObject and HumanoidObject.UseJumpP
 State.Movement.OriginalJumpPower = HumanoidObject and HumanoidObject.JumpPower or nil
 State.Movement.OriginalJumpHeight = HumanoidObject and HumanoidObject.JumpHeight or nil
 State.Movement.OriginalAutoRotate = HumanoidObject and HumanoidObject.AutoRotate or nil
+if State.Movement.ClearInstantDirectionSwitch then State.Movement.ClearInstantDirectionSwitch() end
+State.Movement.LastManualDirection = Vector3.zero
+State.Movement.InstantSwitchDirection = Vector3.zero
+State.Movement.InstantSwitchSpeed = 0
 end
 return Character, HumanoidObject, Root
 end
@@ -1833,7 +1848,9 @@ local Value = State.Movement.WalkSpeedValue
 if CONFIG.SpeedProfiles and not State.Movement.IsInMatch() then Value = CONFIG.OutOfMatchSpeed end
 Value = math.clamp(tonumber(Value) or 32, 1, 250)
 
-local Direction = HumanoidObject.MoveDirection
+local Direction = State.Movement.GetGroundInputDirection
+and State.Movement.GetGroundInputDirection(HumanoidObject, Root)
+or HumanoidObject.MoveDirection
 local Horizontal = Vector3.new(Direction.X, 0, Direction.Z)
 if Horizontal.Magnitude <= 0.001 then return end
 
@@ -1884,6 +1901,250 @@ local Original = State.Movement.OriginalWalkSpeed
 if Original then pcall(function() HumanoidObject.WalkSpeed = Original end) end
 end
 end
+
+function State.Movement.GetGroundInputDirection(HumanoidObject, Root)
+if UserInputService:GetFocusedTextBox() then return Vector3.zero end
+local Camera=Workspace.CurrentCamera
+local Forward=Camera and Vector3.new(Camera.CFrame.LookVector.X,0,Camera.CFrame.LookVector.Z)
+or (Root and Vector3.new(Root.CFrame.LookVector.X,0,Root.CFrame.LookVector.Z))
+or Vector3.zAxis
+local Right=Camera and Vector3.new(Camera.CFrame.RightVector.X,0,Camera.CFrame.RightVector.Z)
+or (Root and Vector3.new(Root.CFrame.RightVector.X,0,Root.CFrame.RightVector.Z))
+or Vector3.xAxis
+if Forward.Magnitude>.001 then Forward=Forward.Unit end
+if Right.Magnitude>.001 then Right=Right.Unit end
+local Direction=Vector3.zero
+if UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.Up) then Direction+=Forward end
+if UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.Down) then Direction-=Forward end
+if UserInputService:IsKeyDown(Enum.KeyCode.D) or UserInputService:IsKeyDown(Enum.KeyCode.Right) then Direction+=Right end
+if UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.Left) then Direction-=Right end
+if Direction.Magnitude<=.001 and HumanoidObject then
+local Raw=HumanoidObject.MoveDirection
+Direction=Vector3.new(Raw.X,0,Raw.Z)
+end
+return Direction.Magnitude>.001 and Direction.Unit or Vector3.zero
+end
+
+function State.Movement.ClearInstantDirectionSwitch()
+local Root=State.Movement.InstantSwitchRoot
+if Root and Root.Parent then
+for _,Name in ipairs({
+'SSInstantDirectionVelocity','SSInstantDirectionBodyVelocity','SSInstantDirectionAttachment'
+}) do
+local Stale=Root:FindFirstChild(Name)
+if Stale then pcall(function() Stale:Destroy() end) end
+end
+end
+local Track=State.Movement.InstantSwitchAnimationTrack
+State.Movement.InstantSwitchAnimationTrack=nil
+State.Movement.InstantSwitchAnimationAnimator=nil
+if Track then pcall(function() Track:Stop(0.08); Track:Destroy() end) end
+local HumanoidObject=State.Movement.InstantSwitchHumanoid
+local Original=State.Movement.InstantSwitchOriginalWalkSpeed
+if HumanoidObject and HumanoidObject.Parent and Original~=nil and not CONFIG.IcePhysics then
+local Restore=State.Movement.WalkSpeedEnabled
+and State.Movement.SpeedMethod=='WalkSpeed Property'
+and State.Movement.WalkSpeedValue or Original
+pcall(function() HumanoidObject.WalkSpeed=Restore end)
+end
+State.Movement.InstantSwitchRoot=nil
+State.Movement.InstantSwitchHumanoid=nil
+State.Movement.InstantSwitchOriginalWalkSpeed=nil
+State.Movement.InstantSwitchRaycastParams=nil
+State.Movement.InstantSwitchRaycastCharacter=nil
+State.Movement.InstantSwitchDirection=Vector3.zero
+State.Movement.InstantSwitchSpeed=0
+State.Movement.InstantSwitchMethod='CFRAME STEP'
+if State.Movement.AdvancedStatus=='INSTANT SWITCH' then State.Movement.AdvancedStatus='READY' end
+end
+
+function State.Movement.PrepareInstantDirectionController(Character,HumanoidObject,Root)
+if State.Movement.InstantSwitchRoot~=Root then
+State.Movement.ClearInstantDirectionSwitch()
+State.Movement.InstantSwitchRoot=Root
+State.Movement.InstantSwitchHumanoid=HumanoidObject
+State.Movement.InstantSwitchOriginalWalkSpeed=State.Movement.OriginalWalkSpeed or HumanoidObject.WalkSpeed
+end
+if State.Movement.InstantSwitchRaycastCharacter~=Character then
+local Params=RaycastParams.new()
+Params.FilterType=Enum.RaycastFilterType.Exclude
+Params.FilterDescendantsInstances={Character}
+Params.IgnoreWater=false
+pcall(function() Params.RespectCanCollide=true end)
+State.Movement.InstantSwitchRaycastParams=Params
+State.Movement.InstantSwitchRaycastCharacter=Character
+end
+end
+
+function State.Movement.GetInstantWalkAnimation(Character,HumanoidObject)
+local Animator=HumanoidObject and HumanoidObject:FindFirstChildOfClass('Animator')
+if not Animator then return nil end
+local Existing=State.Movement.InstantSwitchAnimationTrack
+if Existing and State.Movement.InstantSwitchAnimationAnimator==Animator then return Existing end
+if Existing then pcall(function() Existing:Stop(0.05); Existing:Destroy() end) end
+State.Movement.InstantSwitchAnimationTrack=nil
+State.Movement.InstantSwitchAnimationAnimator=nil
+
+local Animate=Character and Character:FindFirstChild('Animate')
+local AnimationObject
+if Animate then
+for _,Object in ipairs(Animate:GetDescendants()) do
+if Object:IsA('Animation') then
+local Name=string.lower(Object.Name)
+local ParentName=string.lower(Object.Parent and Object.Parent.Name or '')
+if string.find(Name,'walk',1,true) or string.find(ParentName,'walk',1,true) then
+AnimationObject=Object
+break
+end
+end
+end
+if not AnimationObject then
+for _,Object in ipairs(Animate:GetDescendants()) do
+if Object:IsA('Animation') then
+local Name=string.lower(Object.Name)
+local ParentName=string.lower(Object.Parent and Object.Parent.Name or '')
+if string.find(Name,'run',1,true) or string.find(ParentName,'run',1,true) then
+AnimationObject=Object
+break
+end
+end
+end
+end
+end
+
+local Temporary
+if not AnimationObject then
+Temporary=Instance.new('Animation')
+Temporary.Name='SSInstantWalkFallback'
+Temporary.AnimationId=HumanoidObject.RigType==Enum.HumanoidRigType.R15
+and 'rbxassetid://507777826' or 'rbxassetid://180426354'
+AnimationObject=Temporary
+end
+local Track
+pcall(function() Track=Animator:LoadAnimation(AnimationObject) end)
+if Temporary then pcall(function() Temporary:Destroy() end) end
+if not Track then return nil end
+Track.Priority=Enum.AnimationPriority.Movement
+Track.Looped=true
+State.Movement.InstantSwitchAnimationTrack=Track
+State.Movement.InstantSwitchAnimationAnimator=Animator
+return Track
+end
+
+function State.Movement.UpdateInstantWalkAnimation(Character,HumanoidObject,Speed,Moving)
+local Track=State.Movement.InstantSwitchAnimationTrack
+if not Moving or HumanoidObject.FloorMaterial==Enum.Material.Air then
+if Track and Track.IsPlaying then pcall(function() Track:Stop(0.10) end) end
+return
+end
+Track=State.Movement.GetInstantWalkAnimation(Character,HumanoidObject)
+if not Track then return end
+local Playback=math.clamp((tonumber(Speed) or 16)/14.5,0.35,3.5)
+if not Track.IsPlaying then pcall(function() Track:Play(0.08,1,Playback) end) end
+pcall(function() Track:AdjustSpeed(Playback) end)
+end
+
+function State.Movement.GetSafeInstantStep(Character,Root,Offset)
+if not (Character and Root) or Offset.Magnitude<=.0001 then return Offset end
+local Params=State.Movement.InstantSwitchRaycastParams
+if not Params then return Offset end
+local Result
+local Ok=pcall(function()
+Result=Workspace:Blockcast(Root.CFrame,Root.Size,Offset,Params)
+end)
+if not Ok then
+pcall(function() Result=Workspace:Raycast(Root.Position,Offset.Unit*(Offset.Magnitude+1),Params) end)
+end
+if not Result then return Offset end
+local Allowed=math.max(0,(tonumber(Result.Distance) or 0)-0.08)
+return Offset.Unit*math.min(Offset.Magnitude,Allowed)
+end
+
+function State.Movement.GetInstantDirectionSpeed(HumanoidObject)
+local Base=State.Movement.WalkSpeedEnabled and State.Movement.WalkSpeedValue
+or State.Movement.InstantSwitchOriginalWalkSpeed
+or State.Movement.OriginalWalkSpeed
+or (HumanoidObject and HumanoidObject.WalkSpeed)
+or 16
+if CONFIG.SpeedProfiles and not State.Movement.IsInMatch() then Base=CONFIG.OutOfMatchSpeed end
+if CONFIG.SprintKeyEnabled and UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then Base=CONFIG.SprintSpeed end
+if CONFIG.SlowKeyEnabled and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then Base=CONFIG.SlowSpeed end
+return math.clamp(tonumber(Base) or 16,1,250)
+end
+
+function State.Movement.ApplyInstantDirectionSwitch(DeltaTime)
+if not CONFIG.InstantDirectionSwitch then
+if State.Movement.InstantSwitchRoot then State.Movement.ClearInstantDirectionSwitch() end
+return
+end
+if State.Movement.FlightEnabled or (State.Stepback and State.Stepback.Active) then
+State.Movement.ClearInstantDirectionSwitch()
+return
+end
+if State.Runtime and State.Runtime.MovementOwner
+and os.clock()<(State.Runtime.MovementLeaseUntil or 0) then
+State.Movement.ClearInstantDirectionSwitch()
+return
+end
+local Character,HumanoidObject,Root=State.Movement.GetRig()
+if not (Character and HumanoidObject and Root) or HumanoidObject.Health<=0
+or HumanoidObject.Sit or Root.Anchored then
+State.Movement.ClearInstantDirectionSwitch()
+return
+end
+local Direction=State.Movement.GetGroundInputDirection(HumanoidObject,Root)
+local Speed=State.Movement.GetInstantDirectionSpeed(HumanoidObject)
+if CONFIG.OOBGuard and Direction.Magnitude>.001 and State.AutoOffense
+and State.AutoOffense.GetCourt and State.AutoOffense.GetBoundarySafeDirection then
+local Court=State.AutoOffense.GetCourt()
+if Court then
+local Safe,Avoiding=State.AutoOffense.GetBoundarySafeDirection(Root,Direction,Court)
+if Avoiding and Safe and Safe.Magnitude>.001 then Direction=Safe.Unit end
+end
+end
+State.Movement.InstantSwitchDirection=Direction
+State.Movement.InstantSwitchSpeed=Speed
+
+if CONFIG.IcePhysics then
+if State.Movement.InstantSwitchRoot then State.Movement.ClearInstantDirectionSwitch() end
+if Direction.Magnitude>.001 then
+local Current=Root.AssemblyLinearVelocity
+State.Movement.IceMomentum=Direction*Speed
+Root.AssemblyLinearVelocity=Vector3.new(Direction.X*Speed,Current.Y,Direction.Z*Speed)
+State.Movement.AdvancedStatus='INSTANT SWITCH'
+end
+return
+end
+
+State.Movement.PrepareInstantDirectionController(Character,HumanoidObject,Root)
+pcall(function() HumanoidObject.WalkSpeed=0 end)
+local Current=Root.AssemblyLinearVelocity
+if Direction.Magnitude>.001 then
+HumanoidObject:Move(Direction,false)
+State.Movement.UpdateInstantWalkAnimation(Character,HumanoidObject,Speed,true)
+local DT=math.clamp(tonumber(DeltaTime) or 1/60,0,0.05)
+local Offset=State.Movement.GetSafeInstantStep(Character,Root,Direction*Speed*DT)
+local NewPosition=Root.Position+Offset
+if UserInputService.MouseBehavior~=Enum.MouseBehavior.LockCenter then
+Root.CFrame=CFrame.lookAt(NewPosition,NewPosition+Direction,Vector3.yAxis)
+else
+Root.CFrame=Root.CFrame+Offset
+end
+Root.AssemblyLinearVelocity=Vector3.new(0,Current.Y,0)
+State.Movement.LastManualDirection=Direction
+State.Movement.AdvancedStatus='INSTANT SWITCH'
+else
+HumanoidObject:Move(Vector3.zero,false)
+State.Movement.UpdateInstantWalkAnimation(Character,HumanoidObject,Speed,false)
+Root.AssemblyLinearVelocity=Vector3.new(0,Current.Y,0)
+State.Movement.AdvancedStatus='INSTANT READY'
+end
+end
+
+State.Lifecycle:AddCleanup(function()
+State.Movement.ClearInstantDirectionSwitch()
+end)
+
 function State.Movement.ApplyGroundFeatures(DeltaTime)
 local _, HumanoidObject, Root = State.Movement.GetRig()
 if not (HumanoidObject and Root) or HumanoidObject.Health <= 0 then return end
@@ -1891,9 +2152,7 @@ if State.Stepback and State.Stepback.Active then return end
 if State.Runtime and State.Runtime.MovementOwner
 and os.clock() < (State.Runtime.MovementLeaseUntil or 0) then return end
 local DT=math.clamp(tonumber(DeltaTime) or 1/60,0,0.05)
-local Raw=HumanoidObject.MoveDirection
-local Direction=Vector3.new(Raw.X,0,Raw.Z)
-if Direction.Magnitude>0.001 then Direction=Direction.Unit else Direction=Vector3.zero end
+local Direction=State.Movement.GetGroundInputDirection(HumanoidObject,Root)
 local Base=State.Movement.WalkSpeedEnabled and State.Movement.WalkSpeedValue
 or (State.Movement.OriginalWalkSpeed or HumanoidObject.WalkSpeed or 16)
 if CONFIG.SpeedProfiles and not State.Movement.IsInMatch() then Base=CONFIG.OutOfMatchSpeed end
@@ -1901,43 +2160,49 @@ local SprintHeld=CONFIG.SprintKeyEnabled and UserInputService:IsKeyDown(Enum.Key
 local SlowHeld=CONFIG.SlowKeyEnabled and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
 local Speed=SlowHeld and CONFIG.SlowSpeed or (SprintHeld and CONFIG.SprintSpeed or Base)
 Speed=math.clamp(tonumber(Speed) or 16,1,250)
-if SprintHeld or SlowHeld then
+if CONFIG.InstantDirectionSwitch then
+State.Movement.TransientSpeedActive=false
+elseif SprintHeld or SlowHeld then
 State.Movement.TransientSpeedActive=true
 if HumanoidObject.WalkSpeed~=Speed then pcall(function() HumanoidObject.WalkSpeed=Speed end) end
 else State.Movement.RestoreTransientSpeed(HumanoidObject) end
 
-if CONFIG.OOBGuard and Direction.Magnitude>0.001 and State.AutoOffense then
+if CONFIG.OOBGuard and State.AutoOffense then
 local Court=State.AutoOffense.GetCourt and State.AutoOffense.GetCourt() or nil
 if Court and State.AutoOffense.GetBoundarySafeDirection then
-local Safe,Avoiding=State.AutoOffense.GetBoundarySafeDirection(Root,Direction,Court)
+local Existing=Root.AssemblyLinearVelocity
+local ExistingFlat=Vector3.new(Existing.X,0,Existing.Z)
+local GuardDirection=Direction
+if GuardDirection.Magnitude<=0.001 and ExistingFlat.Magnitude>0.05 then
+GuardDirection=ExistingFlat.Unit
+end
+if GuardDirection.Magnitude>0.001 then
+local Safe,Avoiding=State.AutoOffense.GetBoundarySafeDirection(Root,GuardDirection,Court)
 if Avoiding and Safe and Safe.Magnitude>0.001 then
 Direction=Safe.Unit
 HumanoidObject:Move(Direction,false)
-local Existing=Root.AssemblyLinearVelocity
-local ExistingFlat=Vector3.new(Existing.X,0,Existing.Z)
 local GuardSpeed=math.min(math.max(ExistingFlat.Magnitude,Speed),60)
 Root.AssemblyLinearVelocity=Vector3.new(Direction.X*GuardSpeed,Existing.Y,Direction.Z*GuardSpeed)
+if CONFIG.IcePhysics then State.Movement.IceMomentum=Direction*GuardSpeed end
+local Inside,Recovery=State.AutoOffense.GetSafeCourtBounds(Root.Position,Court)
+if not Inside and Recovery then
+local Offset=Vector3.new(Recovery.X-Root.Position.X,0,Recovery.Z-Root.Position.Z)
+Root.CFrame=Root.CFrame+Offset
+end
 State.Movement.AdvancedStatus='OOB GUARD'
 end
 end
 end
-
-local Current=Root.AssemblyLinearVelocity
-local Flat=Vector3.new(Current.X,0,Current.Z)
-if CONFIG.InstantDirectionSwitch and Direction.Magnitude>0.001
-and State.Movement.LastManualDirection.Magnitude>0.001
-and Direction:Dot(State.Movement.LastManualDirection)<-0.20 then
-Flat=Direction*Speed
-Root.AssemblyLinearVelocity=Vector3.new(Flat.X,Current.Y,Flat.Z)
-State.Movement.AdvancedStatus='INSTANT SWITCH'
 end
+
 if Direction.Magnitude>0.001 then State.Movement.LastManualDirection=Direction end
 
 if CONFIG.IcePhysics then
 -- Ice velocity is applied in PreSimulation so the Humanoid controller cannot
 -- overwrite it before the physics step.
 State.Movement.AdvancedStatus='ICE ACTIVE'
-elseif not (SprintHeld or SlowHeld) and State.Movement.AdvancedStatus~='OOB GUARD' then
+elseif not (SprintHeld or SlowHeld) and State.Movement.AdvancedStatus~='OOB GUARD'
+and State.Movement.AdvancedStatus~='INSTANT SWITCH' then
 State.Movement.AdvancedStatus='READY'
 end
 end
@@ -2029,7 +2294,38 @@ local Retention=math.clamp(tonumber(CONFIG.IceGlide) or .994,.90,.9998)
 Momentum*=Retention^(DT*60)
 if Momentum.Magnitude<.03 then Momentum=Vector3.zero end
 end
+if CONFIG.OOBGuard and State.AutoOffense then
+local Court=State.AutoOffense.GetCourt and State.AutoOffense.GetCourt() or nil
+if Court and State.AutoOffense.GetBoundarySafeDirection then
+local GuardDirection=Direction
+if GuardDirection.Magnitude<=.001 and Momentum.Magnitude>.05 then GuardDirection=Momentum.Unit end
+if GuardDirection.Magnitude>.001 then
+local Safe,Avoiding=State.AutoOffense.GetBoundarySafeDirection(Root,GuardDirection,Court)
+if Avoiding and Safe and Safe.Magnitude>.001 then
+local PreservedSpeed=math.max(Momentum.Magnitude,math.min(Base,60))
+Direction=Safe.Unit
+Momentum=Direction*PreservedSpeed
+local Inside,Recovery=State.AutoOffense.GetSafeCourtBounds(Root.Position,Court)
+if not Inside and Recovery then
+local Offset=Vector3.new(Recovery.X-Root.Position.X,0,Recovery.Z-Root.Position.Z)
+Root.CFrame=Root.CFrame+Offset
+end
+State.Movement.AdvancedStatus='ICE OOB GUARD'
+end
+end
+end
+end
 State.Movement.IceMomentum=Momentum
+
+-- WalkSpeed is zero during ice movement, so Humanoid.AutoRotate cannot turn
+-- the character in normal camera mode. Rotate the root toward steering input
+-- ourselves, while leaving shift lock and first-person camera control alone.
+if Direction.Magnitude>.001 and UserInputService.MouseBehavior~=Enum.MouseBehavior.LockCenter then
+local FacingRate=math.clamp((tonumber(CONFIG.IceTurnGrip) or 3.25)*2.4,4,24)
+local FacingAlpha=1-math.exp(-FacingRate*DT)
+local TargetFacing=CFrame.lookAt(Root.Position,Root.Position+Direction,Vector3.yAxis)
+Root.CFrame=Root.CFrame:Lerp(TargetFacing,FacingAlpha)
+end
 
 if JumpQueued and not (State.NoJump and State.NoJump.Active) then
 State.Movement.IceJumpQueuedUntil=0
@@ -2048,6 +2344,7 @@ function State.Movement.SetIcePhysics(Value)
 Value=Value==true
 if Value and CONFIG.IcePhysics and State.Movement.IceCharacter then return end
 if not Value and not CONFIG.IcePhysics and not State.Movement.IceCharacter then return end
+if Value and State.Movement.InstantSwitchRoot then State.Movement.ClearInstantDirectionSwitch() end
 CONFIG.IcePhysics=Value
 if Value then
 local Character,HumanoidObject,Root=State.Movement.GetRig()
@@ -3856,12 +4153,13 @@ end)))
 GiveSignal(RunService.PreSimulation:Connect(WYNF_JIT(function(DeltaTime)
 if not State.Active then return end
 if CONFIG.IcePhysics then pcall(State.Movement.ApplyIcePhysics,DeltaTime) end
+if CONFIG.InstantDirectionSwitch or State.Movement.InstantSwitchRoot then pcall(State.Movement.ApplyInstantDirectionSwitch,DeltaTime) end
 end)))
 
 GiveSignal(RunService.Heartbeat:Connect(WYNF_JIT(function(DeltaTime)
 if not State.Active then return end
 State.Lifecycle:Prune(false)
-if State.Movement.WalkSpeedEnabled and not CONFIG.IcePhysics then pcall(State.Movement.ApplyWalkSpeed, DeltaTime) end
+if State.Movement.WalkSpeedEnabled and not CONFIG.IcePhysics and not CONFIG.InstantDirectionSwitch then pcall(State.Movement.ApplyWalkSpeed, DeltaTime) end
 if State.Movement.AdvancedFeaturesEnabled() then pcall(State.Movement.ApplyGroundFeatures, DeltaTime) end
 if State.Movement.FakeLagMode ~= 'Off' then pcall(State.Movement.ApplyFakeLag, DeltaTime) end
 if State.Movement.JumpPowerEnabled then pcall(State.Movement.ApplyJumpPower) end
@@ -12224,7 +12522,7 @@ end
 local Power = State.PowerBypass.GetEffectivePower()
 local AimDistance = State.Backboard.GetConfiguredAimDistance(Rim, RawDistance)
 local TableDistance = AdjustAimDistance(AimDistance)
-local ShotRange = 71.1
+local ShotRange = 72.0
 local Calibrated = PowerSupportsDistance(Power, TableDistance)
 local Supported = AimDistance <= ShotRange or CONFIG.MaxRangeBypass
 local ArcHeight = Calibrated and select(1, GetArcSettings(TableDistance, Power)) or nil
@@ -22383,6 +22681,14 @@ return Cached ~= false and Cached or nil
 end
 
 local Court = ResolvePlayerCourt(LP)
+if not Court then
+local Character = LP.Character
+local Root = Character and safe_find(Character, 'HumanoidRootPart')
+if Root then
+local PracticeCourt, PracticeDistance = FindNearestPracticeCourtFromPosition(Root.Position)
+if PracticeCourt and PracticeDistance <= 150 then Court = PracticeCourt end
+end
+end
 if not Court and IsArenaMode then Court = safe_find(Workspace, 'Court') end
 State.AutoOffense.CourtCache = Court or false
 State.AutoOffense.CourtCachedAt = Now
@@ -24021,6 +24327,7 @@ local R=State.ESP.Ensure(Player,Character,Root); if R then Seen[Player]=true; R.
 local Rank,ELO=State.ESP.GetRank(Player); local W,L=State.ESP.GetRecord(Player)
 State.ESP.UpdateSkeleton(R,Character,Camera)
 HOFCandidates[#HOFCandidates+1]={Player=Player,ELO=ELO,Root=Root,Record=R}
+R.Ring.Visible=CONFIG.ESPShowCircle~=false
 R.Name.Visible=CONFIG.ESPShowName; R.Name.Text=Player.DisplayName .. (CONFIG.ESPShowDistance and string.format('  [%.0fm]',Distance) or '')
 R.Rank.Visible=CONFIG.ESPShowRank; R.Rank.Text=Rank .. '  •  ' .. tostring(ELO) .. ' ELO'
 R.Record.Visible=CONFIG.ESPShowRecord; R.Record.Text=(W and L) and string.format('%dW  /  %dL',W,L) or 'RECORD  LOADING...'
@@ -29143,7 +29450,7 @@ function(Value) CONFIG.OutOfMatchSpeed = Value; State.Movement.ApplyWalkSpeed() 
 )
 
 CreateSectionHeader(MovementFlightGroup, 265, 'Ground control')
-HubUI.Controls.InstantDirectionSwitch = CreateCheckbox(MovementFlightGroup, 285, 'Instant direction switch', CONFIG.InstantDirectionSwitch == true, function(Value) CONFIG.InstantDirectionSwitch = Value == true end)
+HubUI.Controls.InstantDirectionSwitch = CreateCheckbox(MovementFlightGroup, 285, 'Instant direction switch', CONFIG.InstantDirectionSwitch == true, function(Value) CONFIG.InstantDirectionSwitch = Value == true; if not CONFIG.InstantDirectionSwitch then State.Movement.ClearInstantDirectionSwitch() end end)
 HubUI.Controls.OOBGuard = CreateCheckbox(MovementFlightGroup, 315, 'Edge / OOB guard', CONFIG.OOBGuard == true, function(Value) CONFIG.OOBGuard = Value == true end)
 HubUI.Controls.SprintKeyEnabled = CreateCheckbox(MovementFlightGroup, 345, 'Sprint key [LEFT SHIFT]', CONFIG.SprintKeyEnabled == true, function(Value) CONFIG.SprintKeyEnabled = Value == true end)
 HubUI.Controls.SprintSpeed = CreateNumberInput(MovementFlightGroup, 375, 'Sprint speed', CONFIG.SprintSpeed, 16, 100, 0, function(Value) CONFIG.SprintSpeed = Value end)
@@ -30749,22 +31056,23 @@ HubUI.Controls.ClearCustomLogoAction = { SearchRoot = State.LogoBadges.ClearButt
 
 do
 CreateSectionHeader(HubUI.ESPControlGroup, 11, 'Player ESP')
-HubUI.Controls.ESPEnabled=CreateCheckbox(HubUI.ESPControlGroup,31,'Enable circular ESP',CONFIG.ESPEnabled==true,function(V) State.ESP.SetEnabled(V) end)
-HubUI.Controls.ESPTeamCheck=CreateCheckbox(HubUI.ESPControlGroup,61,'Team check',CONFIG.ESPTeamCheck~=false,function(V) CONFIG.ESPTeamCheck=V==true end)
-HubUI.Controls.ESPShowName=CreateCheckbox(HubUI.ESPControlGroup,91,'Player names',CONFIG.ESPShowName~=false,function(V) CONFIG.ESPShowName=V==true end)
-HubUI.Controls.ESPShowDistance=CreateCheckbox(HubUI.ESPControlGroup,121,'Distance',CONFIG.ESPShowDistance~=false,function(V) CONFIG.ESPShowDistance=V==true end)
-HubUI.Controls.ESPShowHealth=CreateCheckbox(HubUI.ESPControlGroup,151,'Health bar',CONFIG.ESPShowHealth~=false,function(V) CONFIG.ESPShowHealth=V==true end)
-HubUI.Controls.ESPShowRank=CreateCheckbox(HubUI.ESPControlGroup,181,'Rank + ELO',CONFIG.ESPShowRank~=false,function(V) CONFIG.ESPShowRank=V==true end)
-HubUI.Controls.ESPShowRecord=CreateCheckbox(HubUI.ESPControlGroup,211,'Win / loss record',CONFIG.ESPShowRecord~=false,function(V) CONFIG.ESPShowRecord=V==true end)
-HubUI.Controls.ESPShowHighlight=CreateCheckbox(HubUI.ESPControlGroup,241,'Character highlight',CONFIG.ESPShowHighlight==true,function(V) CONFIG.ESPShowHighlight=V==true end)
-HubUI.Controls.ESPSkeleton=CreateCheckbox(HubUI.ESPControlGroup,271,'Skeleton ESP',CONFIG.ESPSkeleton==true,function(V) CONFIG.ESPSkeleton=V==true end)
-HubUI.Controls.ESPHOFBeams=CreateCheckbox(HubUI.ESPControlGroup,301,'HOF+ overhead beacons',CONFIG.ESPHOFBeams==true,function(V) CONFIG.ESPHOFBeams=V==true end)
-HubUI.Controls.ESPHighestELOTracer=CreateCheckbox(HubUI.ESPControlGroup,331,'Highest-ELO tracer',CONFIG.ESPHighestELOTracer==true,function(V) CONFIG.ESPHighestELOTracer=V==true end)
-HubUI.Controls.ESPTopELOCount=CreateNumberInput(HubUI.ESPControlGroup,361,'Top players to beam',CONFIG.ESPTopELOCount,1,5,0,function(V) CONFIG.ESPTopELOCount=V end)
-CreateSectionHeader(HubUI.ESPControlGroup,393,'Range and scale')
-HubUI.Controls.ESPMaxDistance=CreateNumberInput(HubUI.ESPControlGroup,413,'Maximum distance',CONFIG.ESPMaxDistance,25,5000,0,function(V) CONFIG.ESPMaxDistance=V end)
-HubUI.Controls.ESPScale=CreateNumberInput(HubUI.ESPControlGroup,443,'Overlay scale',CONFIG.ESPScale,0.6,1.8,2,function(V) CONFIG.ESPScale=V end)
-CreateParagraph(HubUI.ESPControlGroup,UDim2.fromOffset(8,479),UDim2.new(1,-16,0,28),'Circular player card with live rank,\nELO, record, distance, and health.\n\nUses PlayerGui billboards for reliability.\nTeam check starts off so nobody is hidden.')
+HubUI.Controls.ESPEnabled=CreateCheckbox(HubUI.ESPControlGroup,31,'Enable player ESP',CONFIG.ESPEnabled==true,function(V) State.ESP.SetEnabled(V) end)
+HubUI.Controls.ESPShowCircle=CreateCheckbox(HubUI.ESPControlGroup,59,'Show player circle',CONFIG.ESPShowCircle~=false,function(V) CONFIG.ESPShowCircle=V==true end)
+HubUI.Controls.ESPTeamCheck=CreateCheckbox(HubUI.ESPControlGroup,87,'Team check',CONFIG.ESPTeamCheck~=false,function(V) CONFIG.ESPTeamCheck=V==true end)
+HubUI.Controls.ESPShowName=CreateCheckbox(HubUI.ESPControlGroup,115,'Player names',CONFIG.ESPShowName~=false,function(V) CONFIG.ESPShowName=V==true end)
+HubUI.Controls.ESPShowDistance=CreateCheckbox(HubUI.ESPControlGroup,143,'Distance',CONFIG.ESPShowDistance~=false,function(V) CONFIG.ESPShowDistance=V==true end)
+HubUI.Controls.ESPShowHealth=CreateCheckbox(HubUI.ESPControlGroup,171,'Health bar',CONFIG.ESPShowHealth~=false,function(V) CONFIG.ESPShowHealth=V==true end)
+HubUI.Controls.ESPShowRank=CreateCheckbox(HubUI.ESPControlGroup,199,'Rank + ELO',CONFIG.ESPShowRank~=false,function(V) CONFIG.ESPShowRank=V==true end)
+HubUI.Controls.ESPShowRecord=CreateCheckbox(HubUI.ESPControlGroup,227,'Win / loss record',CONFIG.ESPShowRecord~=false,function(V) CONFIG.ESPShowRecord=V==true end)
+HubUI.Controls.ESPShowHighlight=CreateCheckbox(HubUI.ESPControlGroup,255,'Character highlight',CONFIG.ESPShowHighlight==true,function(V) CONFIG.ESPShowHighlight=V==true end)
+HubUI.Controls.ESPSkeleton=CreateCheckbox(HubUI.ESPControlGroup,283,'Skeleton ESP',CONFIG.ESPSkeleton==true,function(V) CONFIG.ESPSkeleton=V==true end)
+HubUI.Controls.ESPHOFBeams=CreateCheckbox(HubUI.ESPControlGroup,311,'HOF+ overhead beacons',CONFIG.ESPHOFBeams==true,function(V) CONFIG.ESPHOFBeams=V==true end)
+HubUI.Controls.ESPHighestELOTracer=CreateCheckbox(HubUI.ESPControlGroup,339,'Highest-ELO tracer',CONFIG.ESPHighestELOTracer==true,function(V) CONFIG.ESPHighestELOTracer=V==true end)
+HubUI.Controls.ESPTopELOCount=CreateNumberInput(HubUI.ESPControlGroup,367,'Top players to beam',CONFIG.ESPTopELOCount,1,5,0,function(V) CONFIG.ESPTopELOCount=V end)
+CreateSectionHeader(HubUI.ESPControlGroup,399,'Range and scale')
+HubUI.Controls.ESPMaxDistance=CreateNumberInput(HubUI.ESPControlGroup,419,'Maximum distance',CONFIG.ESPMaxDistance,25,5000,0,function(V) CONFIG.ESPMaxDistance=V end)
+HubUI.Controls.ESPScale=CreateNumberInput(HubUI.ESPControlGroup,449,'Overlay scale',CONFIG.ESPScale,0.6,1.8,2,function(V) CONFIG.ESPScale=V end)
+CreateParagraph(HubUI.ESPControlGroup,UDim2.fromOffset(8,485),UDim2.new(1,-16,0,30),'Player card with optional circle, rank, ELO,\nrecord, distance, and health.')
 
 CreateSectionHeader(HubUI.ESPPreviewGroup,11,'Live style preview')
 local ESPPreview=New('Frame',{Position=UDim2.fromOffset(8,34),Size=UDim2.new(1,-16,0,365),BackgroundColor3=Theme.Background,BackgroundTransparency=.08,BorderSizePixel=0},HubUI.ESPPreviewGroup); New('UICorner',{CornerRadius=UDim.new(0,16)},ESPPreview); DarkStroke(ESPPreview)
@@ -34300,6 +34608,7 @@ CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.Desync, State.Desync.Enabled },
 { HubUI.Controls.DesyncVisualizer, State.DesyncVisualizer.Enabled },
 { HubUI.Controls.ESPEnabled, CONFIG.ESPEnabled == true },
+{ HubUI.Controls.ESPShowCircle, CONFIG.ESPShowCircle ~= false },
 { HubUI.Controls.ESPTeamCheck, CONFIG.ESPTeamCheck ~= false },
 { HubUI.Controls.ESPShowName, CONFIG.ESPShowName ~= false },
 { HubUI.Controls.ESPShowDistance, CONFIG.ESPShowDistance ~= false },
