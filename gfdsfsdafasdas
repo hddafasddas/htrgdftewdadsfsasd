@@ -43,6 +43,15 @@ TrickshotDuration = 0.28,
 TrickshotRotationMode = 'Spin',
 AutoEBL = false,
 AutoFadeaway = false,
+AutoTurnaroundShot = false,
+TurnaroundDirection = 'Automatic',
+TurnaroundDefenderRange = 8,
+TurnaroundMinimumBackAngle = 100,
+TurnaroundDuration = 0.24,
+TurnaroundFadeaway = false,
+TurnaroundFadeDistance = 2.5,
+TurnaroundCooldown = 1.0,
+TurnaroundManualCancel = true,
 FadeawayDirection = 'Away from defender',
 FadeawayDistance = 4.5,
 FadeawayDuration = 0.28,
@@ -455,6 +464,10 @@ AutoOffenseMode = 'balanced',
 AutoOffenseManualOverride = true,
 AutoOffenseStyle = 'Get To Spot',
 AutoOffenseTurnAround = 9,
+AutoOffensePingAware = true,
+AutoOffensePingBaseline = 60,
+AutoOffensePingStrength = 1,
+AutoOffensePingMaxLead = 0.35,
 AutoOffenseEdgeRoom = 11,
 AutoOffenseSpotUrgency = 5,
 AutoOffenseShootChance = 0.45,
@@ -462,7 +475,7 @@ AutoOffenseActionCooldown = 1.5,
 AutoOffenseApproachDistance = 45,
 AutoOffenseShootDistance = 30,
 AutoOffenseDunkDistance = 12,
-AutoOffensePullUpDistance = 70,
+AutoOffensePullUpDistance = 72,
 AutoOffensePullUpPower = 85,
 AutoOffenseKeepInDistance = 30,
 AutoOffenseMinLaneRoom = 11,
@@ -14429,6 +14442,168 @@ end)
 return true
 end
 
+State.TurnaroundShot = {
+Active = false, Generation = 0, Status = 'OFF', LastAt = 0,
+Direction = '--', Angle = 0, StartedAt = 0, EndsAt = 0,
+SavedHumanoid = nil, SavedAutoRotate = nil,
+}
+
+function State.TurnaroundShot.Cancel(Status)
+State.TurnaroundShot.Generation += 1
+State.TurnaroundShot.Active = false
+local H = State.TurnaroundShot.SavedHumanoid
+if H and H.Parent and State.TurnaroundShot.SavedAutoRotate ~= nil then
+pcall(function() H.AutoRotate = State.TurnaroundShot.SavedAutoRotate end)
+end
+State.TurnaroundShot.SavedHumanoid = nil
+State.TurnaroundShot.SavedAutoRotate = nil
+State.Runtime.ReleaseRotation('Turnaround')
+State.TurnaroundShot.Status = Status or (CONFIG.AutoTurnaroundShot and 'READY' or 'OFF')
+end
+
+function State.TurnaroundShot.GetGeometry(Root)
+local Rim = select(1, FindConfiguredGoal())
+if not (Rim and Root) then return nil end
+local ToRim = Vector3.new(Rim.Position.X - Root.Position.X, 0, Rim.Position.Z - Root.Position.Z)
+local Look = Vector3.new(Root.CFrame.LookVector.X, 0, Root.CFrame.LookVector.Z)
+if ToRim.Magnitude <= 0.05 or Look.Magnitude <= 0.05 then return nil end
+ToRim, Look = ToRim.Unit, Look.Unit
+local Dot = math.clamp(Look:Dot(ToRim), -1, 1)
+local BackAngle = math.deg(math.acos(Dot))
+local SignedAngle = math.deg(math.atan2(Look:Cross(ToRim).Y, Dot))
+return Rim, ToRim, Look, BackAngle, SignedAngle
+end
+
+function State.TurnaroundShot.ResolveDirection(Root, DefenderRoot, SignedAngle)
+local Mode = tostring(CONFIG.TurnaroundDirection or 'Automatic')
+local Sign = SignedAngle >= 0 and 1 or -1
+if Mode == 'Left' then Sign = 1
+elseif Mode == 'Right' then Sign = -1
+elseif Mode == 'Ball side' then
+Sign = State.AutoBody and State.AutoBody.CurrentHand == 'L' and 1 or -1
+elseif Mode == 'Opposite ball side' then
+Sign = State.AutoBody and State.AutoBody.CurrentHand == 'L' and -1 or 1
+elseif math.abs(SignedAngle) >= 165 and DefenderRoot then
+local LocalDefender = Root.CFrame:PointToObjectSpace(DefenderRoot.Position)
+Sign = LocalDefender.X >= 0 and 1 or -1
+end
+return Sign, Sign > 0 and 'LEFT' or 'RIGHT'
+end
+
+function State.TurnaroundShot.Start(Character, Root)
+if not CONFIG.AutoTurnaroundShot or State.TurnaroundShot.Active then return false end
+local Now = os.clock()
+Character = Character or LP.Character
+Root = Root or (Character and safe_find(Character, 'HumanoidRootPart'))
+local H = Character and Character:FindFirstChildOfClass('Humanoid')
+if not (Character and Root and H and H.Health > 0 and safe_find(Character, 'Basketball')) then
+State.TurnaroundShot.Status = 'WAITING FOR BALL'; return false
+end
+-- Jumping hands rotation ownership to the turnaround immediately. Auto Body
+-- remains enabled, but cannot re-acquire the character until this shot ends.
+if State.AutoBody then
+State.AutoBody.SuspendedUntil = Now + math.clamp(tonumber(CONFIG.TurnaroundDuration) or 0.24, 0.08, 0.75) + 0.45
+State.AutoBody.Status = 'PAUSED FOR TURNAROUND'
+State.AutoBody.ReleaseRotation()
+end
+if Now - (State.TurnaroundShot.LastAt or 0) < math.max(0, tonumber(CONFIG.TurnaroundCooldown) or 1) then
+State.TurnaroundShot.Status = 'COOLDOWN'; return false
+end
+if (State.Stepback and State.Stepback.Active) or (State.AutoDunk and State.AutoDunk.InProgress)
+or (State.Trickshot and State.Trickshot.Active) then
+State.TurnaroundShot.Status = 'ACTION BUSY'; return false
+end
+local Rim, ToRim, StartLook, BackAngle, SignedAngle = State.TurnaroundShot.GetGeometry(Root)
+if not Rim then State.TurnaroundShot.Status = 'NO RIM'; return false end
+local MinimumAngle = math.clamp(tonumber(CONFIG.TurnaroundMinimumBackAngle) or 100, 60, 175)
+if BackAngle < MinimumAngle then State.TurnaroundShot.Status = 'NOT BACK TO RIM'; return false end
+local Defender, DefenderDistance
+pcall(function() Defender, DefenderDistance = State.AutoBody.FindDefender(Root) end)
+local DefenderCharacter = Defender and Defender.Character
+local DefenderRoot = DefenderCharacter and safe_find(DefenderCharacter, 'HumanoidRootPart')
+DefenderDistance = DefenderRoot and (DefenderRoot.Position - Root.Position).Magnitude or math.huge
+local Range = math.clamp(tonumber(CONFIG.TurnaroundDefenderRange) or 8, 2, 20)
+if DefenderDistance > Range then DefenderRoot = nil end
+local Duration = math.clamp(tonumber(CONFIG.TurnaroundDuration) or 0.24, 0.08, 0.75)
+if not State.Runtime.AcquireRotation('Turnaround', Duration + 0.35) then
+State.TurnaroundShot.Status = 'ROTATION BUSY'; return false
+end
+local Sign, DirectionName = State.TurnaroundShot.ResolveDirection(Root, DefenderRoot, SignedAngle)
+local ShortestSign = SignedAngle >= 0 and 1 or -1
+local RotationMagnitude = math.abs(SignedAngle)
+if Sign ~= ShortestSign then RotationMagnitude = 360 - RotationMagnitude end
+local RotationAngle = RotationMagnitude * Sign
+State.TurnaroundShot.Cancel('STARTING')
+State.Runtime.AcquireRotation('Turnaround', Duration + 0.35)
+State.TurnaroundShot.Generation += 1
+local Generation = State.TurnaroundShot.Generation
+State.TurnaroundShot.Active = true
+State.TurnaroundShot.LastAt = Now
+State.TurnaroundShot.Direction = DirectionName
+State.TurnaroundShot.Angle = RotationAngle
+State.TurnaroundShot.StartedAt, State.TurnaroundShot.EndsAt = Now, Now + Duration
+local SavedAutoRotate = H.AutoRotate
+if State.AutoBody and State.AutoBody.TrackedHumanoid == H
+and State.AutoBody.OriginalAutoRotate ~= nil then
+SavedAutoRotate = State.AutoBody.OriginalAutoRotate
+end
+State.TurnaroundShot.SavedHumanoid, State.TurnaroundShot.SavedAutoRotate = H, SavedAutoRotate
+State.TurnaroundShot.Status = string.format('TURNING %s %.0f DEG', DirectionName, math.abs(RotationAngle))
+if State.AutoBody then
+State.AutoBody.SuspendedUntil = Now + Duration + 0.30
+State.AutoBody.ReleaseRotation()
+end
+H.AutoRotate = false
+-- Preserve the exact takeoff X/Z. Vertical jump motion is left untouched.
+local StartPosition = Root.Position
+local StepSignal = RunService.PreSimulation or RunService.Heartbeat
+State.Lifecycle:Spawn(function()
+while State.Active and State.TurnaroundShot.Active and State.TurnaroundShot.Generation == Generation
+and Root and Root.Parent and H and H.Parent do
+StepSignal:Wait()
+if CONFIG.TurnaroundManualCancel and State.Runtime.HasManualInput(true) then
+State.TurnaroundShot.Cancel('MANUAL CANCEL'); return
+end
+local A = math.clamp((os.clock() - Now) / Duration, 0, 1)
+local E = A * A * (3 - 2 * A)
+local Theta = math.rad(RotationAngle * E)
+local C, S = math.cos(Theta), math.sin(Theta)
+local Direction = Vector3.new(StartLook.X * C + StartLook.Z * S, 0, -StartLook.X * S + StartLook.Z * C)
+if A >= 0.98 then Direction = ToRim end
+pcall(function()
+local CurrentPosition = Root.Position
+local Position = Vector3.new(StartPosition.X, CurrentPosition.Y, StartPosition.Z)
+Root.CFrame = CFrame.lookAt(Position, Position + Direction.Unit, Vector3.yAxis)
+Root.AssemblyLinearVelocity = Vector3.new(0, Root.AssemblyLinearVelocity.Y, 0)
+Root.AssemblyAngularVelocity = Vector3.zero
+end)
+if A >= 1 then break end
+end
+if State.TurnaroundShot.Generation ~= Generation then return end
+if Root and Root.Parent then pcall(function()
+local CurrentPosition = Root.Position
+local Position = Vector3.new(StartPosition.X, CurrentPosition.Y, StartPosition.Z)
+Root.CFrame = CFrame.lookAt(Position, Position + ToRim, Vector3.yAxis)
+Root.AssemblyLinearVelocity = Vector3.new(0, Root.AssemblyLinearVelocity.Y, 0)
+Root.AssemblyAngularVelocity = Vector3.zero
+end) end
+State.TurnaroundShot.Active = false
+if H and H.Parent then pcall(function() H.AutoRotate = State.TurnaroundShot.SavedAutoRotate ~= false end) end
+State.TurnaroundShot.SavedHumanoid, State.TurnaroundShot.SavedAutoRotate = nil, nil
+State.Runtime.ReleaseRotation('Turnaround')
+State.TurnaroundShot.Status = 'COMPLETE ' .. DirectionName
+end)
+return true
+end
+
+function State.TurnaroundShot.WaitForStyle()
+local Deadline = math.max(State.TurnaroundShot.EndsAt or 0, os.clock()) + 0.18
+while State.Active and State.TurnaroundShot.Active and os.clock() < Deadline do
+RunService.Heartbeat:Wait()
+end
+return not State.TurnaroundShot.Active
+end
+
 State.Trickshot = {
 Active = false, Generation = 0, Status = 'OFF', Angle = 0,
 StartedAt = 0, EndsAt = 0, SavedHumanoid = nil, SavedAutoRotate = nil,
@@ -15269,11 +15444,16 @@ SilentAim.ClearActorAim()
 return
 end
 local StepbackUsed = State.Stepback.ChainedShot == true
-if (CONFIG.AutoFadeaway or CONFIG.AutoStop)
+local TurnaroundUsed = false
+if not StepbackUsed and CONFIG.AutoTurnaroundShot then
+local Ok, Started = pcall(State.TurnaroundShot.Start, Char, HumanoidRootPart)
+TurnaroundUsed = Ok and Started == true
+end
+if not TurnaroundUsed and (CONFIG.AutoFadeaway or CONFIG.AutoStop)
 and (not StepbackUsed or CONFIG.StepbackAllowFadeaway) then
 pcall(State.Trickshot.StartShotMovement, Char, HumanoidRootPart)
 end
-if CONFIG.TrickshotEnabled
+if not TurnaroundUsed and CONFIG.TrickshotEnabled
 and (not StepbackUsed or CONFIG.StepbackAllowTrickshot) then
 pcall(State.Trickshot.StartSpin, Char, HumanoidRootPart)
 end
@@ -15311,7 +15491,9 @@ local function AttemptPeakShot()
 if PeakHandled then return end
 PeakHandled = true
 if CheckPeakJump then State.Lifecycle:DisconnectConnection(CheckPeakJump); CheckPeakJump = nil end
-if CONFIG.TrickshotEnabled or CONFIG.AutoFadeaway then
+if State.TurnaroundShot and State.TurnaroundShot.Active then
+State.TurnaroundShot.WaitForStyle()
+elseif CONFIG.TrickshotEnabled or CONFIG.AutoFadeaway then
 State.Trickshot.WaitForStyle()
 end
 
@@ -15732,6 +15914,10 @@ MovementOwner = nil,
 MovementPriority = 0,
 MovementLeaseUntil = 0,
 MovementPriorities = { Guard = 30, GetOpen = 40, Offense = 50, AutoMix = 60, Dunk = 70, TipOff = 80, Stepback = 90 },
+RotationOwner = nil,
+RotationPriority = 0,
+RotationLeaseUntil = 0,
+RotationPriorities = { AutoBody = 20, AutoMix = 60, Turnaround = 95, Trickshot = 100 },
 }
 function State.Runtime.HasManualInput(Enabled)
 if Enabled == false then return false end
@@ -15750,6 +15936,19 @@ return false
 end
 function State.Runtime.ReleaseMovement(Owner)
 if State.Runtime.MovementOwner == Owner then State.Runtime.MovementOwner, State.Runtime.MovementPriority, State.Runtime.MovementLeaseUntil = nil, 0, 0 end
+end
+function State.Runtime.AcquireRotation(Owner, Lease)
+local Now, Priority = os.clock(), State.Runtime.RotationPriorities[Owner] or 0
+if State.Runtime.RotationOwner == Owner or Now >= State.Runtime.RotationLeaseUntil or Priority >= State.Runtime.RotationPriority then
+State.Runtime.RotationOwner, State.Runtime.RotationPriority, State.Runtime.RotationLeaseUntil = Owner, Priority, Now + (Lease or 0.12)
+return true
+end
+return false
+end
+function State.Runtime.ReleaseRotation(Owner)
+if State.Runtime.RotationOwner == Owner then
+State.Runtime.RotationOwner, State.Runtime.RotationPriority, State.Runtime.RotationLeaseUntil = nil, 0, 0
+end
 end
 
 local function GetClosestDribbler()
@@ -15891,6 +16090,7 @@ DribbleAnimationCacheAt = 0,
 RightDribbleAnimationId = nil,
 LeftDribbleAnimationId = nil,
 RuntimeIsReset = false,
+SuspendedUntil = 0,
 }
 
 local GetAutoBodyTargetRig
@@ -16480,6 +16680,14 @@ State.AutoBody.Status = 'WAITING FOR BALL'
 State.AutoBody.CurrentHand = nil
 State.AutoBody.HandStatus = CONFIG.AutoBodyAutoHands and 'WAITING FOR BALL' or 'MANUAL'
 State.AutoBody.ResetRuntime()
+State.AutoBody.ReleaseRotation()
+return
+end
+
+if (State.AutoBody.SuspendedUntil or 0) > os.clock()
+or (State.Runtime and State.Runtime.RotationOwner and State.Runtime.RotationOwner ~= 'AutoBody'
+and os.clock() < (State.Runtime.RotationLeaseUntil or 0)) then
+State.AutoBody.Status = 'YIELDED ROTATION'
 State.AutoBody.ReleaseRotation()
 return
 end
@@ -21940,7 +22148,7 @@ Generation = 0,
 OriginalAimTargetMode = nil,
 MovementPhase = 'backdown',
 PhaseStarted = 0,
-PullUpDistance = 70,
+PullUpDistance = 72,
 PullUpPower = 85,
 BackdownReactionInterval = 0.08,
 BackdownSideDeadzone = 0.35,
@@ -21951,6 +22159,13 @@ BallSwitchAdvantage = 0.30,
 EmergencyDefenderDistance = 6.75,
 StealLaneOffset = 2.85,
 DefenderPredictionTime = 0.28,
+EffectivePredictionTime = 0.28,
+DefenderPingMs = 0,
+DefenderPingSource = 'WAITING',
+DefenderPingPlayer = nil,
+DefenderPingUpdatedAt = 0,
+DefenderPingSmoothed = nil,
+PingLeadSeconds = 0,
 BackdownForwardWeight = 0.28,
 OOBProbeDistance = 7,
 OOBProbeForward = 0.8,
@@ -21958,6 +22173,10 @@ OOBSafetyMargin = 0.65,
 BackdownStrafeSign = 1,
 BackdownStrafeChanged = 0,
 BackdownHasCommittedSide = false,
+LastCutbackAt = 0,
+DefenderCanReachBall = false,
+OppositeBallClearance = math.huge,
+StrafeReason = 'GOAL ROUTE',
 LastBallClearance = math.huge,
 LastDefenderDistance = math.huge,
 StealLaneAligned = false,
@@ -22129,6 +22348,129 @@ if Blended.Magnitude <= 0.05 then return Manual.Unit, true end
 return Blended.Unit, true
 end
 
+local AUTO_OFFENSE_PING_KEYS = {
+'Ping', 'PingMs', 'NetworkPing', 'NetworkPingMs', 'Latency', 'LatencyMs',
+}
+
+function State.AutoOffense.NormalizePingMs(Value)
+local Number = tonumber(Value)
+if not Number and Value ~= nil then
+Number = tonumber(tostring(Value):match('[-+]?%d+%.?%d*'))
+end
+if not Number or Number < 0 then return nil end
+-- Roblox's network API reports seconds; replicated UI stats normally report ms.
+if Number > 0 and Number < 1 then Number *= 1000 end
+if Number > 2000 then return nil end
+return math.clamp(Number, 0, 1000)
+end
+
+function State.AutoOffense.ReadReplicatedPlayerPing(Player)
+if not Player then return nil, nil end
+
+-- Prefer a game-replicated value when one exists, because LocalScripts cannot
+-- normally call GetNetworkPing on another player.
+for _, Key in ipairs(AUTO_OFFENSE_PING_KEYS) do
+local Value = safe_get_attribute(Player, Key)
+local Ping = State.AutoOffense.NormalizePingMs(Value)
+if Ping then return Ping, 'ATTRIBUTE' end
+end
+
+local Containers = {}
+local Leaderstats = safe_find(Player, 'leaderstats')
+local StatsFolder = safe_find(Player, 'Stats')
+if Leaderstats then table.insert(Containers, Leaderstats) end
+if StatsFolder then table.insert(Containers, StatsFolder) end
+table.insert(Containers, Player)
+for _, Container in ipairs(Containers) do
+if Container then
+for _, Key in ipairs(AUTO_OFFENSE_PING_KEYS) do
+local Object = safe_find(Container, Key)
+if Object and Object:IsA('ValueBase') then
+local Ok, Value = pcall(function() return Object.Value end)
+local Ping = Ok and State.AutoOffense.NormalizePingMs(Value) or nil
+if Ping then return Ping, 'REPLICATED STAT' end
+end
+end
+end
+end
+
+-- Some executor/server contexts expose the remote player's real RTT. On a
+-- normal client this safely fails and the target-specific replication fallback
+-- below is used instead.
+local Ok, Seconds = pcall(function() return Player:GetNetworkPing() end)
+local Ping = Ok and State.AutoOffense.NormalizePingMs(Seconds) or nil
+if Ping then return Ping, 'REMOTE API' end
+return nil, nil
+end
+
+function State.AutoOffense.UpdateDefenderLatency(Player, DefenderRoot)
+local BasePrediction = math.max(0, tonumber(State.AutoOffense.DefenderPredictionTime) or 0.28)
+if not (Player and DefenderRoot) then
+State.AutoOffense.DefenderPingPlayer = nil
+State.AutoOffense.DefenderPingMs = 0
+State.AutoOffense.DefenderPingSource = 'WAITING'
+State.AutoOffense.DefenderPingUpdatedAt = 0
+State.AutoOffense.DefenderPingSmoothed = nil
+State.AutoOffense.PingLeadSeconds = 0
+State.AutoOffense.EffectivePredictionTime = BasePrediction
+State.AutoOffense.EffectiveCutoff = State.AutoOffense.CutoffDistance
+return BasePrediction
+end
+
+local Now = os.clock()
+if State.AutoOffense.DefenderPingPlayer ~= Player then
+State.AutoOffense.DefenderPingPlayer = Player
+State.AutoOffense.DefenderPingUpdatedAt = 0
+State.AutoOffense.DefenderPingSmoothed = nil
+end
+
+if Now - (State.AutoOffense.DefenderPingUpdatedAt or 0) >= 0.25 then
+local Ping, Source = State.AutoOffense.ReadReplicatedPlayerPing(Player)
+if not Ping then
+-- ReceiveAge is target-specific replication staleness. It is not advertised as
+-- RTT, but it is the best client-side signal when the game does not replicate
+-- the defender's ping and is directly useful for movement prediction.
+local AgeOk, ReceiveAge = pcall(function() return DefenderRoot.ReceiveAge end)
+if AgeOk and tonumber(ReceiveAge) and ReceiveAge > 0 then
+Ping = math.clamp(ReceiveAge * 1000, 0, 1000)
+Source = 'REPLICATION AGE'
+end
+end
+if not Ping then
+local LocalPing = State.Utility.GetPing()
+if LocalPing and LocalPing > 0 then
+Ping = math.clamp(LocalPing, 0, 1000)
+Source = 'LOCAL PATH EST'
+end
+end
+
+if Ping then
+local Previous = State.AutoOffense.DefenderPingSmoothed
+local Smoothed = Previous and (Previous + (Ping - Previous) * 0.28) or Ping
+State.AutoOffense.DefenderPingSmoothed = Smoothed
+State.AutoOffense.DefenderPingMs = Smoothed
+State.AutoOffense.DefenderPingSource = Source or 'ESTIMATE'
+else
+State.AutoOffense.DefenderPingMs = 0
+State.AutoOffense.DefenderPingSource = 'UNAVAILABLE'
+end
+State.AutoOffense.DefenderPingUpdatedAt = Now
+end
+
+local Extra = 0
+if CONFIG.AutoOffensePingAware ~= false then
+local Ping = math.max(0, tonumber(State.AutoOffense.DefenderPingMs) or 0)
+local Baseline = math.clamp(tonumber(CONFIG.AutoOffensePingBaseline) or 60, 0, 300)
+local Strength = math.clamp(tonumber(CONFIG.AutoOffensePingStrength) or 1, 0, 3)
+local Maximum = math.clamp(tonumber(CONFIG.AutoOffensePingMaxLead) or 0.35, 0, 0.75)
+local Factor = State.AutoOffense.DefenderPingSource == 'REPLICATION AGE' and 1 or 0.5
+Extra = math.clamp(math.max(0, Ping - Baseline) / 1000 * Factor * Strength, 0, Maximum)
+end
+State.AutoOffense.PingLeadSeconds = Extra
+State.AutoOffense.EffectivePredictionTime = BasePrediction + Extra
+return State.AutoOffense.EffectivePredictionTime
+end
+
 function State.AutoOffense.GetDefender()
 local Character = LP.Character
 local Root = Character and safe_find(Character, 'HumanoidRootPart')
@@ -22238,7 +22580,7 @@ State.AutoOffense.OOBSafetyMargin = math.clamp(Edge / 16, 0.25, 1.4)
 State.AutoOffense.OOBProbeDistance = math.clamp(Edge * 0.65, 4, 12)
 
 -- DIAL 3: how hard it pushes to reach the 85-power line
-State.AutoOffense.PullUpDistance = 70
+State.AutoOffense.PullUpDistance = 72
 State.AutoOffense.PullUpPower = 85
 State.AutoOffense.ApproachDistance = 30 + T * 45
 State.AutoOffense.ActionCooldown = 2.4 - T * 1.9
@@ -22354,7 +22696,10 @@ State.AutoOffense.LastClosing = Closing
 -- defender is actually closing on us, so a sprinting defender trips it early
 -- while a stationary or retreating one lets us keep working.
 local Base = State.AutoOffense.CutoffDistance
-local Lead = math.max(0, Closing) * State.AutoOffense.CutoffClosingLead
+local PingLead = CONFIG.AutoOffensePingAware ~= false
+and (State.AutoOffense.PingLeadSeconds or 0) or 0
+local Lead = math.max(0, Closing)
+* (State.AutoOffense.CutoffClosingLead + PingLead)
 local Effective = Base + math.min(Lead, Base)
 if Closing < 0 then
 Effective = math.max(Base * 0.55, Effective + Closing * 0.18)
@@ -22468,7 +22813,8 @@ DefenderRoot.AssemblyLinearVelocity.X,
 DefenderRoot.AssemblyLinearVelocity.Z
 )
 local Predicted = DefenderRoot.Position
-+ Velocity * State.AutoOffense.DefenderPredictionTime
++ Velocity * (State.AutoOffense.EffectivePredictionTime
+or State.AutoOffense.DefenderPredictionTime)
 local LaneOffset = State.AutoOffense.StealLaneOffset
 local LaneForward = Forward * 0.45
 
@@ -22644,6 +22990,10 @@ State.AutoOffense.MovementPhase = 'backdown'
 State.AutoOffense.PhaseStarted = os.clock()
 State.AutoOffense.BackdownStrafeChanged = State.AutoOffense.PhaseStarted
 State.AutoOffense.BackdownHasCommittedSide = false
+State.AutoOffense.LastCutbackAt = 0
+State.AutoOffense.DefenderCanReachBall = false
+State.AutoOffense.OppositeBallClearance = math.huge
+State.AutoOffense.StrafeReason = 'GOAL ROUTE'
 State.AutoOffense.LastBallClearance = math.huge
 State.AutoOffense.LastDefenderDistance = math.huge
 State.AutoOffense.StealLaneAligned = false
@@ -22774,7 +23124,8 @@ DefenderRoot.AssemblyLinearVelocity.X,
 0,
 DefenderRoot.AssemblyLinearVelocity.Z)
 local PredictedDefender = DefenderRoot.Position
-+ DefenderVelocity * State.AutoOffense.DefenderPredictionTime
++ DefenderVelocity * (State.AutoOffense.EffectivePredictionTime
+or State.AutoOffense.DefenderPredictionTime)
 local FlatPredictedDefender = Vector3.new(
 PredictedDefender.X, Root.Position.Y, PredictedDefender.Z)
 local FlatBall = Vector3.new(Ball.Position.X, Root.Position.Y, Ball.Position.Z)
@@ -23566,6 +23917,44 @@ State.AutoOffense.DriveStatus = Sign < 0
 and 'INBOUND LEFT' or 'INBOUND RIGHT'
 end
 
+function State.AutoOffense.EvaluateStrafeBallReach(
+Root, DefenderRoot, Forward, Right, Sign)
+if not (Root and DefenderRoot and Forward and Right and Sign) then
+return false, math.huge
+end
+local Basketball = GetHeldBasketballModel(LP)
+local Ball = Basketball and safe_find(Basketball, 'Ball')
+if not Ball then return false, math.huge end
+local DefenderVelocity = Vector3.new(
+DefenderRoot.AssemblyLinearVelocity.X, 0,
+DefenderRoot.AssemblyLinearVelocity.Z)
+local PredictedDefender = DefenderRoot.Position
++ DefenderVelocity * (State.AutoOffense.EffectivePredictionTime
+or State.AutoOffense.DefenderPredictionTime)
+local BallSideDistance = math.max(1.35, math.abs(
+(Ball.Position - Root.Position):Dot(Right)))
+local PredictedBall = Root.Position
++ Forward * 1.25
++ Right * Sign * (2.35 + BallSideDistance * 0.35)
+PredictedBall = Vector3.new(PredictedBall.X, Ball.Position.Y, PredictedBall.Z)
+local FlatDefender = Vector3.new(
+PredictedDefender.X, Ball.Position.Y, PredictedDefender.Z)
+local Clearance = (FlatDefender - PredictedBall).Magnitude
+local Reach = math.max(
+State.AutoOffense.BallThreatDistance,
+State.AutoOffense.EmergencyDefenderDistance) + 0.65
+return Clearance <= Reach, Clearance
+end
+
+function State.AutoOffense.GetGoalStrafeDirection(Forward, Right, Sign)
+if not (Forward and Right) then return Vector3.zero end
+Sign = Sign and Sign < 0 and -1 or 1
+-- Forward is always the goal vector and Right is its perpendicular. The route
+-- therefore contains only goal progress plus a left/right strafe component.
+local Direction = Forward * 0.52 + Right * Sign
+return Direction.Magnitude > 0.001 and Direction.Unit or Forward
+end
+
 function State.AutoOffense.Step(DeltaTime)
 if not (State.Active and State.AutoOffense.Enabled) then return end
 
@@ -23637,6 +24026,10 @@ local Defender, DefenderDistance = State.AutoOffense.GetDefender()
 local DefenderRoot = Defender and Defender.Character
 and Defender.Character:FindFirstChild('HumanoidRootPart')
 State.AutoOffense.LastDefenderDistance = DefenderDistance
+State.AutoOffense.UpdateDefenderLatency(Defender, DefenderRoot)
+local TurnAround = DefenderRoot
+and State.AutoOffense.EvaluateCutoff(Root, DefenderRoot, Forward)
+or false
 local BallThreat, EscapeSign, BallClearance =
 State.AutoOffense.EvaluateBallThreat(Root, DefenderRoot, Right)
 local ImmediateThreat = BallThreat
@@ -23646,11 +24039,15 @@ or State.AutoOffense.StealLaneAligned
 or Now < (State.AutoOffense.ShieldTurnUntil or 0)
 if DefenderRoot then
 State.AutoOffense.ApplyBackToDefender(
-Root, Humanoid, DefenderRoot, DeltaTime, true,
+Root, Humanoid, DefenderRoot, DeltaTime, TurnAround,
 ShieldThreat, BallClearance)
+if TurnAround then
 State.AutoOffense.DriveStatus = ShieldThreat
-and 'SHIELD TURN | FAST TO 85 LINE'
-or 'BACK TURNED | FAST TO 85 LINE'
+and 'SHIELD TURN | FAST TO 72 LINE'
+or 'BACK TURNED | FAST TO 72 LINE'
+else
+State.AutoOffense.DriveStatus = 'SQUARED UP | FAST TO 72 LINE'
+end
 else
 State.AutoOffense.ReleaseBackdown()
 end
@@ -23662,13 +24059,13 @@ State.AutoOffense.BeginInboundEscape(
 Root, Forward, Right, Court, DefenderRoot)
 end
 
--- The 85-power line remains the hard finish: stop, set 85, and jump-shoot.
-if Distance <= 70.75 then
+-- The 72-stud line is the hard finish: stop, set 85, and let Silent Aim shoot.
+if Distance <= 72.0 then
 State.AutoOffense.InboundActive = false
 State.AutoOffense.LineShotDistance = Distance
 State.AutoOffense.ActionType = 'SHOOT'
-State.AutoOffense.DriveStatus = 'BACK TURNED | AT 85 LINE'
-State.AutoOffense.BoundaryStatus = '85 LINE'
+State.AutoOffense.DriveStatus = 'AT 72 STUDS | SILENT SHOT'
+State.AutoOffense.BoundaryStatus = '72 STUD LINE'
 State.AutoOffense.StopSmoothMovement(Humanoid)
 State.AutoOffense.ClearPathVisual()
 safe_set_attribute(LP, 'Power', 85)
@@ -23676,9 +24073,9 @@ if Now - (State.AutoOffense.LastLineAttempt or 0) >= 0.06 then
 State.AutoOffense.LastLineAttempt = Now
 if State.AutoOffense.PerformShoot() then
 State.AutoOffense.Status = string.format(
-'JUMP SHOT | 85 POWER | %.1f', Distance)
+'SILENT JUMP SHOT | 72 LINE | %.1f', Distance)
 else
-State.AutoOffense.Status = 'HOLDING 85 LINE | '
+State.AutoOffense.Status = 'HOLDING 72 LINE | '
 .. tostring(State.AutoOffense.Status or 'WAITING')
 end
 end
@@ -23721,8 +24118,8 @@ State.AutoOffense.UpdatePathVisual(
 Root, { Root.Position, RecoveryTarget, LineTarget }, 'RECENTER')
 if RefreshStatus then
 State.AutoOffense.Status = string.format(
-RecoveryManual and 'MANUAL + RECENTER | %.1f TO 85 LINE'
-or 'RECENTERING | %.1f TO 85 LINE', Distance - 70)
+RecoveryManual and 'MANUAL + RECENTER | %.1f TO 72 LINE'
+or 'RECENTERING | %.1f TO 72 LINE', Distance - 72)
 end
 return
 end
@@ -23744,15 +24141,9 @@ if SafeSign then State.AutoOffense.InboundSide = SafeSign end
 end
 end
 local Sign = State.AutoOffense.InboundSide or 1
-local Direction = Right * Sign
-local ManualLateral = Right * ManualDirection:Dot(Right)
-local ManualInbound = ManualLateral.Magnitude > 0.05
-if ManualInbound then
-Direction = ManualLateral.Unit
-Sign = Direction:Dot(Right) >= 0 and 1 or -1
-State.AutoOffense.InboundSide = Sign
-end
-State.AutoOffense.ManualBlendActive = ManualInbound
+local Direction = State.AutoOffense.GetGoalStrafeDirection(Forward, Right, Sign)
+local ManualInbound = false
+State.AutoOffense.ManualBlendActive = false
 local Actual, BoundaryAvoiding = State.AutoOffense.MoveSmooth(
 Humanoid, Root, Direction, DeltaTime, Court)
 local Target = State.AutoOffense.InboundTarget
@@ -23765,63 +24156,83 @@ State.AutoOffense.DriveStatus = string.format(
 'BACK TURNED | INBOUND %s', Sign < 0 and 'LEFT' or 'RIGHT')
 if RefreshStatus then
 State.AutoOffense.Status = string.format(
-'%s%s%s | THEN %.1f TO 85 LINE',
+'%s%s%s | THEN %.1f TO 72 LINE',
 BoundaryAvoiding and 'COURT GUARD + ' or '',
 ManualInbound and 'MANUAL + ' or '',
 Sign < 0 and 'INBOUND LEFT' or 'INBOUND RIGHT',
-Distance - 70)
+Distance - 72)
 end
 return
 end
 end
 
-local Direction = Forward
-local Protecting = false
+local Protecting = ImmediateThreat
+local CurrentSign = State.AutoOffense.BackdownStrafeSign
+if CurrentSign ~= -1 and CurrentSign ~= 1 then CurrentSign = 1 end
+local Sign = CurrentSign
+local CurrentReach, CurrentClearance = false, math.huge
+local OppositeReach, OppositeClearance = false, math.huge
+
 if DefenderRoot then
-Protecting = ImmediateThreat
 local Ok, Result = pcall(State.BallAssist.StepNoStealKeeper, Root)
 State.AutoOffense.ProtectStatus = Ok and tostring(Result) or 'KEEPER ERROR'
-local Offset = DefenderRoot.Position - Root.Position
-local FlatOffset = Vector3.new(Offset.X, 0, Offset.Z)
-local DefenderSide = FlatOffset:Dot(Vector3.new(
-Root.CFrame.RightVector.X, 0, Root.CFrame.RightVector.Z).Unit)
-local Sign = DefenderSide >= 0 and -1 or 1
-if EscapeSign and ImmediateThreat then Sign = EscapeSign end
-local SafeSign = State.AutoOffense.GetSafeStrafeSign(
-Root.Position, Forward, Right, Sign, Court)
-if SafeSign then Sign = SafeSign end
-State.AutoOffense.BackdownStrafeSign = Sign
-State.AutoOffense.BackdownHasCommittedSide = true
-local Away = Root.Position - DefenderRoot.Position
-Away = Vector3.new(Away.X, 0, Away.Z)
-if Away.Magnitude > 0.05 then Away = Away.Unit else Away = -Forward end
-local Side = Vector3.new(
-Root.CFrame.RightVector.X, 0, Root.CFrame.RightVector.Z).Unit * Sign
-local Cutoff = FlatOffset.Magnitude > 0.05
-and FlatOffset.Unit:Dot(Forward) >= 0.15
-local ForwardWeight = ImmediateThreat and (Cutoff and 0.24 or 0.34) or 0.20
-Direction = Forward * ForwardWeight + Side * 0.96 + Away * (ImmediateThreat and 0.18 or 0.04)
-if Direction.Magnitude > 0.05 then Direction = Direction.Unit else Direction = Forward end
-State.AutoOffense.ActionType = ImmediateThreat and 'PROTECT' or 'STRAFE'
-State.AutoOffense.DriveStatus = Sign > 0
-and 'BACK TURNED | STRAFE RIGHT'
-or 'BACK TURNED | STRAFE LEFT'
+local BallSideSign = State.AutoOffense.GetBallSideSign(Root, Right)
+local SuggestedSign = State.AutoOffense.SolveStrafeSign(
+Root, DefenderRoot, Right, Forward, BallSideSign,
+ImmediateThreat, Court) or Sign
+CurrentReach, CurrentClearance = State.AutoOffense.EvaluateStrafeBallReach(
+Root, DefenderRoot, Forward, Right, Sign)
+OppositeReach, OppositeClearance = State.AutoOffense.EvaluateStrafeBallReach(
+Root, DefenderRoot, Forward, Right, -Sign)
+local CanCutBack = Now - (State.AutoOffense.LastCutbackAt or 0)
+>= math.max(0.12, State.AutoOffense.StrafeFlipCooldown)
+local ReachThreat = BallThreat or CurrentReach
+if CanCutBack and ReachThreat
+and (not OppositeReach or OppositeClearance >= CurrentClearance + 0.35) then
+Sign = -Sign
+State.AutoOffense.LastCutbackAt = Now
+State.AutoOffense.StrafeReason = 'BALL REACH CUTBACK'
+elseif CanCutBack and SuggestedSign ~= Sign
+and OppositeClearance >= CurrentClearance + 0.75 then
+Sign = SuggestedSign
+State.AutoOffense.LastCutbackAt = Now
+State.AutoOffense.StrafeReason = 'OPEN SIDE CUTBACK'
+else
+State.AutoOffense.StrafeReason = ReachThreat and 'PROTECT BALL' or 'GOAL STRAFE'
+end
 else
 State.AutoOffense.ProtectStatus = 'CLEAR'
-State.AutoOffense.ActionType = 'SPRINT'
-State.AutoOffense.DriveStatus = DefenderRoot
-and 'BACK TURNED | FAST TO 85 LINE' or 'FAST TO 85 LINE'
+State.AutoOffense.StrafeReason = 'GOAL STRAFE'
 end
 
-local ManualBlended
-Direction, ManualBlended = State.AutoOffense.BlendManualDirection(
-Direction, ManualDirection, Protecting)
-State.AutoOffense.ManualBlendActive = ManualBlended
+local SafeSign, BoundaryFlip = State.AutoOffense.GetSafeStrafeSign(
+Root.Position, Forward, Right, Sign, Court)
+if SafeSign then Sign = SafeSign end
+if BoundaryFlip and Sign ~= CurrentSign then
+State.AutoOffense.LastCutbackAt = Now
+State.AutoOffense.StrafeReason = 'COURT EDGE CUTBACK'
+end
+State.AutoOffense.BackdownStrafeSign = Sign
+State.AutoOffense.BackdownHasCommittedSide = true
+State.AutoOffense.DefenderCanReachBall = BallThreat or CurrentReach
+State.AutoOffense.OppositeBallClearance = OppositeClearance
+
+local Direction = State.AutoOffense.GetGoalStrafeDirection(
+Forward, Right, Sign)
+State.AutoOffense.ActionType = State.AutoOffense.DefenderCanReachBall
+and 'CUTBACK' or 'GOAL STRAFE'
+State.AutoOffense.DriveStatus = string.format(
+'%s | %s', Sign > 0 and 'STRAFE RIGHT' or 'STRAFE LEFT',
+State.AutoOffense.StrafeReason)
+-- Do not blend camera-relative input into the automatic route. That old blend
+-- could point backward and was the source of the broken strafe behavior.
+State.AutoOffense.ManualBlendActive = false
+local ManualBlended = false
 local Actual, BoundaryAvoiding = State.AutoOffense.MoveSmooth(
 Humanoid, Root, Direction, DeltaTime, Court)
 local PreviewDirection = Actual and Actual.Magnitude > 0.05
 and Actual.Unit or Direction
-local Mid = Root.Position + PreviewDirection * math.min(10, Distance - 70)
+local Mid = Root.Position + PreviewDirection * math.min(10, Distance - 72)
 local LineTarget = State.AutoOffense.GetLineRouteTarget(Root.Position, Rim, Court)
 State.AutoOffense.UpdatePathVisual(
 Root, { Root.Position, Mid, LineTarget },
@@ -23829,19 +24240,19 @@ Protecting and 'PROTECT' or 'SPRINT')
 if RefreshStatus then
 if BoundaryAvoiding then
 State.AutoOffense.Status = string.format(
-ManualBlended and 'MANUAL + COURT GUARD | %.1f TO 85 LINE'
-or 'COURT GUARD | %.1f TO 85 LINE', Distance - 70)
+ManualBlended and 'MANUAL + COURT GUARD | %.1f TO 72 LINE'
+or 'COURT GUARD | %.1f TO 72 LINE', Distance - 72)
 elseif Protecting then
 State.AutoOffense.Status = string.format(
 ManualBlended
 and 'MANUAL + PROTECT | %.1f TO LINE | %.1f CLEAR'
 or 'BACK TURNED | PROTECT + SPRINT | %.1f TO LINE | %.1f CLEAR',
-Distance - 70, BallClearance or math.huge)
+Distance - 72, BallClearance or math.huge)
 else
 State.AutoOffense.Status = string.format(
-ManualBlended and 'MANUAL + ROUTE | %.1f TO 85 LINE'
-or (DefenderRoot and 'BACK TURNED | FULL SPEED | %.1f TO 85 LINE'
-or 'FULL SPEED | %.1f TO 85 LINE'), Distance - 70)
+ManualBlended and 'MANUAL + ROUTE | %.1f TO 72 LINE'
+or (DefenderRoot and 'BACK TURNED | FULL SPEED | %.1f TO 72 LINE'
+or 'FULL SPEED | %.1f TO 72 LINE'), Distance - 72)
 end
 end
 end
@@ -23895,6 +24306,19 @@ State.AutoOffense.PossessionAt = 0
 State.AutoOffense.InboundActive = false
 State.AutoOffense.InboundStartPosition = nil
 State.AutoOffense.InboundTarget = nil
+State.AutoOffense.BackdownStrafeSign = 1
+State.AutoOffense.LastCutbackAt = 0
+State.AutoOffense.DefenderCanReachBall = false
+State.AutoOffense.OppositeBallClearance = math.huge
+State.AutoOffense.StrafeReason = 'GOAL ROUTE'
+State.AutoOffense.DefenderPingPlayer = nil
+State.AutoOffense.DefenderPingMs = 0
+State.AutoOffense.DefenderPingSource = 'WAITING'
+State.AutoOffense.DefenderPingUpdatedAt = 0
+State.AutoOffense.DefenderPingSmoothed = nil
+State.AutoOffense.PingLeadSeconds = 0
+State.AutoOffense.EffectivePredictionTime = State.AutoOffense.DefenderPredictionTime
+State.AutoOffense.EffectiveCutoff = State.AutoOffense.CutoffDistance
 State.AutoOffense.SmoothedMoveDirection = Vector3.zero
 if not Enabled then State.AutoOffense.ClearPathVisual() end
 State.AutoOffense.Generation += 1
@@ -26848,7 +27272,7 @@ local TabDefinitions = {
 { Name = 'Stepback', DisplayName = 'Stepback', Category = 'GAMEPLAY', Search = 'auto stepback hop retreat side hop defender open space distance duration easing delay cooldown stop collision edge chain trickshot fadeaway ebl' },
 { Name = 'Pass', Category = 'GAMEPLAY', Search = 'pass passing teammate self pass jump pass' },
 { Name = 'Dunk', Category = 'GAMEPLAY', Search = 'dunk auto dunk animation lane' },
-{ Name = 'Offense', Category = 'AUTOMATION', Search = 'offense auto offense backdown drive cutoff pull up shoot chance steal threat lane room strafe custom tuning' },
+{ Name = 'Offense', Category = 'AUTOMATION', Search = 'offense auto offense backdown drive cutoff turn around turnaround ping latency pull up shoot chance steal threat lane room strafe custom tuning' },
 { Name = 'GetOpen', DisplayName = 'Get Open', Category = 'AUTOMATION', Search = 'get open auto cut destination corner wing slot top backdoor practice spacing pass lane off ball' },
 { Name = 'Guard', Category = 'AUTOMATION', Search = 'guard auto guard defense on ball off ball predictive head ride mount jump close range' },
 { Name = 'Body', Category = 'AUTOMATION', Search = 'body auto body defender back face rotate smooth tween hand switch crossover dribble opposite side space separation shoulder angle stickiness cooldown left right anti reach offense' },
@@ -31682,12 +32106,33 @@ HubUI.OffenseCoreGroup, 61, 'Show pathfinding', State.AutoOffense.PathVisualEnab
 function(Value) State.AutoOffense.SetPathVisualEnabled(Value) end
 )
 
-CreateSectionHeader(HubUI.OffenseCoreGroup, 93, 'Live status')
+CreateSectionHeader(HubUI.OffenseCoreGroup, 93, 'Defender response')
+HubUI.Controls.AutoOffenseTurnAround = CreateNumberInput(
+HubUI.OffenseCoreGroup, 113, 'Turn around at (studs)',
+CONFIG.AutoOffenseTurnAround, 3, 20, 1,
+function(Value)
+State.AutoOffense.SetSimple('AutoOffenseTurnAround', Value)
+end
+)
+HubUI.Controls.AutoOffensePingAware = CreateCheckbox(
+HubUI.OffenseCoreGroup, 143, 'Use defender ping',
+CONFIG.AutoOffensePingAware ~= false,
+function(Value)
+CONFIG.AutoOffensePingAware = Value == true
+State.AutoOffense.UpdateDefenderLatency(
+State.AutoOffense.DefenderPingPlayer,
+State.AutoOffense.DefenderPingPlayer
+and State.AutoOffense.DefenderPingPlayer.Character
+and safe_find(State.AutoOffense.DefenderPingPlayer.Character, 'HumanoidRootPart'))
+end
+)
+
+CreateSectionHeader(HubUI.OffenseCoreGroup, 175, 'Live status')
 HubUI.OffenseStatusText = CreateParagraph(
 HubUI.OffenseCoreGroup,
-UDim2.fromOffset(8, 113),
-UDim2.new(1, -16, 0, 137),
-'STATUS  OFF\nTARGET  85-power line\nPLAN    Manual blend + guarded route\nCOURT   --\nSHOT    Jump + Silent Aim'
+UDim2.fromOffset(8, 195),
+UDim2.new(1, -16, 0, 188),
+'STATUS  OFF\nTARGET  85-power line\nPLAN    Ping-aware guarded route\nDEFENDER  -- | PING --\nTURN    9.0 BASE | 9.0 LIVE\nBALL REACH  --\nCOURT   --\nSHOT    Jump + Silent Aim'
 )
 
 CreateSectionHeader(GetOpenGroup, 11, 'Get-open control')
@@ -31985,7 +32430,49 @@ CONFIG.AutoBodyHandRevertDeadzone, 0.15, 0.90, 2,
 function(Value) CONFIG.AutoBodyHandRevertDeadzone = Value end
 )
 
-CreateSectionHeader(BodySettingsGroup, 355, 'Behavior')
+CreateSectionHeader(BodySettingsGroup, 355, 'Turnaround shot')
+HubUI.Controls.AutoTurnaroundShot = CreateCheckbox(
+BodySettingsGroup, 375, 'Auto Turnaround Shot', CONFIG.AutoTurnaroundShot == true,
+function(Value)
+CONFIG.AutoTurnaroundShot = Value == true
+if not Value then State.TurnaroundShot.Cancel('OFF') else State.TurnaroundShot.Status = 'READY' end
+end
+)
+HubUI.Controls.TurnaroundDirection = CreateSelector(
+BodySettingsGroup, 405, 'Turn direction',
+{ 'Automatic', 'Ball side', 'Opposite ball side', 'Left', 'Right' },
+CONFIG.TurnaroundDirection or 'Automatic',
+function(Value) CONFIG.TurnaroundDirection = Value end, 126
+)
+HubUI.Controls.TurnaroundDefenderRange = CreateNumberInput(
+BodySettingsGroup, 435, 'Defender range', CONFIG.TurnaroundDefenderRange, 2, 20, 1,
+function(Value) CONFIG.TurnaroundDefenderRange = Value end
+)
+HubUI.Controls.TurnaroundMinimumBackAngle = CreateNumberInput(
+BodySettingsGroup, 465, 'Back-to-rim angle', CONFIG.TurnaroundMinimumBackAngle, 60, 175, 0,
+function(Value) CONFIG.TurnaroundMinimumBackAngle = Value end
+)
+HubUI.Controls.TurnaroundDuration = CreateNumberInput(
+BodySettingsGroup, 495, 'Turn time (sec)', CONFIG.TurnaroundDuration, 0.08, 0.75, 2,
+function(Value) CONFIG.TurnaroundDuration = Value end
+)
+CreateParagraph(
+BodySettingsGroup, UDim2.fromOffset(8, 525), UDim2.new(1, -16, 0, 48),
+'Jumping releases Auto Body immediately.\nThe turn locks your takeoff X/Z position.'
+)
+HubUI.Controls.TurnaroundCooldown = CreateNumberInput(
+BodySettingsGroup, 585, 'Shot cooldown', CONFIG.TurnaroundCooldown, 0, 5, 2,
+function(Value) CONFIG.TurnaroundCooldown = Value end
+)
+HubUI.Controls.TurnaroundManualCancel = CreateCheckbox(
+BodySettingsGroup, 615, 'Cancel on manual movement', CONFIG.TurnaroundManualCancel ~= false,
+function(Value) CONFIG.TurnaroundManualCancel = Value == true end
+)
+CreateSectionHeader(BodySettingsGroup, 647, 'Live status')
+HubUI.TurnaroundStatusText = CreateParagraph(
+BodySettingsGroup, UDim2.fromOffset(8, 667), UDim2.new(1, -16, 0, 58),
+'STATUS  OFF\nDIRECTION  --\nANGLE  --'
+)
 
 CreateSectionHeader(AutoMixControlGroup, 11, 'Core controls')
 HubUI.Controls.AutoMix = CreateCheckbox(
@@ -34501,6 +34988,7 @@ State.Movement.BodyColliderIncludeSelf },
 { HubUI.Controls.DunkRangeIndicator, CONFIG.DunkRangeIndicator },
 { HubUI.Controls.AutoOffense, State.AutoOffense.Enabled },
 { HubUI.Controls.AutoOffenseShowPath, State.AutoOffense.PathVisualEnabled },
+{ HubUI.Controls.AutoOffensePingAware, CONFIG.AutoOffensePingAware ~= false },
 { HubUI.Controls.AutoGuard, State.AutoGuardEnabled },
 { HubUI.Controls.AutoGuardNoJump, CONFIG.AutoGuardNoJump },
 { HubUI.Controls.AutoGuardBallCheckOnly, CONFIG.AutoGuardBallCheckOnly },
@@ -34526,6 +35014,8 @@ CONFIG.AutoHeadRideMountSmoothness },
 CONFIG.AutoBodyAdaptiveSmoothing },
 { HubUI.Controls.AutoBodyPanicPivot, CONFIG.AutoBodyPanicPivot },
 { HubUI.Controls.AutoBodyBounceSync, CONFIG.AutoBodyBounceSync },
+{ HubUI.Controls.AutoTurnaroundShot, CONFIG.AutoTurnaroundShot == true },
+{ HubUI.Controls.TurnaroundManualCancel, CONFIG.TurnaroundManualCancel ~= false },
 { HubUI.Controls.AutoMix, State.AutoMix.Enabled },
 { HubUI.Controls.AutoMixMovement, CONFIG.AutoMixMovement },
 { HubUI.Controls.AutoMixRotateSpins, CONFIG.AutoMixRotateSpins },
@@ -34658,6 +35148,7 @@ State.AutoGetOpen.NormalizeSpot(CONFIG.AutoGetOpenPreferredSpot) },
 { HubUI.Controls.SilentMode, CONFIG.SilentMode },
 { HubUI.Controls.AimMode, CONFIG.AimMode },
 { HubUI.Controls.FadeawayDirection, CONFIG.FadeawayDirection },
+{ HubUI.Controls.TurnaroundDirection, CONFIG.TurnaroundDirection },
 { HubUI.Controls.SmartShotStrategy, CONFIG.SmartShotStrategy },
 { HubUI.Controls.SmartShotOpenBehavior, CONFIG.SmartShotOpenBehavior },
 { HubUI.Controls.SmartShotAirborneReaction, CONFIG.SmartShotAirborneReaction },
@@ -34711,6 +35202,11 @@ CONFIG.AntiReachCounterRadius },
 { HubUI.Controls.AutoBodyMode, CONFIG.AutoBodyMode },
 { HubUI.Controls.AutoBodyRimBlend, CONFIG.AutoBodyRimBlend },
 { HubUI.Controls.AutoBodyPanicRange, CONFIG.AutoBodyPanicRange },
+{ HubUI.Controls.TurnaroundDefenderRange, CONFIG.TurnaroundDefenderRange },
+{ HubUI.Controls.TurnaroundMinimumBackAngle, CONFIG.TurnaroundMinimumBackAngle },
+{ HubUI.Controls.TurnaroundDuration, CONFIG.TurnaroundDuration },
+{ HubUI.Controls.TurnaroundCooldown, CONFIG.TurnaroundCooldown },
+{ HubUI.Controls.AutoOffenseTurnAround, CONFIG.AutoOffenseTurnAround },
 { HubUI.Controls.AutoBodyHandRevertDeadzone,
 CONFIG.AutoBodyHandRevertDeadzone },
 { HubUI.Controls.AutoMixRange, CONFIG.AutoMixRange },
@@ -35053,6 +35549,8 @@ AutoGuard = 'Sticks to your assigned matchup and mirrors their movement on defen
 GuardMode = 'How the auto guard picks who to lock onto.',
 GuardStyle = 'How tightly the auto guard presses. Tight denies drives, soft protects the paint.',
 AutoOffense = 'Offensive autopilot. Drives, spaces, and takes shots automatically.',
+AutoOffenseTurnAround = 'Base defender distance where Auto Offense turns its back to seal the drive. Ping and closing speed can make the live trigger fire earlier.',
+AutoOffensePingAware = 'Reads the defender ping when available, otherwise uses target replication age, and adds latency lead to movement prediction and the turnaround trigger.',
 OffenseStyle = 'Shot selection profile the offense autopilot uses.',
 OffenseManualOverride = 'Your own inputs instantly take control back from the offense autopilot.',
 AutoMix = 'Manual-first mixer: Auto Body stays active while your real F/G inputs perform the handles and spins.',
@@ -35060,6 +35558,13 @@ AutoMixManualHandles = 'Keeps every handle manual. F and G pass through to Hoopz
 AutoMixSpinDegrees = 'Character rotation applied when you manually press F or G.',
 AutoMixMode = 'Overall aggression profile for the auto mixer.',
 AutoBody = 'Automatic body positioning to seal defenders and win driving space.',
+AutoTurnaroundShot = 'On a jump shot, Auto Body releases rotation immediately and the character turns toward the rim without leaving the takeoff position.',
+TurnaroundDirection = 'Automatic turns away from the nearby defender; ball-side and fixed directions are also available.',
+TurnaroundDefenderRange = 'Maximum defender distance required to activate a turnaround shot.',
+TurnaroundMinimumBackAngle = 'Minimum angle away from the basket before a turnaround is eligible.',
+TurnaroundDuration = 'How quickly the turnaround rotation completes before release.',
+TurnaroundCooldown = 'Minimum delay between automatic turnaround attempts.',
+TurnaroundManualCancel = 'Cancels an active turnaround when manual movement input is detected.',
 AutoBodyMode = 'Positioning style the auto body system uses.',
 AutoGetOpen = 'Moves you to open spots off the ball so you are always a pass target.',
 AutoGetOpenDestination = 'Preferred zone the get-open logic drifts toward.',
@@ -36466,10 +36971,18 @@ and string.format('%.1f studs', State.AutoHeadRide.TargetDistance) or '--'
 end
 if HubUI.OffenseStatusText then
 HubUI.OffenseStatusText.Text = string.format(
-'STATUS  %s\nTARGET  %s\nPLAN    %s\nCOURT   %s | EDGE %s\nSHOT    85 power + jump + Silent Aim',
+'STATUS  %s\nTARGET  %s\nPLAN    %s\nDEFENDER  %s | PING %s\nTURN    %.1f BASE | %.1f LIVE\nBALL REACH  %s\nCOURT   %s | EDGE %s\nSHOT    at 72 studs with Silent Aim',
 State.AutoOffense.Status,
 State.AutoOffense.Target and string.format('%.1f studs', State.AutoOffense.TargetDistance) or '--',
-State.AutoOffense.DriveStatus or 'BACK TURNED | FAST TO 85 LINE',
+State.AutoOffense.DriveStatus or 'GOAL STRAFE TO 72 LINE',
+State.AutoOffense.DefenderPingPlayer
+and ('@' .. State.AutoOffense.DefenderPingPlayer.Name) or '--',
+State.AutoOffense.DefenderPingMs > 0
+and string.format('%.0f MS (%s)', State.AutoOffense.DefenderPingMs,
+State.AutoOffense.DefenderPingSource or 'EST') or '--',
+tonumber(CONFIG.AutoOffenseTurnAround) or 9,
+tonumber(State.AutoOffense.EffectiveCutoff) or tonumber(CONFIG.AutoOffenseTurnAround) or 9,
+State.AutoOffense.DefenderCanReachBall and 'YES - CUT BACK' or 'NO - HOLD SIDE',
 State.AutoOffense.BoundaryStatus or 'CLEAR',
 State.AutoOffense.EdgeClearance < math.huge
 and string.format('%.1f', State.AutoOffense.EdgeClearance) or '--'
@@ -36503,6 +37016,17 @@ BodyTarget and string.format(
 '%.1f st/s', State.AutoBody.ClosingSpeed or 0) or '--',
 State.AutoBody.HandStatus
 )
+if HubUI.TurnaroundStatusText then
+local Remaining = math.max(0, (tonumber(CONFIG.TurnaroundCooldown) or 1)
+- (os.clock() - (State.TurnaroundShot.LastAt or 0)))
+HubUI.TurnaroundStatusText.Text = string.format(
+'STATUS  %s\nDIRECTION  %s\nANGLE  %.0f DEG\nCOOLDOWN  %.2f SEC',
+CONFIG.AutoTurnaroundShot and (State.TurnaroundShot.Status or 'READY') or 'OFF',
+State.TurnaroundShot.Direction or '--',
+math.abs(State.TurnaroundShot.Angle or 0),
+Remaining
+)
+end
 if State.AutoMix.Enabled and State.AutoMix.SessionStartedAt then
 local InGameNow = LP:GetAttribute('Ingame') == true
 if InGameNow and not State.AutoMix.SessionInGame then
@@ -37717,6 +38241,7 @@ pcall(function() State.Utility.SetAntiTravel(false) end)
 pcall(function() State.Utility.SetAntiFall(false) end)
 pcall(function() State.Utility.SetStreamerMode(false) end)
 pcall(function() State.Extras.SetSpinbot(false) end)
+pcall(function() State.TurnaroundShot.Cancel('OFF') end)
 pcall(function() State.Trickshot.CancelSpin('OFF') end)
 pcall(function() State.Trickshot.CancelShotMovement('OFF') end)
 pcall(function() State.SmartShot.Restore('OFF') end)
