@@ -459,6 +459,14 @@ AutoDunkManualOverride = true,
 AutoDunkLaneCheck = true,
 AutoDunkRandomOwned = false,
 
+-- One-switch full automation preset. Auto Rage keeps normal ground movement
+-- at 19, uses the existing velocity-flight controller at 19 while carrying,
+-- and commits through the scoring rim with the dunk input held.
+AutoRage = false,
+AutoRageSpeed = 19,
+AutoRageReach = 100,
+AutoRageDunkArmDistance = 19,
+
 AutoOffense = false,
 AutoOffenseMode = 'balanced',
 AutoOffenseManualOverride = true,
@@ -956,6 +964,8 @@ AutoDunkEnabled = CONFIG.AutoDunk,
 AutoDunkMode = CONFIG.AutoDunkMode,
 AutoDunkRandomOwned = CONFIG.AutoDunkRandomOwned,
 AutoDunkStatus = CONFIG.AutoDunk and 'WAITING' or 'OFF',
+AutoRageEnabled = CONFIG.AutoRage == true,
+AutoRageStatus = CONFIG.AutoRage and 'STARTING' or 'OFF',
 LegitAimSequenceActive = false,
 LegitAimGeneration = 0,
 LegitAimTarget = nil,
@@ -2677,6 +2687,15 @@ end
 end
 
 function State.Movement.GetFlightDirection()
+-- Auto Rage supplies a target-directed vector only while it owns a live
+-- possession route. Normal velocity flight remains camera-relative.
+if State.AutoRage and State.AutoRage.Enabled
+and type(State.AutoRage.GetFlightDirection) == 'function' then
+local Ok, RageDirection = pcall(State.AutoRage.GetFlightDirection)
+if Ok and typeof(RageDirection) == 'Vector3' then
+return RageDirection.Magnitude > 1 and RageDirection.Unit or RageDirection
+end
+end
 if UserInputService:GetFocusedTextBox() then return Vector3.zero end
 local Camera = Workspace.CurrentCamera
 if not Camera then return Vector3.zero end
@@ -2787,12 +2806,15 @@ if Stale then pcall(function() Stale:Destroy() end) end
 CurrentRoot.AssemblyLinearVelocity = Direction * Speed
 CurrentRoot.AssemblyAngularVelocity = Vector3.zero
 
+local FacingDirection = Direction
+if not (State.AutoRage and State.AutoRage.Enabled
+and State.AutoRage.HasPossession and State.AutoRage.Target) then
 local Camera = Workspace.CurrentCamera
-if Camera then
-local Look = Vector3.new(Camera.CFrame.LookVector.X, 0, Camera.CFrame.LookVector.Z)
+if Camera then FacingDirection = Camera.CFrame.LookVector end
+end
+local Look = Vector3.new(FacingDirection.X, 0, FacingDirection.Z)
 if Look.Magnitude > 0.001 then
 CurrentRoot.CFrame = CFrame.lookAt(CurrentRoot.Position, CurrentRoot.Position + Look.Unit)
-end
 end
 end)
 )
@@ -3804,7 +3826,7 @@ local HumanoidObject = Character and safe_find(Character, 'Humanoid')
 local Root = Character and safe_find(Character, 'HumanoidRootPart')
 if not (HumanoidObject and Root) or HumanoidObject.Health <= 0 then return end
 
-local ReachRadius = math.clamp(tonumber(State.BallAssist.ReachRadius) or 10, 2, 30)
+local ReachRadius = math.clamp(tonumber(State.BallAssist.ReachRadius) or 10, 2, 100)
 local MagRadius = math.clamp(tonumber(State.BallAssist.MagRadius) or 35, 4, 80)
 local MagSpeed = math.clamp(tonumber(State.BallAssist.MagSpeed) or 85, 10, 200)
 State.BallAssist.SmartReachActive = false
@@ -3888,7 +3910,7 @@ State.BallAssist.ReachScanAt = 0
 end
 
 function State.BallAssist.SetReachRadius(Value)
-Value = math.clamp(tonumber(Value) or 10, 2, 30)
+Value = math.clamp(tonumber(Value) or 10, 2, 100)
 State.BallAssist.ReachRadius = Value
 CONFIG.BallReachRadius = Value
 end
@@ -24348,6 +24370,400 @@ Notify('SILVER SURFER', 'Auto Offense enabled')
 end
 end
 
+-- AUTO RAGE ---------------------------------------------------------------
+-- Reuses the existing reach, movement, guard, silent-aim, flight, and dunk
+-- controllers instead of maintaining parallel implementations.
+State.AutoRage = {
+Enabled = false,
+BindName = 'OBLITERATE_V2_AutoRage',
+Status = CONFIG.AutoRage and 'STARTING' or 'OFF',
+Target = nil,
+TargetDistance = math.huge,
+HasPossession = false,
+ForcedFlight = false,
+StartedDunk = false,
+LastEnforceAt = 0,
+LastAimRequestAt = 0,
+LastFlightDirection = nil,
+CommitDirection = nil,
+CommitUntil = 0,
+Saved = nil,
+}
+
+function State.AutoRage.CaptureSettings()
+return {
+ReachEnabled = State.BallAssist.ReachEnabled,
+ReachRadius = State.BallAssist.ReachRadius,
+SmartReach = CONFIG.SmartReach,
+WalkSpeedEnabled = State.Movement.WalkSpeedEnabled,
+WalkSpeedValue = State.Movement.WalkSpeedValue,
+AutoGuardEnabled = State.AutoGuardEnabled,
+AutoGuardStyle = State.AutoGuardStyle,
+AutoGuardMethod = State.Movement.AutoGuardMethod,
+SilentAimRequested = State.RequestedEnabled,
+AimMode = CONFIG.AimMode,
+HumanizeEnabled = CONFIG.HumanizeEnabled,
+AutoPower = CONFIG.AutoPower,
+AimRequireBall = CONFIG.AimRequireBall,
+PerfectRelease = CONFIG.PerfectRelease,
+FlightEnabled = State.Movement.FlightEnabled,
+FlightSpeed = State.Movement.FlightSpeed,
+FlightMethod = State.Movement.FlightMethod,
+AutoDunkEnabled = State.AutoDunkEnabled,
+AutoDunkMode = State.AutoDunkMode,
+AutoDunkManualOverride = CONFIG.AutoDunkManualOverride,
+AutoDunkLaneCheck = CONFIG.AutoDunkLaneCheck,
+AutoDunkTriggerDistance = CONFIG.AutoDunkTriggerDistance,
+AutoDunkApproachDistance = CONFIG.AutoDunkApproachDistance,
+AutoDunkHoldTime = CONFIG.AutoDunkHoldTime,
+AutoDunkRetryDelay = CONFIG.AutoDunkRetryDelay,
+AutoOffenseEnabled = State.AutoOffense.Enabled,
+AutoMixEnabled = State.AutoMix.Enabled,
+AutoGetOpenEnabled = State.AutoGetOpenEnabled,
+AutoBodyEnabled = State.AutoBody.Enabled,
+AutoHeadRideEnabled = State.AutoHeadRide.Enabled,
+AirWalkEnabled = State.Movement.AirWalkEnabled,
+IcePhysics = CONFIG.IcePhysics,
+}
+end
+
+function State.AutoRage.ResetRoute(Status)
+State.AutoRage.Target = nil
+State.AutoRage.TargetDistance = math.huge
+State.AutoRage.HasPossession = false
+State.AutoRage.LastFlightDirection = nil
+State.AutoRage.CommitDirection = nil
+State.AutoRage.CommitUntil = 0
+State.AutoRage.Status = Status or (State.AutoRage.Enabled and 'WAITING FOR BALL' or 'OFF')
+end
+
+function State.AutoRage.GetFlightDirection()
+if not (State.AutoRage.Enabled and State.AutoRage.HasPossession) then return nil end
+local Character = LP.Character
+local Root = Character and safe_find(Character, 'HumanoidRootPart')
+local Target = State.AutoRage.Target
+if not (Root and Target and Target.Parent) then return Vector3.zero end
+
+if os.clock() < (State.AutoRage.CommitUntil or 0)
+and State.AutoRage.CommitDirection then
+return State.AutoRage.CommitDirection
+end
+
+local Delta = Target.Position - Root.Position
+if Delta.Magnitude > 0.05 then
+State.AutoRage.LastFlightDirection = Delta.Unit
+return Delta.Unit
+end
+return State.AutoRage.LastFlightDirection or Root.CFrame.LookVector
+end
+
+function State.AutoRage.StopFlight()
+if State.AutoRage.ForcedFlight and State.Movement.FlightEnabled then
+State.Movement.SetFlight(false)
+end
+State.AutoRage.ForcedFlight = false
+end
+
+function State.AutoRage.ApplySettings()
+local Speed = math.clamp(tonumber(CONFIG.AutoRageSpeed) or 19, 1, 250)
+local Reach = math.clamp(tonumber(CONFIG.AutoRageReach) or 100, 2, 100)
+
+-- Disable movement owners that would fight the direct rim route.
+if State.AutoOffense.Enabled then State.AutoOffense.SetEnabled(false, false) end
+if State.AutoMix.Enabled then State.AutoMix.SetEnabled(false) end
+if State.AutoGetOpenEnabled then SetAutoGetOpenEnabled(false, false) end
+if State.AutoBody.Enabled then State.AutoBody.SetEnabled(false) end
+if State.AutoHeadRide.Enabled then State.AutoHeadRide.SetEnabled(false, false) end
+if State.Movement.AirWalkEnabled then State.Movement.SetAirWalk(false) end
+if CONFIG.IcePhysics then State.Movement.SetIcePhysics(false) end
+
+CONFIG.SmartReach = false
+State.BallAssist.SetReachRadius(Reach)
+State.BallAssist.SetReach(true)
+
+State.Movement.SetWalkSpeedValue(Speed)
+State.Movement.SetWalkSpeed(true)
+
+State.AutoGuardStyle = 'Predictive'
+CONFIG.AutoGuardStyle = 'Predictive'
+State.Movement.SetAutoGuardMethod('MoveTo')
+SetAutoGuardEnabled(true, false)
+
+CONFIG.AimMode = 'Silent'
+CONFIG.HumanizeEnabled = false
+CONFIG.AutoPower = true
+CONFIG.AimRequireBall = true
+CONFIG.PerfectRelease = true
+if not State.RequestedEnabled then
+State.AutoRage.LastAimRequestAt = os.clock()
+SetSilentAimEnabled(true, false)
+end
+
+CONFIG.AutoDunkManualOverride = false
+CONFIG.AutoDunkLaneCheck = false
+CONFIG.AutoDunkTriggerDistance = 20
+CONFIG.AutoDunkApproachDistance = 100
+CONFIG.AutoDunkHoldTime = 2.25
+CONFIG.AutoDunkRetryDelay = 0.65
+State.AutoDunkMode = 'Aggressive'
+CONFIG.AutoDunkMode = 'Aggressive'
+State.AutoDunk.SetEnabled(true, false)
+
+if State.Movement.FlightEnabled then State.Movement.SetFlight(false) end
+State.Movement.SetFlightMethod('Assembly Linear Velocity')
+State.Movement.SetFlightSpeed(Speed)
+end
+
+function State.AutoRage.EnforceSettings()
+local Now = os.clock()
+if Now - (State.AutoRage.LastEnforceAt or 0) < 0.35 then return end
+State.AutoRage.LastEnforceAt = Now
+local Speed = math.clamp(tonumber(CONFIG.AutoRageSpeed) or 19, 1, 250)
+local Reach = math.clamp(tonumber(CONFIG.AutoRageReach) or 100, 2, 100)
+
+if State.AutoOffense.Enabled then State.AutoOffense.SetEnabled(false, false) end
+if State.AutoMix.Enabled then State.AutoMix.SetEnabled(false) end
+if State.AutoGetOpenEnabled then SetAutoGetOpenEnabled(false, false) end
+if State.AutoBody.Enabled then State.AutoBody.SetEnabled(false) end
+if State.AutoHeadRide.Enabled then State.AutoHeadRide.SetEnabled(false, false) end
+if State.Movement.AirWalkEnabled then State.Movement.SetAirWalk(false) end
+if CONFIG.IcePhysics then State.Movement.SetIcePhysics(false) end
+
+if CONFIG.SmartReach then CONFIG.SmartReach = false end
+if not State.BallAssist.ReachEnabled then State.BallAssist.SetReach(true) end
+if State.BallAssist.ReachRadius ~= Reach then State.BallAssist.SetReachRadius(Reach) end
+if not State.Movement.WalkSpeedEnabled then State.Movement.SetWalkSpeed(true) end
+if State.Movement.WalkSpeedValue ~= Speed then State.Movement.SetWalkSpeedValue(Speed) end
+if State.AutoGuardStyle ~= 'Predictive' then
+State.AutoGuardStyle = 'Predictive'
+CONFIG.AutoGuardStyle = 'Predictive'
+end
+if State.Movement.AutoGuardMethod ~= 'MoveTo' then
+State.Movement.SetAutoGuardMethod('MoveTo')
+end
+if not State.AutoGuardEnabled then SetAutoGuardEnabled(true, false) end
+
+CONFIG.AimMode = 'Silent'
+CONFIG.HumanizeEnabled = false
+CONFIG.AutoPower = true
+CONFIG.AimRequireBall = true
+CONFIG.PerfectRelease = true
+if not State.RequestedEnabled
+and Now - (State.AutoRage.LastAimRequestAt or 0) >= 2.5 then
+State.AutoRage.LastAimRequestAt = Now
+SetSilentAimEnabled(true, false)
+end
+
+CONFIG.AutoDunkManualOverride = false
+CONFIG.AutoDunkLaneCheck = false
+CONFIG.AutoDunkTriggerDistance = 20
+CONFIG.AutoDunkApproachDistance = 100
+CONFIG.AutoDunkHoldTime = 2.25
+CONFIG.AutoDunkRetryDelay = 0.65
+if State.AutoDunkMode ~= 'Aggressive' then
+State.AutoDunkMode = 'Aggressive'
+CONFIG.AutoDunkMode = 'Aggressive'
+end
+if not State.AutoDunkEnabled then State.AutoDunk.SetEnabled(true, false) end
+if State.Movement.FlightMethod ~= 'Assembly Linear Velocity' then
+State.Movement.SetFlightMethod('Assembly Linear Velocity')
+end
+if State.Movement.FlightSpeed ~= Speed then State.Movement.SetFlightSpeed(Speed) end
+end
+
+function State.AutoRage.Step()
+if not (State.Active and State.AutoRage.Enabled) then return end
+State.AutoRage.EnforceSettings()
+
+local Character = LP.Character
+local HumanoidObject = Character and safe_find(Character, 'Humanoid')
+local Root = Character and safe_find(Character, 'HumanoidRootPart')
+local Basketball = GetHeldBasketballModel(LP)
+if not (HumanoidObject and Root) or HumanoidObject.Health <= 0 then
+State.AutoRage.StopFlight()
+State.AutoRage.ResetRoute('WAITING FOR CHARACTER')
+return
+end
+
+if not Basketball then
+if State.AutoRage.StartedDunk and State.AutoDunk.InProgress then
+State.AutoDunk.ReleaseKey()
+end
+State.AutoRage.StartedDunk = false
+State.AutoRage.StopFlight()
+State.AutoRage.ResetRoute(State.AutoGuardEnabled
+and 'AUTO GUARD | WAITING FOR BALL' or 'WAITING FOR BALL')
+return
+end
+State.AutoRage.HasPossession = true
+
+local Target = select(1, State.AutoDunk.ResolveTarget())
+if not (Target and Target.Parent) then
+State.AutoRage.StopFlight()
+State.AutoRage.Target = nil
+State.AutoRage.TargetDistance = math.huge
+State.AutoRage.Status = 'NO SCORING RIM'
+return
+end
+
+State.AutoRage.Target = Target
+local Delta = Target.Position - Root.Position
+local FlightDistance = Delta.Magnitude
+State.AutoRage.TargetDistance = FlightDistance
+
+if not State.Movement.FlightEnabled then State.Movement.SetFlight(true) end
+State.AutoRage.ForcedFlight = true
+
+local Now = os.clock()
+if FlightDistance <= 3.5 and Now >= (State.AutoRage.CommitUntil or 0) then
+local Direction = Delta.Magnitude > 0.05 and Delta.Unit
+or State.AutoRage.LastFlightDirection or Root.CFrame.LookVector
+State.AutoRage.CommitDirection = Direction
+State.AutoRage.CommitUntil = Now + 0.45
+end
+
+local ArmDistance = math.clamp(
+tonumber(CONFIG.AutoRageDunkArmDistance) or 19, 8, 30)
+if not State.AutoDunk.InProgress and FlightDistance <= ArmDistance
+and Now - (State.AutoDunk.LastAttempt or 0)
+>= math.max(0.25, tonumber(CONFIG.AutoDunkRetryDelay) or 0.65) then
+local CanStart, Reason = State.AutoDunk.CanStart(Basketball)
+if CanStart then
+State.AutoRage.StartedDunk = State.AutoDunk.Begin(Target) == true
+elseif Reason then
+State.AutoRage.Status = tostring(Reason)
+end
+end
+
+if State.AutoDunk.InProgress then
+State.AutoRage.Status = FlightDistance <= 3.5
+and 'DUNKING | RAMMING RIM'
+or string.format('DUNK ARMED | %.1f STUDS', FlightDistance)
+else
+State.AutoRage.Status = string.format('FLYING TO RIM | %.1f STUDS', FlightDistance)
+end
+end
+
+function State.AutoRage.UpdateBinding()
+pcall(function()
+State.Lifecycle:UnbindFromRenderStep(State.AutoRage.BindName)
+end)
+if not State.AutoRage.Enabled then return end
+State.Lifecycle:BindToRenderStep(
+State.AutoRage.BindName,
+Enum.RenderPriority.Input.Value + 6,
+WYNF_JIT(function() State.AutoRage.Step() end)
+)
+end
+
+function State.AutoRage.RestoreSettings()
+local Saved = State.AutoRage.Saved
+State.AutoRage.Saved = nil
+if not Saved then return end
+
+if State.AutoRage.StartedDunk and State.AutoDunk.InProgress then
+State.AutoDunk.ReleaseKey()
+end
+State.AutoRage.StartedDunk = false
+if State.Movement.FlightEnabled then State.Movement.SetFlight(false) end
+State.AutoRage.ForcedFlight = false
+
+CONFIG.SmartReach = Saved.SmartReach == true
+State.BallAssist.SetReachRadius(Saved.ReachRadius)
+State.BallAssist.SetReach(Saved.ReachEnabled)
+State.Movement.SetWalkSpeedValue(Saved.WalkSpeedValue)
+State.Movement.SetWalkSpeed(Saved.WalkSpeedEnabled)
+
+State.AutoGuardStyle = Saved.AutoGuardStyle or 'Predictive'
+CONFIG.AutoGuardStyle = State.AutoGuardStyle
+State.Movement.SetAutoGuardMethod(Saved.AutoGuardMethod or 'MoveTo')
+SetAutoGuardEnabled(Saved.AutoGuardEnabled, false)
+
+CONFIG.AimMode = Saved.AimMode
+CONFIG.HumanizeEnabled = Saved.HumanizeEnabled
+CONFIG.AutoPower = Saved.AutoPower
+CONFIG.AimRequireBall = Saved.AimRequireBall
+CONFIG.PerfectRelease = Saved.PerfectRelease
+SetSilentAimEnabled(Saved.SilentAimRequested, false)
+
+CONFIG.AutoDunkManualOverride = Saved.AutoDunkManualOverride
+CONFIG.AutoDunkLaneCheck = Saved.AutoDunkLaneCheck
+CONFIG.AutoDunkTriggerDistance = Saved.AutoDunkTriggerDistance
+CONFIG.AutoDunkApproachDistance = Saved.AutoDunkApproachDistance
+CONFIG.AutoDunkHoldTime = Saved.AutoDunkHoldTime
+CONFIG.AutoDunkRetryDelay = Saved.AutoDunkRetryDelay
+State.AutoDunkMode = Saved.AutoDunkMode or 'Smart Approach'
+CONFIG.AutoDunkMode = State.AutoDunkMode
+State.AutoDunk.SetEnabled(Saved.AutoDunkEnabled, false)
+
+State.Movement.SetFlightMethod(Saved.FlightMethod or 'Assembly Linear Velocity')
+State.Movement.SetFlightSpeed(Saved.FlightSpeed)
+if Saved.FlightEnabled then State.Movement.SetFlight(true) end
+if Saved.AirWalkEnabled then State.Movement.SetAirWalk(true) end
+if Saved.IcePhysics then State.Movement.SetIcePhysics(true) end
+
+if Saved.AutoHeadRideEnabled then State.AutoHeadRide.SetEnabled(true, false) end
+if Saved.AutoBodyEnabled then State.AutoBody.SetEnabled(true) end
+if Saved.AutoGetOpenEnabled then SetAutoGetOpenEnabled(true, false) end
+if Saved.AutoMixEnabled then State.AutoMix.SetEnabled(true) end
+if Saved.AutoOffenseEnabled then State.AutoOffense.SetEnabled(true, false) end
+end
+
+function State.AutoRage.SetEnabled(Enabled, ShouldNotify)
+Enabled = Enabled == true
+if Enabled and not State.Active then return end
+if Enabled == State.AutoRage.Enabled then
+if Enabled then
+State.AutoRage.ApplySettings()
+State.AutoRage.UpdateBinding()
+end
+return
+end
+
+if Enabled then
+State.AutoRage.Saved = State.AutoRage.CaptureSettings()
+State.AutoRage.Enabled = true
+State.AutoRageEnabled = true
+CONFIG.AutoRage = true
+State.AutoRage.Status = 'STARTING'
+State.AutoRage.LastEnforceAt = 0
+State.AutoRage.LastAimRequestAt = 0
+State.AutoRage.ApplySettings()
+State.AutoRage.UpdateBinding()
+pcall(State.AutoRage.Step)
+else
+State.AutoRage.Enabled = false
+State.AutoRageEnabled = false
+CONFIG.AutoRage = false
+State.AutoRage.UpdateBinding()
+State.AutoRage.StopFlight()
+State.AutoRage.RestoreSettings()
+State.AutoRage.ResetRoute('OFF')
+end
+
+if HubUI.Sync then HubUI.Sync() end
+if ShouldNotify then
+Notify('SILVER SURFER', Enabled
+and 'Auto Rage enabled: max reach, speed 19, auto guard, silent aim, and rim-flight dunk.'
+or 'Auto Rage disabled; previous settings restored.')
+end
+end
+
+function State.AutoRage.Cleanup()
+State.AutoRage.Enabled = false
+State.AutoRageEnabled = false
+CONFIG.AutoRage = false
+pcall(function() State.Lifecycle:UnbindFromRenderStep(State.AutoRage.BindName) end)
+if State.AutoRage.StartedDunk and State.AutoDunk.InProgress then
+pcall(State.AutoDunk.ReleaseKey)
+end
+State.AutoRage.StartedDunk = false
+State.AutoRage.ForcedFlight = false
+State.AutoRage.Saved = nil
+State.AutoRage.ResetRoute('OFF')
+end
+
+
 State.Desync = {
 Enabled = CONFIG.Desync == true,
 Status = 'off',
@@ -29967,7 +30383,7 @@ function(Value) State.BallAssist.SetBallReachMethod(Value) end,
 118
 )
 HubUI.Controls.BallReachRadius = CreateNumberInput(
-BallReachGroup, 91, 'Reach radius', State.BallAssist.ReachRadius, 2, 30, 0,
+BallReachGroup, 91, 'Reach radius', State.BallAssist.ReachRadius, 2, 100, 0,
 function(Value) State.BallAssist.SetReachRadius(Value) end
 )
 HubUI.Controls.SmartReach = CreateCheckbox(
@@ -32089,6 +32505,18 @@ DunkGroup,
 UDim2.fromOffset(8, 255),
 UDim2.new(1, -16, 0, 79),
 'STATUS  OFF\nTARGET  --\nMODE    Smart Approach\nDUNK    Equipped rotation'
+)
+
+CreateSectionHeader(DunkGroup, 350, 'Rage automation')
+HubUI.Controls.AutoRage = CreateCheckbox(
+DunkGroup, 370, 'Auto Rage', State.AutoRage.Enabled,
+function(Value) State.AutoRage.SetEnabled(Value, true) end
+)
+HubUI.AutoRageStatusText = CreateParagraph(
+DunkGroup,
+UDim2.fromOffset(8, 400),
+UDim2.new(1, -16, 0, 92),
+'STATUS  OFF\nBALL    --\nRIM     --\nLOADOUT MAX REACH | SPEED 19 | GUARD + AIM'
 )
 
 HubUI.OffenseCoreGroup = CreateGroup(
@@ -34982,6 +35410,7 @@ CONFIG.AntiReachNoStealKeeper },
 State.Movement.BodyColliderIncludeSelf },
 { HubUI.Controls.AutoTipOff, State.BallAssist.TipOffEnabled },
 { HubUI.Controls.AutoDunk, State.AutoDunkEnabled },
+{ HubUI.Controls.AutoRage, State.AutoRage.Enabled },
 { HubUI.Controls.DunkManualOverride, CONFIG.AutoDunkManualOverride },
 { HubUI.Controls.DunkLaneCheck, CONFIG.AutoDunkLaneCheck },
 { HubUI.Controls.DunkRandomOwned, State.AutoDunkRandomOwned },
@@ -35537,6 +35966,7 @@ DunkLaneCheck = 'Only triggers the auto dunk when the driving lane is actually c
 DunkRangeIndicator = 'Shows the zone where the auto dunk can trigger.',
 DunkManualOverride = 'Your own inputs instantly cancel an in-progress auto dunk.',
 DunkRandomOwned = 'Picks a random dunk you own each time instead of repeating one.',
+AutoRage = 'One-switch rage preset: maximum reach, 19 WalkSpeed, adaptive guard, full silent aim, and 19-speed velocity flight that carries the ball directly through the rim while holding dunk.',
 AutoPass = 'Automatically passes to the best open teammate when you are pressured.',
 AutoSelfPass = 'Bounces the ball off the board or floor back to yourself for self-alley plays.',
 JumpBeforePass = 'Hops right before passing to sell fake animations.',
@@ -35572,7 +36002,7 @@ AutoHeadRide = 'Follows a chosen player and rides on top of them. Meme feature, 
 AutoTipOff = 'Times the opening tip-off jump automatically.',
 BallMagRadius = 'Pull radius in studs for the ball magnet. Keep at 12 or less to stay subtle.',
 BallMagSpeed = 'How fast the magnet drags loose balls toward you.',
-BallReachRadius = 'Extra steal reach in studs. 6 to 8 stays under the radar.',
+BallReachRadius = 'Extra steal reach in studs. Adjustable from 2 to 100; high values are very noticeable.',
 AntiReachCounterRadius = 'Radius where reach-steal attempts against you get countered.',
 AntiReachCounterWindow = 'Time window after a steal attempt where the counter stays active.',
 AntiReachNoStealRange = 'Range of the no-steal protection bubble.',
@@ -36960,6 +37390,17 @@ State.AutoDunk.Target and string.format('%.1f studs', State.AutoDunk.TargetDista
 State.AutoDunkMode,
 State.AutoDunkRandomOwned and (State.AutoDunk.SelectedDunk or 'Random owned') or 'Equipped rotation'
 )
+if HubUI.AutoRageStatusText then
+local Rage = State.AutoRage
+HubUI.AutoRageStatusText.Text = string.format(
+'STATUS  %s\nBALL    %s\nRIM     %s\nLOADOUT REACH %d | SPEED %d | GUARD + AIM',
+Rage.Status or 'OFF',
+Rage.HasPossession and 'POSSESSED' or 'SEARCHING',
+Rage.Target and string.format('%.1f STUDS', Rage.TargetDistance) or '--',
+math.floor(tonumber(CONFIG.AutoRageReach) or 100),
+math.floor(tonumber(CONFIG.AutoRageSpeed) or 19)
+)
+end
 if HubUI.AutoHeadRideStatusText then
 HubUI.AutoHeadRideStatusText.Text = string.format(
 'STATUS  %s\nTARGET  %s\nDIST    %s',
@@ -38309,6 +38750,7 @@ State.AutoHeadRide.Enabled = false
 State.AutoHeadRide.Target = nil
 State.AutoDunkEnabled = false
 State.AutoDunkStatus = 'OFF'
+if State.AutoRage then State.AutoRage.Cleanup() end
 State.AutoQueueEnabled = false
 State.AutoPassEnabled = false
 State.AutoSelfPassEnabled = false
@@ -38319,6 +38761,7 @@ CONFIG.AutoGuard = false
 CONFIG.AutoGetOpen = false
 CONFIG.AutoHeadRide = false
 CONFIG.AutoDunk = false
+CONFIG.AutoRage = false
 CONFIG.AutoQueue = false
 CONFIG.AutoPass = false
 CONFIG.AutoSelfPass = false
@@ -38343,6 +38786,7 @@ AUTO_GUARD_BIND_NAME,
 AUTO_BODY_BIND_NAME,
 LEGIT_AIM_BIND_NAME,
 State.AutoDunk and State.AutoDunk.BindName,
+State.AutoRage and State.AutoRage.BindName,
 State.AutoOffense and State.AutoOffense.BindName,
 State.Outline and State.Outline.BindName,
 State.Movement and State.Movement.FlightRenderName,
@@ -38415,6 +38859,7 @@ if State.AutoBody.Enabled then UpdateAutoBodyBinding() end
 if State.AutoGetOpenEnabled then UpdateAutoGetOpenBinding() end
 if State.AutoDunkEnabled then State.AutoDunk.UpdateBinding() end
 if State.AutoOffense.Enabled then State.AutoOffense.UpdateBinding() end
+if State.AutoRageEnabled and State.AutoRage then State.AutoRage.SetEnabled(true, false) end
 pcall(function() if type(writefile) == 'function' then writefile('SilverSurfer_Crash.txt', '[STAGE] Building safe interface.\n') end end)
 State.UiBuildResult = table.pack(pcall(State.BuildSilentAimHub))
 if not State.UiBuildResult[1] then
