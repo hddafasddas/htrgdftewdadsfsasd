@@ -1,4 +1,4 @@
--- SilverSurfer v60.3 - rookie+ defender, presets removed
+-- SilverSurfer v60.8 - committed unwrapped 180 flick
 -- ============================================================
 -- wYnFuscate performance macros (https://wynfuscate.com/docs/macros)
 -- Dev stubs: gated behind WYNF_OBFUSCATED so the compiler strips
@@ -139,33 +139,52 @@ ShotModeRandomSpread = 0.28,
 ShotModeSideBankOffset = 0.65,
 ShotModeDefenderPathWidth = 7.5,
 LegitTweenAim = true,
--- Legit mode directly steers the real camera toward the solved ballistic
--- launch direction, but uses capped exponential easing so it still looks
--- like a controlled human camera movement instead of a snap/camlock.
+-- Starts on the physical jump edge. The trajectory sums one smooth
+-- ballistic submovement and one smaller overlapping corrective submovement.
 LegitTweenAimSpeed = 0.09, -- legacy setting; retained for config compatibility
-LegitAimResponse = 9.5,
-LegitAimMaxDegreesPerSecond = 340,
-LegitAimAccelerationDegreesPerSecond = 980,
-LegitAimPitchSpeedScale = 0.78,
+LegitAimResponse = 8.5,
+LegitAimMaxDegreesPerSecond = 420,
+LegitAimAccelerationDegreesPerSecond = 1500,
+LegitAimPitchSpeedScale = 0.82,
 LegitAimFlickTime = 0.28,
 LegitAimFlickMinTime = 0.18,
-LegitAimFlickMaxTime = 0.60,
+LegitAimFlickMaxTime = 0.58,
 LegitAimFlickAngleDivisor = 420,
 LegitAimRampTime = 0.025,
 LegitAimManualInputScale = 0.42,
 LegitAimManualOwnershipTime = 0.14,
-LegitAimDeadzoneDegrees = 0.12,
-LegitAimFlickMaxDegreesPerSecond = 220,
-LegitAimReactionMin = 0.14,
-LegitAimReactionMax = 0.28,
-LegitAimSwayDegrees = 0.18,
-LegitAimSwaySpeed = 7,
-LegitAimCorrectionMin = 0.07,
-LegitAimCorrectionMax = 0.13,
-LegitAimOvershootChance = 12,
-LegitAimOvershootMinAngle = 8,
-LegitAimOvershootMinScale = 0.02,
+LegitAimDeadzoneDegrees = 0.10,
+LegitAimFlickMaxDegreesPerSecond = 1250,
+LegitAimReactionMin = 0, -- immediate: jump input is the intentional cue
+LegitAimReactionMax = 0,
+LegitAimSwayDegrees = 0.08,
+LegitAimSwaySpeed = 3.8,
+LegitAimCorrectionMin = 0.09,
+LegitAimCorrectionMax = 0.16,
+LegitAimOvershootChance = 55,
+LegitAimOvershootMinAngle = 18,
+LegitAimOvershootMinScale = 0.015,
 LegitAimOvershootMaxScale = 0.06,
+-- Human flick model: Fitts's-law duration, minimum-jerk bell velocity,
+-- overshoot-then-correct on large flicks, undershoot on small ones.
+LegitAimFlickBaseTime = 0.085,
+LegitAimFlickBitTime = 0.042,
+LegitAimFlickTargetWidthDegrees = 3,
+LegitAimFlickTimeJitter = 0.12,
+LegitAimUndershootChance = 30,
+LegitAimUndershootMinScale = 0.01,
+LegitAimUndershootMaxScale = 0.035,
+LegitAimCorrectionLatencyMin = 0.08,
+LegitAimCorrectionLatencyMax = 0.14,
+LegitAimCorrectionTimeMin = 0.15,
+LegitAimCorrectionTimeMax = 0.30,
+LegitAimYawWarp = 0.80,
+LegitAimPitchWarp = 0.95,
+-- Critically damped camera layer removes frame steps without adding input lag.
+LegitAimCameraSmoothTime = 0.045,
+LegitAimCameraPitchSmoothScale = 1.08,
+LegitAimLargeTurnThreshold = 145,
+LegitAimLargeTurnSpeedBoost = 1.10,
 LegitTweenHoldTime = 0.42,
 LegitTweenFadeTime = 0.22,
 PingAdaptiveRelease = false,
@@ -1059,6 +1078,7 @@ LegitAimNoiseTargetPitch = 0,
 LegitAimManualUntil = 0,
 LegitAimOvershootYaw = 0,
 LegitAimOvershootPitch = 0,
+LegitAimFlickPlan = false,
 LegitAimInitialAngle = 0,
 LegitAimDynamicFlickTime = 0.28,
 LegitAimStopTask = nil,
@@ -15429,6 +15449,7 @@ State.LegitAimNoiseYaw, State.LegitAimNoisePitch = 0, 0
 State.LegitAimNoiseTargetYaw, State.LegitAimNoiseTargetPitch = 0, 0
 State.LegitAimManualUntil = 0
 State.LegitAimOvershootYaw, State.LegitAimOvershootPitch = 0, 0
+State.LegitAimFlickPlan = false
 if State.LegitAimStopTask then
 State.Lifecycle:CancelTask(State.LegitAimStopTask)
 State.LegitAimStopTask = nil
@@ -15438,6 +15459,65 @@ if LegitAimLandConnection then
 State.Lifecycle:DisconnectConnection(LegitAimLandConnection)
 LegitAimLandConnection = nil
 end
+end
+
+-- Minimum-jerk position profile (Flash & Hogan): the bell-shaped velocity
+-- curve measured in real human aimed movement (peak ~1.875x average speed).
+State.LegitAimMinimumJerk = function(Progress)
+local T = math.clamp(Progress, 0, 1)
+return T * T * T * (10 + T * (6 * T - 15))
+end
+
+-- True spherical interpolation keeps angular speed even during camera handoff.
+State.LegitAimSlerpDirection = function(From, To, Alpha)
+local A = From.Unit
+local B = To.Unit
+local T = math.clamp(Alpha, 0, 1)
+local Dot = math.clamp(A:Dot(B), -1, 1)
+if Dot > 0.9995 then
+local Linear = A + (B - A) * T
+return Linear.Magnitude > 0.0001 and Linear.Unit or B
+end
+if Dot < -0.9995 then
+local Basis = math.abs(A.Y) < 0.9 and Vector3.yAxis or Vector3.xAxis
+local Axis = A:Cross(Basis)
+if Axis.Magnitude <= 0.0001 then Axis = A:Cross(Vector3.zAxis) end
+Axis = Axis.Unit
+return (A * math.cos(math.pi * T) + Axis * math.sin(math.pi * T)).Unit
+end
+local Theta = math.acos(Dot)
+local SinTheta = math.sin(Theta)
+return (A * (math.sin((1 - T) * Theta) / SinTheta)
++ B * (math.sin(T * Theta) / SinTheta)).Unit
+end
+
+-- Critically damped angular spring: follows the minimum-jerk reference while
+-- carrying real angular velocity continuously between rendered frames.
+State.LegitAimSmoothDampAngle = function(Current, Target, Velocity, SmoothTime, MaxSpeed, DeltaTime, Unwrapped)
+local Dt = math.max(DeltaTime, 1 / 1000)
+local Smooth = math.max(SmoothTime, 0.01)
+local WrappedTarget = Target
+if not Unwrapped then
+local WrappedDelta = math.atan2(math.sin(Target - Current), math.cos(Target - Current))
+WrappedTarget = Current + WrappedDelta
+end
+local Omega = 2 / Smooth
+local X = Omega * Dt
+local Decay = 1 / (1 + X + 0.48 * X * X + 0.235 * X * X * X)
+local Change = Current - WrappedTarget
+local MaxChange = math.max(MaxSpeed, 0) * Smooth
+Change = math.clamp(Change, -MaxChange, MaxChange)
+local DampTarget = Current - Change
+local Temp = (Velocity + Omega * Change) * Dt
+local NewVelocity = (Velocity - Omega * Temp) * Decay
+local Output = DampTarget + (Change + Temp) * Decay
+local OriginalDelta = WrappedTarget - Current
+if (OriginalDelta > 0 and Output > WrappedTarget)
+or (OriginalDelta < 0 and Output < WrappedTarget) then
+Output = WrappedTarget
+NewVelocity = 0
+end
+return Output, NewVelocity
 end
 
 local GetLegitTweenTarget
@@ -15548,46 +15628,101 @@ State.LegitAimAngularVelocityPitch = 0
 State.LegitAimNoiseYaw, State.LegitAimNoisePitch = 0, 0
 State.LegitAimNoiseTargetYaw, State.LegitAimNoiseTargetPitch = 0, 0
 State.LegitAimManualUntil = 0
-local ReactionMin = math.max(tonumber(CONFIG.LegitAimReactionMin) or 0.14, 0)
-local ReactionMax = math.max(tonumber(CONFIG.LegitAimReactionMax) or 0.28, ReactionMin)
-local TriangularRoll = (math.random() + math.random()) * 0.5
-State.LegitAimReactionDelay = ReactionMin + (ReactionMax - ReactionMin) * TriangularRoll
+-- The player pressing jump is already the intent signal. Waiting a random
+-- reaction period here made the camera appear frozen, then snap from a stale pose.
+State.LegitAimReactionDelay = 0
 State.LegitAimSwaySeed = math.random() * 1000
 local InitialDot = math.clamp(StartingLook.Unit:Dot(StartingDirection.Unit), -1, 1)
 local InitialAngle = math.deg(math.acos(InitialDot))
 State.LegitAimInitialAngle = InitialAngle
-local FlickMin = math.max(tonumber(CONFIG.LegitAimFlickMinTime) or 0.18, 0.06)
+local FlickMin = math.max(tonumber(CONFIG.LegitAimFlickMinTime) or 0.16, 0.06)
 local FlickMax = math.max(tonumber(CONFIG.LegitAimFlickMaxTime) or 0.60, FlickMin)
-local FlickDivisor = math.max(tonumber(CONFIG.LegitAimFlickAngleDivisor) or 420, 1)
-State.LegitAimDynamicFlickTime = math.clamp(0.16 + InitialAngle / FlickDivisor, FlickMin, FlickMax)
-State.LegitAimNextCorrectionAt = State.LegitAimLastFrameAt + State.LegitAimReactionDelay
+-- Fitts's law: flick time grows with log2 of angular distance over target
+-- width, so micro-adjusts stay quick and huge turns take believably longer.
+local FittsBase = math.max(tonumber(CONFIG.LegitAimFlickBaseTime) or 0.11, 0.02)
+local FittsBit = math.max(tonumber(CONFIG.LegitAimFlickBitTime) or 0.078, 0)
+local FittsWidth = math.max(tonumber(CONFIG.LegitAimFlickTargetWidthDegrees) or 3, 0.5)
+local FittsBits = math.log(InitialAngle / FittsWidth + 1, 2)
+local FlickJitter = math.max(tonumber(CONFIG.LegitAimFlickTimeJitter) or 0.08, 0)
+local JitterScale = 1 + ((math.random() + math.random()) - 1) * FlickJitter
+State.LegitAimDynamicFlickTime = math.clamp(
+(FittsBase + FittsBit * FittsBits) * JitterScale, FlickMin, FlickMax)
+State.LegitAimNextCorrectionAt = State.LegitAimLastFrameAt
 local StartYaw = math.atan2(-StartingLook.X, -StartingLook.Z)
 local GoalYaw = math.atan2(-StartingDirection.X, -StartingDirection.Z)
 local StartPitch = math.asin(math.clamp(StartingLook.Y, -1, 1))
 local GoalPitch = math.asin(math.clamp(StartingDirection.Y, -1, 1))
 local InitialYawError = math.atan2(math.sin(GoalYaw - StartYaw), math.cos(GoalYaw - StartYaw))
 local InitialPitchError = GoalPitch - StartPitch
-local OvershootChance = math.clamp(tonumber(CONFIG.LegitAimOvershootChance) or 12, 0, 100)
-if InitialAngle >= math.max(tonumber(CONFIG.LegitAimOvershootMinAngle) or 8, 0)
-and math.random() * 100 < OvershootChance then
-local MinScale = math.max(tonumber(CONFIG.LegitAimOvershootMinScale) or 0.02, 0)
-local MaxScale = math.max(tonumber(CONFIG.LegitAimOvershootMaxScale) or 0.06, MinScale)
-local Scale = MinScale + (MaxScale - MinScale) * math.random()
-State.LegitAimOvershootYaw = InitialYawError * Scale
-State.LegitAimOvershootPitch = InitialPitchError * Scale * 0.55
-else
-State.LegitAimOvershootYaw, State.LegitAimOvershootPitch = 0, 0
+-- Humans overshoot fast large flicks then correct after a short perception
+-- latency; careful small adjustments tend to undershoot slightly instead.
+local OvershootScale = 0
+local OvershootChance = math.clamp(tonumber(CONFIG.LegitAimOvershootChance) or 70, 0, 100)
+if InitialAngle >= math.max(tonumber(CONFIG.LegitAimOvershootMinAngle) or 22, 0) then
+if math.random() * 100 < OvershootChance then
+local MinScale = math.max(tonumber(CONFIG.LegitAimOvershootMinScale) or 0.015, 0)
+local MaxScale = math.max(tonumber(CONFIG.LegitAimOvershootMaxScale) or 0.045, MinScale)
+OvershootScale = MinScale + (MaxScale - MinScale) * math.random()
 end
+elseif InitialAngle >= 4 then
+local UndershootChance = math.clamp(tonumber(CONFIG.LegitAimUndershootChance) or 35, 0, 100)
+if math.random() * 100 < UndershootChance then
+local MinScale = math.max(tonumber(CONFIG.LegitAimUndershootMinScale) or 0.02, 0)
+local MaxScale = math.max(tonumber(CONFIG.LegitAimUndershootMaxScale) or 0.05, MinScale)
+OvershootScale = -(MinScale + (MaxScale - MinScale) * math.random())
+end
+end
+local LatencyMin = math.max(tonumber(CONFIG.LegitAimCorrectionLatencyMin) or 0.08, 0.02)
+local LatencyMax = math.max(tonumber(CONFIG.LegitAimCorrectionLatencyMax) or 0.14, LatencyMin)
+local CorrectMin = math.max(tonumber(CONFIG.LegitAimCorrectionTimeMin) or 0.16, 0.05)
+local CorrectMax = math.max(tonumber(CONFIG.LegitAimCorrectionTimeMax) or 0.24, CorrectMin)
+State.LegitAimFlickPlan = {
+StartYaw = StartYaw,
+StartPitch = StartPitch,
+-- Lock the primary movement vector at input time. Re-solving a moving shot
+-- may update the later correction, but can no longer rewrite motion already played.
+YawSpan = InitialYawError,
+PitchSpan = InitialPitchError,
+Duration = State.LegitAimDynamicFlickTime,
+Clock = 0,
+-- Preserve a continuous yaw coordinate through +/-180 so the spring never
+-- mistakes a committed 180 for a shorter turn in the opposite direction.
+SpringYaw = StartYaw,
+SpringPitch = StartPitch,
+IsLargeTurn = InitialAngle >= math.clamp(
+tonumber(CONFIG.LegitAimLargeTurnThreshold) or 150, 120, 179.9),
+OvershootScale = OvershootScale,
+CorrectionDelay = 0,
+CorrectionStart = State.LegitAimDynamicFlickTime * (0.78 + math.random() * 0.16),
+CorrectionTime = CorrectMin + (CorrectMax - CorrectMin) * math.random(),
+YawWarp = math.clamp((tonumber(CONFIG.LegitAimYawWarp) or 0.80)
+* (0.94 + math.random() * 0.12), 0.6, 1.25),
+PitchWarp = math.clamp((tonumber(CONFIG.LegitAimPitchWarp) or 0.95)
+* (0.94 + math.random() * 0.12), 0.7, 1.30),
+LateralCurveScale = (math.random() * 2 - 1)
+* (0.003 + math.random() * 0.013),
+CorrectionResidualScale = (math.random() * 2 - 1)
+* (0.002 + math.random() * 0.008),
+CorrectionStartYaw = nil,
+CorrectionStartPitch = nil,
+CorrectionTargetYaw = nil,
+CorrectionTargetPitch = nil,
+}
+State.LegitAimOvershootYaw, State.LegitAimOvershootPitch = 0, 0
 local Generation = State.LegitAimGeneration
 local StartedAt = State.LegitAimLastFrameAt
 local HoldTime = math.max(CONFIG.LegitTweenHoldTime, 0)
 local FadeTime = math.max(CONFIG.LegitTweenFadeTime, 0.01)
-local ReleaseAt = State.LegitAimReactionDelay + HoldTime + FadeTime
+local PlanTotal = math.max(State.LegitAimDynamicFlickTime,
+(tonumber(State.LegitAimFlickPlan.CorrectionStart) or 0)
++ State.LegitAimFlickPlan.CorrectionTime)
+local ReleaseAt = State.LegitAimReactionDelay + math.max(HoldTime, PlanTotal + 0.1) + FadeTime
+local LandingFadeAt = nil
 
 State.Lifecycle:BindToRenderStep(
 LEGIT_AIM_BIND_NAME,
-Enum.RenderPriority.Camera.Value + 20,
-WYNF_JIT(function()
+Enum.RenderPriority.Camera.Value + 1,
+WYNF_JIT(function(RenderDeltaTime)
 if not (State.Active and State.Enabled and State.LegitAimSequenceActive) then
 StopLegitAimTween()
 return
@@ -15595,13 +15730,16 @@ end
 
 local Now = os.clock()
 local Elapsed = Now - StartedAt
-local DeltaTime = math.clamp(Now - (State.LegitAimLastFrameAt or Now), 1 / 240, 1 / 20)
+local MeasuredDelta = Now - (State.LegitAimLastFrameAt or Now)
+local DeltaTime = math.clamp(
+tonumber(RenderDeltaTime) or MeasuredDelta, 1 / 1000, 1 / 20)
 State.LegitAimLastFrameAt = Now
-if not OriginalCamlock
-and Elapsed < (tonumber(State.LegitAimReactionDelay) or 0) then
-return
+local EffectiveReleaseAt = ReleaseAt
+if LandingFadeAt then
+local LandingReleaseAt = (LandingFadeAt - StartedAt) + FadeTime
+EffectiveReleaseAt = math.min(EffectiveReleaseAt, LandingReleaseAt)
 end
-if not OriginalCamlock and Elapsed >= ReleaseAt then
+if not OriginalCamlock and Elapsed >= EffectiveReleaseAt then
 StopLegitAimTween()
 return
 end
@@ -15662,36 +15800,106 @@ local CorrectionMin = math.max(tonumber(CONFIG.LegitAimCorrectionMin) or 0.07, 0
 local CorrectionMax = math.max(tonumber(CONFIG.LegitAimCorrectionMax) or 0.13, CorrectionMin)
 State.LegitAimNextCorrectionAt = Now + CorrectionMin
 + (CorrectionMax - CorrectionMin) * ((math.random() + math.random()) * 0.5)
-local SwayAmp = math.rad(math.max(tonumber(CONFIG.LegitAimSwayDegrees) or 0.18, 0))
+local SwayAmp = math.rad(math.max(tonumber(CONFIG.LegitAimSwayDegrees) or 0.10, 0))
 State.LegitAimNoiseTargetYaw = (math.random() * 2 - 1) * SwayAmp
 State.LegitAimNoiseTargetPitch = (math.random() * 2 - 1) * SwayAmp * 0.65
 end
 local DecisionDirection = State.LegitAimCorrectionDirection or FormulaDirection
-local NoiseResponse = math.max(tonumber(CONFIG.LegitAimSwaySpeed) or 7, 0.1)
+local NoiseResponse = math.max(tonumber(CONFIG.LegitAimSwaySpeed) or 4.5, 0.1)
 local NoiseAlpha = 1 - math.exp(-NoiseResponse * DeltaTime)
 State.LegitAimNoiseYaw += ((tonumber(State.LegitAimNoiseTargetYaw) or 0)
 - (tonumber(State.LegitAimNoiseYaw) or 0)) * NoiseAlpha
 State.LegitAimNoisePitch += ((tonumber(State.LegitAimNoiseTargetPitch) or 0)
 - (tonumber(State.LegitAimNoisePitch) or 0)) * NoiseAlpha
 
-local ReactionDelay = tonumber(State.LegitAimReactionDelay) or 0
-local MotionElapsed = math.max(0, Elapsed - ReactionDelay)
-local FlickTime = math.max(tonumber(State.LegitAimDynamicFlickTime)
-or tonumber(CONFIG.LegitAimFlickTime) or 0.28, 0.06)
-local FlickProgress = math.clamp(MotionElapsed / FlickTime, 0, 1)
-local IsInitialFlick = FlickProgress < 1
-State.LegitAimLastFlickProgress = FlickProgress
-local OvershootWeight = 0
-if IsInitialFlick then
-local Settle = math.clamp((FlickProgress - 0.76) / 0.24, 0, 1)
-local SmoothSettle = Settle * Settle * (3 - 2 * Settle)
-OvershootWeight = 1 - SmoothSettle
+local Plan = State.LegitAimFlickPlan
+if ManualInput and Plan then
+State.LegitAimFlickPlan = false
+Plan = false
+end
+local MotionElapsed = math.max(0, Elapsed)
+if Plan then
+-- Advance by rendered time instead of jumping to wall-clock progress after
+-- a delayed frame. This prevents catch-up teleports under frame hitches.
+local PlaybackStep = DeltaTime -- already clamped to 1/20 above
+Plan.Clock = math.max(0, tonumber(Plan.Clock) or 0) + PlaybackStep
+MotionElapsed = Plan.Clock
+end
+local Fade = 1
+local FadeStart = EffectiveReleaseAt - FadeTime
+if Elapsed > FadeStart then
+local FadeAlpha = math.clamp((Elapsed - FadeStart) / FadeTime, 0, 1)
+Fade = 1 - State.LegitAimMinimumJerk(FadeAlpha)
 end
 
 local CurrentYaw = math.atan2(-SmoothedDirection.X, -SmoothedDirection.Z)
+local CurrentPitch = math.asin(math.clamp(SmoothedDirection.Y, -1, 1))
+local NewYaw, NewPitch
+if Plan then
+-- Human rapid aiming is a continuous primary submovement plus, when needed,
+-- a separate corrective submovement. Never retroactively retarget the primary.
+local YawSpan = tonumber(Plan.YawSpan) or 0
+local PitchSpan = tonumber(Plan.PitchSpan) or 0
+local Duration = math.max(tonumber(Plan.Duration) or 0.28, 0.10)
+local BallisticScale = 1 + (tonumber(Plan.OvershootScale) or 0)
+local CorrectionStart = math.clamp(
+tonumber(Plan.CorrectionStart) or Duration * 0.86, Duration * 0.65, Duration)
+local CorrectionTime = math.max(tonumber(Plan.CorrectionTime) or 0.20, 0.08)
+local PrimaryP = math.clamp(MotionElapsed / Duration, 0, 1)
+local CorrectionP = math.clamp(
+(MotionElapsed - CorrectionStart) / CorrectionTime, 0, 1)
+local PrimaryYaw = State.LegitAimMinimumJerk(PrimaryP ^ Plan.YawWarp)
+local PrimaryPitch = State.LegitAimMinimumJerk(PrimaryP ^ Plan.PitchWarp)
+local CorrectionProgress = State.LegitAimMinimumJerk(CorrectionP)
+local FinalScale = 1 + (tonumber(Plan.CorrectionResidualScale) or 0)
+local CorrectionAmount = FinalScale - BallisticScale
+local YawProgress = BallisticScale * PrimaryYaw
++ CorrectionAmount * CorrectionProgress
+local PitchProgress = BallisticScale * PrimaryPitch
++ CorrectionAmount * CorrectionProgress
+local ArcWindow = math.sin(math.pi * PrimaryP)
+local Lateral = (tonumber(Plan.LateralCurveScale) or 0)
+* ArcWindow * ArcWindow * (1 - CorrectionProgress * 0.85)
+NewYaw = Plan.StartYaw + YawSpan * YawProgress - PitchSpan * Lateral
+NewPitch = Plan.StartPitch + PitchSpan * PitchProgress + YawSpan * Lateral
+local Done = PrimaryP >= 1 and CorrectionP >= 1
+State.LegitAimLastFlickProgress = Done and 1 or PrimaryP
+local NoiseScale = PrimaryP < 1 and 0.08 or 0.30
+NewYaw += (tonumber(State.LegitAimNoiseYaw) or 0) * NoiseScale
+NewPitch += (tonumber(State.LegitAimNoisePitch) or 0) * NoiseScale
+-- Follow the planned pose with a critically damped angular spring instead of
+-- clipping each frame. This preserves continuous velocity and removes stair-steps.
+local MaxFlickSpeed = math.rad(math.max(
+tonumber(CONFIG.LegitAimFlickMaxDegreesPerSecond) or 600, 90))
+local SmoothTime = math.clamp(
+tonumber(CONFIG.LegitAimCameraSmoothTime) or 0.055, 0.015, 0.18)
+local PitchSmoothScale = math.clamp(
+tonumber(CONFIG.LegitAimCameraPitchSmoothScale) or 1.10, 0.75, 1.6)
+if Plan.IsLargeTurn then
+MaxFlickSpeed *= math.clamp(
+tonumber(CONFIG.LegitAimLargeTurnSpeedBoost) or 1.25, 1, 1.6)
+SmoothTime *= 0.92
+end
+local YawVelocity = tonumber(State.LegitAimAngularVelocityYaw) or 0
+local PitchVelocity = tonumber(State.LegitAimAngularVelocityPitch) or 0
+local SpringYaw = tonumber(Plan.SpringYaw) or CurrentYaw
+local SpringPitch = tonumber(Plan.SpringPitch) or CurrentPitch
+NewYaw, YawVelocity = State.LegitAimSmoothDampAngle(
+SpringYaw, NewYaw, YawVelocity, SmoothTime, MaxFlickSpeed, DeltaTime, true)
+NewPitch, PitchVelocity = State.LegitAimSmoothDampAngle(
+SpringPitch, NewPitch, PitchVelocity, SmoothTime * PitchSmoothScale,
+MaxFlickSpeed * 0.82, DeltaTime, true)
+Plan.SpringYaw = NewYaw
+Plan.SpringPitch = NewPitch
+State.LegitAimAngularVelocityYaw = YawVelocity
+State.LegitAimAngularVelocityPitch = PitchVelocity
+if Done then
+-- Preserve spring velocity for the acceleration-limited settle phase.
+State.LegitAimFlickPlan = false
+end
+else
 local TargetYaw = math.atan2(-DecisionDirection.X, -DecisionDirection.Z)
 + (tonumber(State.LegitAimNoiseYaw) or 0)
-+ (tonumber(State.LegitAimOvershootYaw) or 0) * OvershootWeight
 local YawError = math.atan2(math.sin(TargetYaw - CurrentYaw), math.cos(TargetYaw - CurrentYaw))
 if math.abs(YawError) > math.rad(150) then
 if State.LegitAimTurnSign == 0 then State.LegitAimTurnSign = YawError >= 0 and 1 or -1 end
@@ -15701,10 +15909,8 @@ State.LegitAimTurnSign = 0
 elseif State.LegitAimTurnSign ~= 0 then
 YawError = math.abs(YawError) * State.LegitAimTurnSign
 end
-local CurrentPitch = math.asin(math.clamp(SmoothedDirection.Y, -1, 1))
 local TargetPitch = math.asin(math.clamp(DecisionDirection.Y, -1, 1))
 + (tonumber(State.LegitAimNoisePitch) or 0)
-+ (tonumber(State.LegitAimOvershootPitch) or 0) * OvershootWeight
 local PitchError = TargetPitch - CurrentPitch
 local ErrorAngle = math.sqrt(YawError * YawError + PitchError * PitchError)
 local Deadzone = math.rad(math.max(tonumber(CONFIG.LegitAimDeadzoneDegrees) or 0.12, 0))
@@ -15713,25 +15919,14 @@ YawError, PitchError = 0, 0
 ErrorAngle = 0
 end
 
-local Fade = 1
-local FadeStart = ReactionDelay + HoldTime
-if Elapsed > FadeStart then
-local FadeAlpha = math.clamp((Elapsed - FadeStart) / FadeTime, 0, 1)
-Fade = 1 - FadeAlpha * FadeAlpha * (3 - 2 * FadeAlpha)
-end
 local ManualScale = ManualOwned
 and math.clamp(tonumber(CONFIG.LegitAimManualInputScale) or 0.42, 0, 1) or 1
-local Weight = Fade * ManualScale
-local MaxDegrees = IsInitialFlick
-and math.max(tonumber(CONFIG.LegitAimFlickMaxDegreesPerSecond) or 220, 1)
-or math.max(tonumber(CONFIG.LegitAimMaxDegreesPerSecond) or 340, 1)
+local Weight = ManualScale -- visual handoff below owns the release fade
+local MaxDegrees = math.max(tonumber(CONFIG.LegitAimMaxDegreesPerSecond) or 340, 1)
 local MaxYawSpeed = math.rad(MaxDegrees) * Weight
 local PitchScale = math.clamp(tonumber(CONFIG.LegitAimPitchSpeedScale) or 0.78, 0.25, 1)
 local MaxPitchSpeed = MaxYawSpeed * PitchScale
 local Response = math.max(tonumber(CONFIG.LegitAimResponse) or 9.5, 0.1)
-if IsInitialFlick then
-Response = math.max(Response * 0.45, 1 / math.max(FlickTime - MotionElapsed, 0.05))
-end
 local DesiredYawVelocity = math.clamp(YawError * Response, -MaxYawSpeed, MaxYawSpeed)
 local DesiredPitchVelocity = math.clamp(PitchError * Response, -MaxPitchSpeed, MaxPitchSpeed)
 local Acceleration = math.rad(math.max(
@@ -15757,8 +15952,10 @@ PitchVelocity += math.clamp(-PitchVelocity,
 end
 State.LegitAimAngularVelocityYaw = YawVelocity
 State.LegitAimAngularVelocityPitch = PitchVelocity
-local NewYaw = CurrentYaw + YawStep
-local NewPitch = math.clamp(CurrentPitch + PitchStep, -math.pi * 0.495, math.pi * 0.495)
+NewYaw = CurrentYaw + YawStep
+NewPitch = CurrentPitch + PitchStep
+end
+NewPitch = math.clamp(NewPitch, -math.pi * 0.495, math.pi * 0.495)
 local CosPitch = math.cos(NewPitch)
 local AimedDirection = Vector3.new(
 -math.sin(NewYaw) * CosPitch,
@@ -15766,21 +15963,27 @@ math.sin(NewPitch),
 -math.cos(NewYaw) * CosPitch).Unit
 State.LegitAimSmoothedDirection = AimedDirection
 
--- Apply after Roblox's camera update using a stable world-up axis.
--- This avoids roll changes and guarantees the visible camera follows
--- the same ballistic direction through a full backwards rotation.
+-- Apply after Roblox's camera update using a stable world-up axis. During
+-- release, blend to the native camera output that ran earlier this frame;
+-- unbinding therefore cannot snap back to the controller's hidden pose.
+local OutputDirection = AimedDirection
+if Fade < 1 then
+local NativeDirection = Current.LookVector
+OutputDirection = State.LegitAimSlerpDirection(AimedDirection, NativeDirection, 1 - Fade)
+end
 local Aimed = CFrame.lookAt(
 Current.Position,
-Current.Position + AimedDirection,
+Current.Position + OutputDirection,
 Vector3.yAxis)
 CurrentCamera.CFrame = Aimed
-CurrentCamera.Focus = CFrame.new(Aimed.Position + AimedDirection * 1000)
+CurrentCamera.Focus = CFrame.new(Aimed.Position + OutputDirection * 1000)
 end)
 )
 
 LegitAimLandConnection = State.Lifecycle:Connect(LocalHumanoid:GetPropertyChangedSignal('FloorMaterial'), function()
-if LocalHumanoid.FloorMaterial ~= Enum.Material.Air then
-StopLegitAimTween()
+if LocalHumanoid.FloorMaterial ~= Enum.Material.Air and not LandingFadeAt then
+-- Landing begins a short handoff instead of hard-unbinding the camera.
+LandingFadeAt = os.clock()
 end
 end)
 if not OriginalCamlock then
@@ -15790,6 +15993,27 @@ end)
 end
 return true
 end
+
+-- Start from the actual input edge, not from the later Humanoid.Jump property
+-- transition. Space is earliest on keyboard; JumpRequest covers gamepad/touch.
+local LegitAimLastJumpInputAt = -math.huge
+local function StartLegitAimFromJumpInput()
+local Now = os.clock()
+if Now - LegitAimLastJumpInputAt < 0.075 then return end
+if not (State.Active and State.Enabled) then return end
+if State.NoJump and State.NoJump.Active then return end
+LegitAimLastJumpInputAt = Now
+local Ok, Started = pcall(StartLegitAimTween)
+if not (Ok and Started) then LegitAimLastJumpInputAt = -math.huge end
+end
+GiveSignal(UserInputService.InputBegan:Connect(function(Input, GameProcessed)
+-- Use the physical Space edge immediately; the default jump controller may
+-- mark it processed before JumpRequest is emitted.
+if Input.KeyCode == Enum.KeyCode.Space then
+StartLegitAimFromJumpInput()
+end
+end))
+GiveSignal(UserInputService.JumpRequest:Connect(StartLegitAimFromJumpInput))
 
 local function UpdateSilentAimController()
 if not (State.Active and State.Enabled) then
@@ -15813,7 +16037,11 @@ if State.NoJump.Active then return end
 SilentAim.ReleasePredictionDeadline = 0
 State.ShotModeRandomSeed = (tonumber(State.ShotModeRandomSeed) or 0) + 1
 if CONFIG.HumanizeEnabled then State.Humanize.NewShot() end
+-- Scripted jumps still use this fallback; a real Space/JumpRequest edge
+-- already started the flick and must not restart it from frame zero.
+if os.clock() - LegitAimLastJumpInputAt > 0.12 then
 pcall(StartLegitAimTween)
+end
 if State.PassInProgress then
 SilentAim.ClearActorAim()
 return
