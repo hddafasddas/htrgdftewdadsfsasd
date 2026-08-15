@@ -1,3 +1,4 @@
+-- SilverSurfer v60.3 - rookie+ defender, presets removed
 -- ============================================================
 -- wYnFuscate performance macros (https://wynfuscate.com/docs/macros)
 -- Dev stubs: gated behind WYNF_OBFUSCATED so the compiler strips
@@ -303,6 +304,50 @@ AutoGuardZigzagSpeed = 2.4,
 AutoDefense = false,
 AutoDefenseNoclip = true,
 
+-- Local 1v1 training bot. This is a real unanchored R6 Humanoid rig.
+-- Shift lock is physics-driven: the Humanoid strafes while AlignOrientation
+-- faces the handler. No continuous root CFrame or custom limb posing is used.
+-- WalkSpeed is locked to 16 to match the real game; the BOT keeps a real
+-- defensive gap and only closes in during a timed steal lunge at the ball.
+-- Defaults: rookie-level human defender with slightly sharper reads (rookie+).
+BotEnabled = false,
+BotStyle = 'Legit',
+BotMoveMethod = 'Humanoid Move',
+BotGuardGap = 4.5,
+BotPrediction = -0.08,
+BotReactionDelay = 0.36,
+BotSmoothing = 5,
+BotLateralLead = -0.03,
+BotStopDistance = 1.3,
+BotMoveToInterval = 0.12,
+BotShiftLock = true,
+BotShiftLockTarget = 'Player',
+BotShiftLockResponsiveness = 9,
+BotShiftLockTurnSpeed = 400,
+BotFacingLead = 0.04,
+BotHumanize = true,
+BotDecisionInterval = 0.28,
+BotPredictionVariance = 0.16,
+BotGapVariance = 0.55,
+BotMistakeChance = 27,
+BotMistakeDistance = 2.0,
+BotMistakeDuration = 0.38,
+BotCommitTime = 0.2,
+BotMovementPattern = 'Direct',
+BotZigzagWidth = 1.25,
+BotZigzagSpeed = 2.25,
+BotForceOffset = 1.8,
+BotAutoContest = true,
+BotContestRange = 5,
+BotContestHeight = 2.4,
+BotStealAttempts = true,
+BotStealRange = 3.0,
+BotStealChance = 5,
+BotStealDuration = 0.32,
+BotStealCooldown = 4.5,
+BotSolid = true,
+BotHighlight = true,
+
 AutoHeadRide = false,
 AutoHeadRideEngageRange = 5,
 AutoHeadRideFollowDistance = 7,
@@ -459,23 +504,11 @@ AutoDunkManualOverride = true,
 AutoDunkLaneCheck = true,
 AutoDunkRandomOwned = false,
 
--- One-switch full automation preset. Auto Rage keeps normal ground movement
--- at 19, uses the existing velocity-flight controller at 19 while carrying,
--- and commits through the scoring rim with the dunk input held.
-AutoRage = false,
-AutoRageSpeed = 19,
-AutoRageReach = 100,
-AutoRageDunkArmDistance = 19,
-
 AutoOffense = false,
 AutoOffenseMode = 'balanced',
 AutoOffenseManualOverride = true,
 AutoOffenseStyle = 'Get To Spot',
 AutoOffenseTurnAround = 9,
-AutoOffensePingAware = true,
-AutoOffensePingBaseline = 60,
-AutoOffensePingStrength = 1,
-AutoOffensePingMaxLead = 0.35,
 AutoOffenseEdgeRoom = 11,
 AutoOffenseSpotUrgency = 5,
 AutoOffenseShootChance = 0.45,
@@ -512,6 +545,14 @@ AutoOffenseMoveResponsiveness = 8.5,
 AutoOffenseBoundaryLookAhead = 8,
 AutoOffenseBoundaryVelocityLookAhead = 0.22,
 AutoOffenseShowPath = false,
+AutoOffenseAntiRip = true,
+AutoOffenseAntiRipPingLead = true,
+AutoOffenseAntiRipPadding = 0.90,
+AutoOffenseAntiRipExtraLead = 0.035,
+AutoOffenseAntiRipMaxLead = 0.28,
+AutoOffenseAntiRipInstantCut = true,
+AutoOffenseAntiRipNoSteal = true,
+AutoOffenseAntiRipNoStealCooldown = 0.45,
 OffenseTrainer = false,
 OffenseTrainerAutoSave = true,
 OffenseTrainerSampleInterval = 0.15,
@@ -540,6 +581,39 @@ LocalTrail = 'Trail_Default',
 LocalBall = 'Ball_Default',
 LocalBodyAura = 'Aura_Default',
 BallStudioEnabled = false,
+CosmeticStudioEnabled = false,
+CustomBodyAuraEnabled = false,
+CustomBodyAuraCatalogId = 0,
+CustomBodyAuraScale = 1,
+CustomBodyAuraTint = false,
+CustomBodyAuraR = 120,
+CustomBodyAuraG = 220,
+CustomBodyAuraB = 255,
+CustomBallAuraEnabled = false,
+CustomBallAuraCatalogId = 0,
+CustomBallAuraScale = 1,
+CustomBallAuraTint = false,
+CustomBallAuraR = 255,
+CustomBallAuraG = 170,
+CustomBallAuraB = 40,
+CustomBodyTrailEnabled = false,
+CustomBodyTrailTextureId = 0,
+CustomBodyTrailWidth = 1.4,
+CustomBodyTrailLifetime = 0.45,
+CustomBodyTrailStartR = 80,
+CustomBodyTrailStartG = 220,
+CustomBodyTrailStartB = 255,
+CustomBodyTrailEndR = 180,
+CustomBodyTrailEndG = 80,
+CustomBodyTrailEndB = 255,
+CustomCourtOverlayEnabled = false,
+CustomCourtDecalId = 0,
+CustomCourtR = 255,
+CustomCourtG = 255,
+CustomCourtB = 255,
+CustomGoalBurstEnabled = false,
+CustomGoalBurstCatalogId = 0,
+CustomGoalBurstScale = 1,
 PerfectShotText = 'Perfect Shot!',
 PerfectShotColorR = 80,
 PerfectShotColorG = 255,
@@ -964,8 +1038,6 @@ AutoDunkEnabled = CONFIG.AutoDunk,
 AutoDunkMode = CONFIG.AutoDunkMode,
 AutoDunkRandomOwned = CONFIG.AutoDunkRandomOwned,
 AutoDunkStatus = CONFIG.AutoDunk and 'WAITING' or 'OFF',
-AutoRageEnabled = CONFIG.AutoRage == true,
-AutoRageStatus = CONFIG.AutoRage and 'STARTING' or 'OFF',
 LegitAimSequenceActive = false,
 LegitAimGeneration = 0,
 LegitAimTarget = nil,
@@ -2687,15 +2759,6 @@ end
 end
 
 function State.Movement.GetFlightDirection()
--- Auto Rage supplies a target-directed vector only while it owns a live
--- possession route. Normal velocity flight remains camera-relative.
-if State.AutoRage and State.AutoRage.Enabled
-and type(State.AutoRage.GetFlightDirection) == 'function' then
-local Ok, RageDirection = pcall(State.AutoRage.GetFlightDirection)
-if Ok and typeof(RageDirection) == 'Vector3' then
-return RageDirection.Magnitude > 1 and RageDirection.Unit or RageDirection
-end
-end
 if UserInputService:GetFocusedTextBox() then return Vector3.zero end
 local Camera = Workspace.CurrentCamera
 if not Camera then return Vector3.zero end
@@ -2806,15 +2869,12 @@ if Stale then pcall(function() Stale:Destroy() end) end
 CurrentRoot.AssemblyLinearVelocity = Direction * Speed
 CurrentRoot.AssemblyAngularVelocity = Vector3.zero
 
-local FacingDirection = Direction
-if not (State.AutoRage and State.AutoRage.Enabled
-and State.AutoRage.HasPossession and State.AutoRage.Target) then
 local Camera = Workspace.CurrentCamera
-if Camera then FacingDirection = Camera.CFrame.LookVector end
-end
-local Look = Vector3.new(FacingDirection.X, 0, FacingDirection.Z)
+if Camera then
+local Look = Vector3.new(Camera.CFrame.LookVector.X, 0, Camera.CFrame.LookVector.Z)
 if Look.Magnitude > 0.001 then
 CurrentRoot.CFrame = CFrame.lookAt(CurrentRoot.Position, CurrentRoot.Position + Look.Unit)
+end
 end
 end)
 )
@@ -3826,7 +3886,7 @@ local HumanoidObject = Character and safe_find(Character, 'Humanoid')
 local Root = Character and safe_find(Character, 'HumanoidRootPart')
 if not (HumanoidObject and Root) or HumanoidObject.Health <= 0 then return end
 
-local ReachRadius = math.clamp(tonumber(State.BallAssist.ReachRadius) or 10, 2, 100)
+local ReachRadius = math.clamp(tonumber(State.BallAssist.ReachRadius) or 10, 2, 30)
 local MagRadius = math.clamp(tonumber(State.BallAssist.MagRadius) or 35, 4, 80)
 local MagSpeed = math.clamp(tonumber(State.BallAssist.MagSpeed) or 85, 10, 200)
 State.BallAssist.SmartReachActive = false
@@ -3910,7 +3970,7 @@ State.BallAssist.ReachScanAt = 0
 end
 
 function State.BallAssist.SetReachRadius(Value)
-Value = math.clamp(tonumber(Value) or 10, 2, 100)
+Value = math.clamp(tonumber(Value) or 10, 2, 30)
 State.BallAssist.ReachRadius = Value
 CONFIG.BallReachRadius = Value
 end
@@ -4189,6 +4249,7 @@ GiveSignal(RunService.PreSimulation:Connect(WYNF_JIT(function(DeltaTime)
 if not State.Active then return end
 if CONFIG.IcePhysics then pcall(State.Movement.ApplyIcePhysics,DeltaTime) end
 if CONFIG.InstantDirectionSwitch or State.Movement.InstantSwitchRoot then pcall(State.Movement.ApplyInstantDirectionSwitch,DeltaTime) end
+if State.AutoOffense and State.AutoOffense.StepAntiRip then pcall(State.AutoOffense.StepAntiRip,DeltaTime) end
 end)))
 
 GiveSignal(RunService.Heartbeat:Connect(WYNF_JIT(function(DeltaTime)
@@ -6570,7 +6631,306 @@ pcall(State.BallStudio.TintCosmetics)
 end
 end
 
+
+-- Cosmetic Studio: catalog IDs, tints, and scale for body auras, ball auras,
+-- character trails, court overlays, and local goal bursts. Lives on State so
+-- the main chunk stays under the Luau 200-register ceiling.
+State.CosmeticStudio = {
+Tag = 'SilverSurferCosmeticStudio',
+LastUpdateAt = 0,
+LastBodyStamp = '',
+LastBallStamp = '',
+LastTrailStamp = '',
+LastCourtStamp = '',
+TrackedCharacter = nil,
+TrackedBall = nil,
+CourtParts = {},
+}
+
+function State.CosmeticStudio.Clear(Root, Kind)
+if not Root then return end
+local Objects = Root:GetDescendants()
+for Index = #Objects, 1, -1 do
+local Object = Objects[Index]
+local Mark = Object:GetAttribute(State.CosmeticStudio.Tag)
+if Mark ~= nil and (Kind == nil or Mark == Kind) then
+pcall(function() Object:Destroy() end)
+end
+end
+end
+
+function State.CosmeticStudio.TintInstance(Object, Tint)
+if not (Object and Tint) then return end
+if Object:IsA('ParticleEmitter') or Object:IsA('Trail') or Object:IsA('Beam') then
+Object.Color = ColorSequence.new(Tint)
+elseif Object:IsA('PointLight') or Object:IsA('SpotLight') or Object:IsA('SurfaceLight') then
+Object.Color = Tint
+elseif Object:IsA('Decal') or Object:IsA('Texture') then
+Object.Color3 = Tint
+elseif Object:IsA('BasePart') then
+Object.Color = Tint
+if Object:IsA('MeshPart') then pcall(function() Object.UsePartColor = true end) end
+elseif Object:IsA('SpecialMesh') then
+Object.VertexColor = Vector3.new(Tint.R, Tint.G, Tint.B)
+end
+end
+
+function State.CosmeticStudio.MountCatalog(Parent, Kind, CatalogId, Scale, Tint)
+if not (Parent and Parent.Parent) then return false end
+local Id = math.max(0, math.floor(tonumber(CatalogId) or 0))
+if Id <= 0 then return false end
+local Item = State.BallStudio.LoadCatalogItem(Id)
+if not Item then return false end
+local Container = Instance.new('Model')
+Container.Name = 'SilverSurferCustom' .. Kind
+Container:SetAttribute(State.CosmeticStudio.Tag, Kind)
+Item.Parent = Container
+Container.Parent = Parent
+local Parts = {}
+for _, Object in ipairs(Container:GetDescendants()) do
+if Object:IsA('Script') or Object:IsA('LocalScript') or Object:IsA('ModuleScript')
+or Object:IsA('JointInstance') or Object:IsA('WeldConstraint') then
+pcall(function() Object:Destroy() end)
+elseif Object:IsA('BasePart') then
+Parts[#Parts + 1] = Object
+Object.Anchored = true
+Object.CanCollide = false
+Object.CanQuery = false
+Object.CanTouch = false
+Object.Massless = true
+Object.CastShadow = false
+State.CosmeticStudio.TintInstance(Object, Tint)
+elseif Tint then
+State.CosmeticStudio.TintInstance(Object, Tint)
+end
+Object:SetAttribute(State.CosmeticStudio.Tag, Kind)
+end
+if #Parts == 0 then
+-- Particle / attachment-only catalog items still count as a successful mount.
+return true
+end
+local _, Size = Container:GetBoundingBox()
+local Largest = math.max(Size.X, Size.Y, Size.Z)
+if Largest > 0.0001 then
+local Target = math.max(Parent.Size.X, Parent.Size.Y, Parent.Size.Z) * math.clamp(tonumber(Scale) or 1, 0.05, 8)
+pcall(function() Container:ScaleTo(Target / Largest) end)
+end
+local BoxCFrame = Container:GetBoundingBox()
+local Shift = Parent.CFrame * BoxCFrame:Inverse()
+Container:PivotTo(Shift * Container:GetPivot())
+for _, Part in ipairs(Parts) do
+Part.Anchored = false
+local Weld = Instance.new('WeldConstraint')
+Weld.Name = 'SilverSurferCosmeticWeld'
+Weld.Part0 = Parent
+Weld.Part1 = Part
+Weld:SetAttribute(State.CosmeticStudio.Tag, Kind)
+Weld.Parent = Part
+end
+return true
+end
+
+function State.CosmeticStudio.ApplyBodyAura(Character)
+local Root = Character and Character:FindFirstChild('HumanoidRootPart')
+if not Root then return end
+local Enabled = CONFIG.CosmeticStudioEnabled == true and CONFIG.CustomBodyAuraEnabled == true
+local Id = math.max(0, math.floor(tonumber(CONFIG.CustomBodyAuraCatalogId) or 0))
+local Scale = math.clamp(tonumber(CONFIG.CustomBodyAuraScale) or 1, 0.05, 8)
+local Tint = CONFIG.CustomBodyAuraTint and State.BallStudio.Shade(
+'CustomBodyAuraR', 'CustomBodyAuraG', 'CustomBodyAuraB') or nil
+local Stamp = table.concat({
+Enabled and '1' or '0', tostring(Id), tostring(Scale),
+Tint and Tint:ToHex() or 'none', tostring(Character),
+}, '|')
+if Stamp == State.CosmeticStudio.LastBodyStamp then return end
+State.CosmeticStudio.Clear(Character, 'BodyAura')
+State.CosmeticStudio.LastBodyStamp = Stamp
+State.CosmeticStudio.TrackedCharacter = Character
+if Enabled and Id > 0 then
+State.CosmeticStudio.MountCatalog(Root, 'BodyAura', Id, Scale, Tint)
+end
+end
+
+function State.CosmeticStudio.ApplyBallAura(Ball)
+if not (Ball and Ball:IsA('BasePart')) then return end
+local Enabled = CONFIG.CosmeticStudioEnabled == true and CONFIG.CustomBallAuraEnabled == true
+local Id = math.max(0, math.floor(tonumber(CONFIG.CustomBallAuraCatalogId) or 0))
+local Scale = math.clamp(tonumber(CONFIG.CustomBallAuraScale) or 1, 0.05, 8)
+local Tint = CONFIG.CustomBallAuraTint and State.BallStudio.Shade(
+'CustomBallAuraR', 'CustomBallAuraG', 'CustomBallAuraB') or nil
+local Stamp = table.concat({
+Enabled and '1' or '0', tostring(Id), tostring(Scale),
+Tint and Tint:ToHex() or 'none', tostring(Ball),
+}, '|')
+if Stamp == State.CosmeticStudio.LastBallStamp then return end
+State.CosmeticStudio.Clear(Ball, 'BallAura')
+State.CosmeticStudio.LastBallStamp = Stamp
+State.CosmeticStudio.TrackedBall = Ball
+if Enabled and Id > 0 then
+State.CosmeticStudio.MountCatalog(Ball, 'BallAura', Id, Scale, Tint)
+end
+end
+
+function State.CosmeticStudio.ApplyBodyTrail(Character)
+local Root = Character and Character:FindFirstChild('HumanoidRootPart')
+if not Root then return end
+local Enabled = CONFIG.CosmeticStudioEnabled == true and CONFIG.CustomBodyTrailEnabled == true
+local TextureId = math.max(0, math.floor(tonumber(CONFIG.CustomBodyTrailTextureId) or 0))
+local Width = math.clamp(tonumber(CONFIG.CustomBodyTrailWidth) or 1.4, 0.1, 12)
+local Life = math.clamp(tonumber(CONFIG.CustomBodyTrailLifetime) or 0.45, 0.05, 8)
+local Start = State.BallStudio.Shade('CustomBodyTrailStartR', 'CustomBodyTrailStartG', 'CustomBodyTrailStartB')
+local Finish = State.BallStudio.Shade('CustomBodyTrailEndR', 'CustomBodyTrailEndG', 'CustomBodyTrailEndB')
+local Stamp = table.concat({
+Enabled and '1' or '0', tostring(TextureId), tostring(Width), tostring(Life),
+Start:ToHex(), Finish:ToHex(), tostring(Character),
+}, '|')
+if Stamp == State.CosmeticStudio.LastTrailStamp then return end
+State.CosmeticStudio.Clear(Character, 'BodyTrail')
+State.CosmeticStudio.LastTrailStamp = Stamp
+if not Enabled then return end
+pcall(function()
+local Top = Instance.new('Attachment')
+Top.Name = 'SilverSurferBodyTrailA0'
+Top.Position = Vector3.new(0, 2.2, 0)
+Top:SetAttribute(State.CosmeticStudio.Tag, 'BodyTrail')
+Top.Parent = Root
+local Bottom = Instance.new('Attachment')
+Bottom.Name = 'SilverSurferBodyTrailA1'
+Bottom.Position = Vector3.new(0, -2.2, 0)
+Bottom:SetAttribute(State.CosmeticStudio.Tag, 'BodyTrail')
+Bottom.Parent = Root
+local Trail = Instance.new('Trail')
+Trail.Name = 'SilverSurferBodyTrail'
+Trail.Attachment0 = Top
+Trail.Attachment1 = Bottom
+Trail.Color = ColorSequence.new(Start, Finish)
+Trail.Transparency = NumberSequence.new({
+NumberSequenceKeypoint.new(0, 0.12),
+NumberSequenceKeypoint.new(1, 1),
+})
+Trail.Lifetime = Life
+Trail.WidthScale = NumberSequence.new(Width)
+Trail.FaceCamera = true
+Trail.LightEmission = 0.4
+local Texture = State.BallStudio.ResolveTexture(TextureId)
+Trail.Texture = Texture or ''
+Trail.TextureMode = Enum.TextureMode.Stretch
+Trail:SetAttribute(State.CosmeticStudio.Tag, 'BodyTrail')
+Trail.Parent = Root
+end)
+end
+
+function State.CosmeticStudio.ApplyCourtOverlay()
+local Enabled = CONFIG.CosmeticStudioEnabled == true and CONFIG.CustomCourtOverlayEnabled == true
+local Id = math.max(0, math.floor(tonumber(CONFIG.CustomCourtDecalId) or 0))
+local Tint = State.BallStudio.Shade('CustomCourtR', 'CustomCourtG', 'CustomCourtB')
+local Stamp = table.concat({ Enabled and '1' or '0', tostring(Id), Tint:ToHex() }, '|')
+if Stamp == State.CosmeticStudio.LastCourtStamp then return end
+for Part in pairs(State.CosmeticStudio.CourtParts) do
+if Part and Part.Parent then State.CosmeticStudio.Clear(Part, 'Court') end
+State.CosmeticStudio.CourtParts[Part] = nil
+end
+State.CosmeticStudio.LastCourtStamp = Stamp
+if not (Enabled and Id > 0) then return end
+local Texture = State.BallStudio.ResolveTexture(Id)
+if not Texture then return end
+local Courts = {}
+pcall(function() Courts = GetAllCourts() end)
+for _, Court in ipairs(Courts) do
+for _, Object in ipairs(Court:GetDescendants()) do
+if Object:IsA('BasePart') and (Object.Name == 'Floor' or Object.Name == 'Court'
+or string.find(string.lower(Object.Name), 'floor', 1, true)) then
+local Decal = Instance.new('Texture')
+Decal.Name = 'SilverSurferCourtOverlay'
+Decal.Texture = Texture
+Decal.Face = Enum.NormalId.Top
+Decal.StudsPerTileU = math.max(8, Object.Size.X)
+Decal.StudsPerTileV = math.max(8, Object.Size.Z)
+Decal.Transparency = 0.15
+Decal.Color3 = Tint
+Decal:SetAttribute(State.CosmeticStudio.Tag, 'Court')
+Decal.Parent = Object
+State.CosmeticStudio.CourtParts[Object] = true
+end
+end
+end
+end
+
+function State.CosmeticStudio.PlayGoalBurst(Goal)
+if not (CONFIG.CosmeticStudioEnabled and CONFIG.CustomGoalBurstEnabled) then return end
+local Id = math.max(0, math.floor(tonumber(CONFIG.CustomGoalBurstCatalogId) or 0))
+local Anchor = Goal
+if typeof(Goal) == 'Instance' and not Goal:IsA('BasePart') then
+Anchor = Goal:FindFirstChildWhichIsA('BasePart', true)
+end
+if not (Id > 0 and Anchor and Anchor:IsA('BasePart')) then return end
+local Scale = math.clamp(tonumber(CONFIG.CustomGoalBurstScale) or 1, 0.05, 8)
+local Item = State.BallStudio.LoadCatalogItem(Id)
+if not Item then return end
+pcall(function()
+Item:SetAttribute(State.CosmeticStudio.Tag, 'GoalBurst')
+Item.Parent = workspace
+if Item:IsA('Model') then
+Item:PivotTo(Anchor.CFrame)
+pcall(function() Item:ScaleTo(Scale) end)
+elseif Item:IsA('BasePart') then
+Item.CFrame = Anchor.CFrame
+Item.Anchored = true
+end
+game:GetService('Debris'):AddItem(Item, 6)
+end)
+end
+
+function State.CosmeticStudio.Refresh()
+State.CosmeticStudio.LastBodyStamp = ''
+State.CosmeticStudio.LastBallStamp = ''
+State.CosmeticStudio.LastTrailStamp = ''
+State.CosmeticStudio.LastCourtStamp = ''
+State.CosmeticStudio.Update(true)
+end
+
+function State.CosmeticStudio.Cleanup()
+local Character = LP.Character
+if Character then
+State.CosmeticStudio.Clear(Character, 'BodyAura')
+State.CosmeticStudio.Clear(Character, 'BodyTrail')
+end
+local Ball = State.CosmeticStudio.TrackedBall or (GetLocalBallHandle and GetLocalBallHandle())
+if Ball then State.CosmeticStudio.Clear(Ball, 'BallAura') end
+for Part in pairs(State.CosmeticStudio.CourtParts) do
+if Part and Part.Parent then State.CosmeticStudio.Clear(Part, 'Court') end
+State.CosmeticStudio.CourtParts[Part] = nil
+end
+State.CosmeticStudio.LastBodyStamp = ''
+State.CosmeticStudio.LastBallStamp = ''
+State.CosmeticStudio.LastTrailStamp = ''
+State.CosmeticStudio.LastCourtStamp = ''
+State.CosmeticStudio.TrackedCharacter = nil
+State.CosmeticStudio.TrackedBall = nil
+end
+
+function State.CosmeticStudio.Update(Force)
+if not CONFIG.CosmeticStudioEnabled and not Force then
+if State.CosmeticStudio.TrackedCharacter or next(State.CosmeticStudio.CourtParts) then
+State.CosmeticStudio.Cleanup()
+end
+return
+end
+local Character = LP.Character
+State.CosmeticStudio.ApplyBodyAura(Character)
+State.CosmeticStudio.ApplyBodyTrail(Character)
+local Ball = GetLocalBallHandle and GetLocalBallHandle() or nil
+State.CosmeticStudio.ApplyBallAura(Ball)
+State.CosmeticStudio.ApplyCourtOverlay()
+end
 GiveSignal(RunService.RenderStepped:Connect(function()
+if State.Active and CONFIG.CosmeticStudioEnabled then
+local Now = os.clock()
+if Now - (State.CosmeticStudio.LastUpdateAt or 0) >= (1 / 20) then
+State.CosmeticStudio.LastUpdateAt = Now
+pcall(State.CosmeticStudio.Update)
+end
+end
 if not (State.Active and CONFIG.BallStudioEnabled) then return end
 local Now = os.clock()
 local VerifyAppearance = Now - State.BallStudio.LastProxyVerifyAt >= 0.25
@@ -8676,6 +9036,7 @@ return Home + Away
 end
 
 function State.LocalSpoofs.PlaySelectedGoalEffect(Name, Scorer, Court, Goal, Arguments)
+if Scorer == LP then pcall(State.CosmeticStudio.PlayGoalBurst, Goal) end
 if not (State.Active and State.LocalGoalEffectSpoofEnabled and Scorer == LP) then return end
 if State.LocalGoalEffect == 'None' then return end
 State.LocalSpoofs.LastMadeGoalEffectAt = os.clock()
@@ -11436,6 +11797,11 @@ end
 local FallbackGoal = FindNearestGoalFromPosition(TargetRoot.Position)
 return Finish(FallbackGoal)
 end)
+
+State.GoalLookup = State.GoalLookup or {}
+State.GoalLookup.FindPlayerScoringGoal = FindPlayerScoringGoal
+State.GoalLookup.FindNearestGoalFromPosition = FindNearestGoalFromPosition
+State.GoalLookup.FindGoalPartInHitboxFolder = FindGoalPartInHitboxFolder
 
 local CachedAimCourt = nil
 local CachedAimSlotName = nil
@@ -15935,7 +16301,7 @@ State.Runtime = {
 MovementOwner = nil,
 MovementPriority = 0,
 MovementLeaseUntil = 0,
-MovementPriorities = { Guard = 30, GetOpen = 40, Offense = 50, AutoMix = 60, Dunk = 70, TipOff = 80, Stepback = 90 },
+MovementPriorities = { Guard = 30, GetOpen = 40, Offense = 50, AutoMix = 60, Dunk = 70, TipOff = 80, Stepback = 90, AntiRip = 110 },
 RotationOwner = nil,
 RotationPriority = 0,
 RotationLeaseUntil = 0,
@@ -19009,6 +19375,783 @@ end
 task.wait(0.10)
 end
 end)
+
+State.BotDefender = {
+BindName = 'SilverSurfer_1v1GhostBot',
+Enabled = CONFIG.BotEnabled == true,
+Model = nil,
+Root = nil,
+Humanoid = nil,
+Animator = nil,
+Highlight = nil,
+ShiftLockAttachment = nil,
+ShiftLockOrientation = nil,
+ShiftLockFacing = 'PLAYER',
+SourceCharacter = nil,
+Status = CONFIG.BotEnabled and 'STARTING' or 'OFF',
+Distance = math.huge,
+SampledPosition = nil,
+NextSampleAt = 0,
+CurrentMoveDirection = Vector3.zero,
+GroundY = nil,
+LastTargetJumping = false,
+ContestUntil = 0,
+NextBuildAt = 0,
+NextMoveToAt = 0,
+AnimationIds = {},
+AnimationObjects = {},
+AnimationTracks = {},
+ActiveTrackName = nil,
+RigLabel = 'R6',
+HumanStatus = 'HUMAN READS',
+NextHumanDecisionAt = 0,
+DecisionPrediction = CONFIG.BotPrediction,
+DecisionGapOffset = 0,
+MistakeLateral = 0,
+MistakeUntil = 0,
+CommittedDirection = Vector3.zero,
+CommitUntil = 0,
+StealUntil = 0,
+NextStealAt = 0,
+NextStealRollAt = 0,
+Stealing = false,
+LastError = nil,
+}
+
+do
+local BotDefender = State.BotDefender
+
+-- These are Roblox's classic R6 locomotion assets, used only when the live
+-- character's own Animate configuration does not expose an asset for a state.
+-- No Motor6D posing, tweened limbs, or custom keyframes are used.
+local ClassicR6Animations = {
+Idle = 'rbxassetid://180435571',
+Walk = 'rbxassetid://180426354',
+Run = 'rbxassetid://180426354',
+Jump = 'rbxassetid://125750702',
+Fall = 'rbxassetid://180436148',
+}
+
+local function FlatDirection(Vector, Fallback)
+local Flat = Vector3.new(Vector.X, 0, Vector.Z)
+if Flat.Magnitude > 0.001 then return Flat.Unit end
+Fallback = Fallback or Vector3.new(0, 0, 1)
+local FlatFallback = Vector3.new(Fallback.X, 0, Fallback.Z)
+return FlatFallback.Magnitude > 0.001 and FlatFallback.Unit or Vector3.new(0, 0, 1)
+end
+
+local function IsTorsoPart(Object)
+return Object.Name == 'Torso' or Object.Name == 'UpperTorso'
+or Object.Name == 'LowerTorso'
+end
+
+local function RandomCentered()
+return math.random() * 2 - 1
+end
+
+function BotDefender.UpdateHumanDecision(Now)
+local BasePrediction = tonumber(CONFIG.BotPrediction) or 0.16
+if CONFIG.BotHumanize == false then
+BotDefender.DecisionPrediction = BasePrediction
+BotDefender.DecisionGapOffset = 0
+BotDefender.MistakeLateral = 0
+BotDefender.MistakeUntil = 0
+BotDefender.NextHumanDecisionAt = Now
+BotDefender.HumanStatus = 'PERFECT READS'
+return
+end
+if Now < (BotDefender.NextHumanDecisionAt or 0) then
+if Now >= (BotDefender.MistakeUntil or 0) then
+BotDefender.MistakeLateral = 0
+if BotDefender.HumanStatus == 'WRONG STEP' then BotDefender.HumanStatus = 'READING HIPS' end
+end
+return
+end
+local Interval = math.clamp(tonumber(CONFIG.BotDecisionInterval) or 0.11, 0.02, 0.8)
+BotDefender.NextHumanDecisionAt = Now + Interval * (0.82 + math.random() * 0.36)
+local PredictionVariance = math.clamp(tonumber(CONFIG.BotPredictionVariance) or 0.07, 0, 1)
+local GapVariance = math.clamp(tonumber(CONFIG.BotGapVariance) or 0.18, 0, 3)
+BotDefender.DecisionPrediction = math.clamp(
+BasePrediction + RandomCentered() * PredictionVariance, -0.75, 1.5)
+BotDefender.DecisionGapOffset = RandomCentered() * GapVariance
+if Now >= (BotDefender.MistakeUntil or 0) then
+BotDefender.MistakeLateral = 0
+local Chance = math.clamp(tonumber(CONFIG.BotMistakeChance) or 6, 0, 60)
+if math.random() * 100 < Chance then
+local Distance = math.clamp(tonumber(CONFIG.BotMistakeDistance) or 1.15, 0, 5)
+BotDefender.MistakeLateral = (math.random(0, 1) == 0 and -1 or 1)
+* Distance * (0.70 + math.random() * 0.60)
+BotDefender.MistakeUntil = Now
++ math.clamp(tonumber(CONFIG.BotMistakeDuration) or 0.22, 0.05, 1)
+BotDefender.HumanStatus = 'WRONG STEP'
+else
+BotDefender.HumanStatus = 'READING HIPS'
+end
+end
+end
+
+function BotDefender.CreateShiftLock(Root)
+if BotDefender.ShiftLockOrientation then
+pcall(function() BotDefender.ShiftLockOrientation:Destroy() end)
+end
+if BotDefender.ShiftLockAttachment then
+pcall(function() BotDefender.ShiftLockAttachment:Destroy() end)
+end
+BotDefender.ShiftLockAttachment = nil
+BotDefender.ShiftLockOrientation = nil
+if not (Root and Root.Parent) then return false end
+local Attachment = Instance.new('Attachment')
+Attachment.Name = 'SilverSurferBotShiftLockAttachment'
+Attachment.Parent = Root
+local Orientation = Instance.new('AlignOrientation')
+Orientation.Name = 'SilverSurferBotShiftLock'
+Orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+Orientation.Attachment0 = Attachment
+Orientation.RigidityEnabled = false
+Orientation.ReactionTorqueEnabled = false
+Orientation.PrimaryAxisOnly = false
+Orientation.MaxTorque = 1000000
+Orientation.MaxAngularVelocity = math.rad(
+math.clamp(tonumber(CONFIG.BotShiftLockTurnSpeed) or 720, 90, 1440))
+Orientation.Responsiveness = math.clamp(
+tonumber(CONFIG.BotShiftLockResponsiveness) or 18, 1, 60)
+Orientation.Enabled = false
+Orientation.Parent = Root
+BotDefender.ShiftLockAttachment = Attachment
+BotDefender.ShiftLockOrientation = Orientation
+return true
+end
+
+function BotDefender.ApplyDefensiveShiftLock(TargetRoot)
+local HumanoidObject = BotDefender.Humanoid
+local Root = BotDefender.Root
+if not (HumanoidObject and Root and TargetRoot) then return end
+if CONFIG.BotShiftLock == false then
+HumanoidObject.AutoRotate = true
+if BotDefender.ShiftLockOrientation then BotDefender.ShiftLockOrientation.Enabled = false end
+BotDefender.ShiftLockFacing = 'OFF'
+return
+end
+if not (BotDefender.ShiftLockOrientation and BotDefender.ShiftLockOrientation.Parent == Root) then
+BotDefender.CreateShiftLock(Root)
+end
+local Orientation = BotDefender.ShiftLockOrientation
+if not Orientation then return end
+HumanoidObject.AutoRotate = false
+Orientation.Enabled = true
+Orientation.Responsiveness = math.clamp(
+tonumber(CONFIG.BotShiftLockResponsiveness) or 18, 1, 60)
+Orientation.MaxAngularVelocity = math.rad(
+math.clamp(tonumber(CONFIG.BotShiftLockTurnSpeed) or 720, 90, 1440))
+local Mode = tostring(CONFIG.BotShiftLockTarget or 'Player')
+local Focus = TargetRoot.Position
+local Lead = math.clamp(tonumber(CONFIG.BotFacingLead) or 0.06, -0.5, 1.5)
+if Mode == 'Ball' then
+local Ball = GetLocalBallHandle()
+if Ball then Focus = Ball.Position else Mode = 'Player' end
+elseif Mode == 'Movement' then
+Focus = TargetRoot.Position + TargetRoot.AssemblyLinearVelocity * Lead
+else
+Focus = TargetRoot.Position
+end
+local Direction = FlatDirection(Focus - Root.Position, TargetRoot.CFrame.LookVector)
+Orientation.CFrame = CFrame.lookAt(Vector3.zero, Direction, Vector3.new(0, 1, 0))
+BotDefender.ShiftLockFacing = string.upper(Mode)
+end
+
+function BotDefender.ReadNaturalAnimationIds(Character)
+local Result = {}
+local Animate = Character and safe_find(Character, 'Animate')
+if Animate then
+for _, Object in ipairs(Animate:GetDescendants()) do
+if Object:IsA('Animation') and tostring(Object.AnimationId or '') ~= '' then
+local ParentName = Object.Parent and Object.Parent.Name or ''
+local Context = string.lower(Object.Name .. ' ' .. ParentName)
+local Key
+if string.find(Context, 'idle', 1, true) then Key = 'Idle'
+elseif string.find(Context, 'walk', 1, true) then Key = 'Walk'
+elseif string.find(Context, 'run', 1, true) then Key = 'Run'
+elseif string.find(Context, 'jump', 1, true) then Key = 'Jump'
+elseif string.find(Context, 'fall', 1, true) then Key = 'Fall' end
+if Key and not Result[Key] then Result[Key] = Object.AnimationId end
+end
+end
+end
+for Key, Fallback in pairs(ClassicR6Animations) do
+if not Result[Key] or Result[Key] == '' then Result[Key] = Fallback end
+end
+if not Result.Run then Result.Run = Result.Walk end
+return Result
+end
+
+function BotDefender.StopNaturalAnimations()
+for _, Track in pairs(BotDefender.AnimationTracks or {}) do
+pcall(function() Track:Stop(0.08) end)
+end
+for _, Animation in pairs(BotDefender.AnimationObjects or {}) do
+pcall(function() Animation:Destroy() end)
+end
+BotDefender.AnimationObjects = {}
+BotDefender.AnimationTracks = {}
+BotDefender.ActiveTrackName = nil
+end
+
+function BotDefender.LoadNaturalAnimations()
+BotDefender.StopNaturalAnimations()
+local HumanoidObject = BotDefender.Humanoid
+if not HumanoidObject then return false end
+local Animator = HumanoidObject:FindFirstChildOfClass('Animator')
+if not Animator then
+Animator = Instance.new('Animator')
+Animator.Parent = HumanoidObject
+end
+BotDefender.Animator = Animator
+local Priorities = {
+Idle = Enum.AnimationPriority.Idle,
+Walk = Enum.AnimationPriority.Movement,
+Run = Enum.AnimationPriority.Movement,
+Jump = Enum.AnimationPriority.Action,
+Fall = Enum.AnimationPriority.Action,
+}
+for Name, AnimationId in pairs(BotDefender.AnimationIds or {}) do
+local Animation = Instance.new('Animation')
+Animation.Name = 'SilverSurferNaturalR6_' .. Name
+Animation.AnimationId = tostring(AnimationId)
+local Loaded, Track = pcall(Animator.LoadAnimation, Animator, Animation)
+if Loaded and Track then
+Track.Priority = Priorities[Name] or Enum.AnimationPriority.Movement
+Track.Looped = Name == 'Idle' or Name == 'Walk' or Name == 'Run' or Name == 'Fall'
+BotDefender.AnimationObjects[Name] = Animation
+BotDefender.AnimationTracks[Name] = Track
+else
+Animation:Destroy()
+end
+end
+return next(BotDefender.AnimationTracks) ~= nil
+end
+
+function BotDefender.PlayNaturalAnimation(Name, Speed)
+local Track = BotDefender.AnimationTracks and BotDefender.AnimationTracks[Name]
+if not Track then return end
+if BotDefender.ActiveTrackName ~= Name then
+for OtherName, OtherTrack in pairs(BotDefender.AnimationTracks) do
+if OtherName ~= Name then pcall(function() OtherTrack:Stop(0.12) end) end
+end
+pcall(function() Track:Play(0.12, 1, Speed or 1) end)
+BotDefender.ActiveTrackName = Name
+elseif Speed then
+pcall(function() Track:AdjustSpeed(Speed) end)
+end
+end
+
+function BotDefender.UpdateNaturalAnimation()
+local HumanoidObject = BotDefender.Humanoid
+local Root = BotDefender.Root
+if not (HumanoidObject and Root) then return end
+local StateType = HumanoidObject:GetState()
+local HorizontalSpeed = Vector3.new(
+Root.AssemblyLinearVelocity.X, 0, Root.AssemblyLinearVelocity.Z).Magnitude
+if StateType == Enum.HumanoidStateType.Jumping then
+BotDefender.PlayNaturalAnimation('Jump', 1)
+elseif StateType == Enum.HumanoidStateType.Freefall then
+BotDefender.PlayNaturalAnimation('Fall', 1)
+elseif HorizontalSpeed > 0.65 or HumanoidObject.MoveDirection.Magnitude > 0.05 then
+local WalkSpeed = math.max(tonumber(HumanoidObject.WalkSpeed) or 16, 1)
+local Name = WalkSpeed > 18 and 'Run' or 'Walk'
+BotDefender.PlayNaturalAnimation(Name, math.clamp(WalkSpeed / 16, 0.55, 2.25))
+else
+BotDefender.PlayNaturalAnimation('Idle', 1)
+end
+end
+
+function BotDefender.Destroy(Status)
+BotDefender.StopNaturalAnimations()
+if BotDefender.ShiftLockOrientation then pcall(function() BotDefender.ShiftLockOrientation:Destroy() end) end
+if BotDefender.ShiftLockAttachment then pcall(function() BotDefender.ShiftLockAttachment:Destroy() end) end
+if BotDefender.Humanoid then
+pcall(function() BotDefender.Humanoid:Move(Vector3.zero, false) end)
+end
+if BotDefender.Model then pcall(function() BotDefender.Model:Destroy() end) end
+BotDefender.Model = nil
+BotDefender.Root = nil
+BotDefender.Humanoid = nil
+BotDefender.Animator = nil
+BotDefender.Highlight = nil
+BotDefender.ShiftLockAttachment = nil
+BotDefender.ShiftLockOrientation = nil
+BotDefender.ShiftLockFacing = 'OFF'
+BotDefender.SourceCharacter = nil
+BotDefender.SampledPosition = nil
+BotDefender.NextSampleAt = 0
+BotDefender.CurrentMoveDirection = Vector3.zero
+BotDefender.GroundY = nil
+BotDefender.LastTargetJumping = false
+BotDefender.ContestUntil = 0
+BotDefender.NextMoveToAt = 0
+BotDefender.Distance = math.huge
+BotDefender.NextHumanDecisionAt = 0
+BotDefender.DecisionPrediction = CONFIG.BotPrediction
+BotDefender.DecisionGapOffset = 0
+BotDefender.MistakeLateral = 0
+BotDefender.MistakeUntil = 0
+BotDefender.CommittedDirection = Vector3.zero
+BotDefender.CommitUntil = 0
+BotDefender.StealUntil = 0
+BotDefender.NextStealAt = 0
+BotDefender.Stealing = false
+if Status then BotDefender.Status = Status end
+end
+
+function BotDefender.ApplyAppearance()
+local Model = BotDefender.Model
+if not Model then return end
+if BotDefender.Highlight then
+BotDefender.Highlight.Enabled = CONFIG.BotHighlight ~= false
+end
+for _, Object in ipairs(Model:GetDescendants()) do
+if Object:IsA('BasePart') then
+Object.LocalTransparencyModifier = 0
+Object.Anchored = false
+Object.CanTouch = false
+Object.CanQuery = false
+if Object.Name == 'HumanoidRootPart' then
+Object.CanCollide = false
+elseif CONFIG.BotSolid ~= false then
+local NaturalCollision = Object:GetAttribute('SilverSurferNaturalCollision')
+Object.CanCollide = NaturalCollision == true or IsTorsoPart(Object)
+else
+-- Torso-only collision keeps the Humanoid on the court without turning
+-- every limb into an oversized blocker.
+Object.CanCollide = IsTorsoPart(Object)
+end
+end
+end
+end
+
+function BotDefender.Build()
+if os.clock() < (BotDefender.NextBuildAt or 0) then return false end
+BotDefender.NextBuildAt = os.clock() + 0.75
+BotDefender.Destroy('BUILDING')
+
+local Character = LP.Character
+local TargetRoot = Character and safe_find(Character, 'HumanoidRootPart')
+local TargetHumanoid = Character and Character:FindFirstChildOfClass('Humanoid')
+if not (Character and TargetRoot and TargetHumanoid and TargetHumanoid.Health > 0) then
+BotDefender.Status = 'WAITING FOR CHARACTER'
+return false
+end
+
+BotDefender.AnimationIds = BotDefender.ReadNaturalAnimationIds(Character)
+local Clone = State.GhostReplay.CloneCompleteInstance(Character)
+if not Clone then
+BotDefender.Status = 'CLONE FAILED'
+return false
+end
+Clone.Name = 'SilverSurfer1v1R6Bot'
+
+for _, Child in ipairs(Clone:GetChildren()) do
+if Child.Name == 'Basketball' or Child:IsA('Tool') or Child:IsA('ForceField') then
+Child:Destroy()
+end
+end
+
+local CloneRoot = safe_find(Clone, 'HumanoidRootPart')
+local CloneHumanoid = Clone:FindFirstChildOfClass('Humanoid')
+if not (CloneRoot and CloneRoot:IsA('BasePart') and CloneHumanoid) then
+Clone:Destroy()
+BotDefender.Status = 'R6 HUMANOID RIG MISSING'
+return false
+end
+
+for _, Object in ipairs(Clone:GetDescendants()) do
+if not Object.Parent then
+-- A removed character object owned this descendant.
+elseif Object:IsA('Script') or Object:IsA('LocalScript') or Object:IsA('ModuleScript')
+or Object:IsA('Sound') or Object:IsA('BillboardGui') or Object:IsA('SurfaceGui')
+or Object:IsA('ProximityPrompt') then
+Object:Destroy()
+elseif Object:IsA('BodyMover') or Object:IsA('LinearVelocity')
+or Object:IsA('AngularVelocity') or Object:IsA('AlignPosition')
+or Object:IsA('AlignOrientation') or Object:IsA('VectorForce') then
+Object:Destroy()
+elseif Object:IsA('BasePart') then
+Object:SetAttribute('SilverSurferNaturalCollision', Object.CanCollide)
+Object.Anchored = false
+Object.CanTouch = false
+Object.CanQuery = false
+Object.Massless = Object ~= CloneRoot
+Object.AssemblyLinearVelocity = Vector3.zero
+Object.AssemblyAngularVelocity = Vector3.zero
+Object.LocalTransparencyModifier = 0
+end
+end
+
+CloneHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+CloneHumanoid.NameDisplayDistance = 0
+CloneHumanoid.HealthDisplayDistance = 0
+CloneHumanoid.AutoRotate = true
+CloneHumanoid.PlatformStand = false
+CloneHumanoid.BreakJointsOnDeath = false
+CloneHumanoid.WalkSpeed = 16 -- locked: the real game never changes WalkSpeed
+CloneHumanoid.Health = math.max(CloneHumanoid.Health, 100)
+BotDefender.RigLabel = CloneHumanoid.RigType == Enum.HumanoidRigType.R6 and 'R6' or 'R15 FALLBACK'
+
+pcall(function() Clone.PrimaryPart = CloneRoot end)
+Clone.Parent = Workspace
+
+local Highlight = Instance.new('Highlight')
+Highlight.Name = 'SilverSurferBotHighlight'
+Highlight.Adornee = Clone
+Highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+Highlight.FillColor = Color3.fromRGB(205, 214, 225)
+Highlight.FillTransparency = 1
+Highlight.OutlineColor = Color3.fromRGB(235, 241, 248)
+Highlight.OutlineTransparency = 0.18
+Highlight.Enabled = CONFIG.BotHighlight ~= false
+Highlight.Parent = Clone
+
+local Adornee = safe_find(Clone, 'Head') or CloneRoot
+local Tag = Instance.new('BillboardGui')
+Tag.Name = 'SilverSurferBotTag'
+Tag.Adornee = Adornee
+Tag.AlwaysOnTop = true
+Tag.Size = UDim2.fromOffset(104, 20)
+Tag.StudsOffsetWorldSpace = Vector3.new(0, 2.65, 0)
+Tag.Parent = Clone
+local TagText = Instance.new('TextLabel')
+TagText.Size = UDim2.fromScale(1, 1)
+TagText.BackgroundTransparency = 1
+TagText.Font = Enum.Font.Code
+TagText.Text = '1V1  R6 BOT'
+TagText.TextColor3 = Color3.fromRGB(235, 241, 248)
+TagText.TextStrokeColor3 = Color3.new(0, 0, 0)
+TagText.TextStrokeTransparency = 0.25
+TagText.TextSize = 12
+TagText.Parent = Tag
+
+local Goal = FindPlayerScoringGoal(LP)
+local BlockDirection = FlatDirection(TargetRoot.CFrame.LookVector)
+if Goal then
+BlockDirection = FlatDirection(Goal.Position - TargetRoot.Position, BlockDirection)
+end
+local Gap = math.clamp(tonumber(CONFIG.BotGuardGap) or 2.8, 1.8, 12)
+local SpawnPosition = TargetRoot.Position + BlockDirection * Gap
+local SpawnCFrame = CFrame.lookAt(SpawnPosition, TargetRoot.Position, Vector3.new(0, 1, 0))
+Clone:PivotTo(SpawnCFrame)
+
+BotDefender.Model = Clone
+BotDefender.Root = CloneRoot
+BotDefender.Humanoid = CloneHumanoid
+BotDefender.Highlight = Highlight
+BotDefender.SourceCharacter = Character
+BotDefender.SampledPosition = SpawnPosition
+BotDefender.GroundY = TargetRoot.Position.Y
+BotDefender.NextSampleAt = 0
+BotDefender.NextMoveToAt = 0
+BotDefender.CurrentMoveDirection = Vector3.zero
+BotDefender.NextHumanDecisionAt = 0
+BotDefender.DecisionPrediction = CONFIG.BotPrediction
+BotDefender.DecisionGapOffset = 0
+BotDefender.MistakeLateral = 0
+BotDefender.MistakeUntil = 0
+BotDefender.CommittedDirection = Vector3.zero
+BotDefender.CommitUntil = 0
+BotDefender.CreateShiftLock(CloneRoot)
+BotDefender.Status = 'SHIFTLOCK ' .. BotDefender.RigLabel .. ' READY'
+BotDefender.LastError = nil
+BotDefender.ApplyAppearance()
+BotDefender.LoadNaturalAnimations()
+pcall(function()
+CloneHumanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+CloneHumanoid:Move(Vector3.zero, false)
+end)
+return true
+end
+
+function BotDefender.GetDesiredPosition(TargetRoot, TargetHumanoid)
+local TargetPosition = TargetRoot.Position
+local TargetLook = FlatDirection(TargetRoot.CFrame.LookVector)
+local Goal = FindPlayerScoringGoal(LP)
+local BlockDirection = Goal
+and FlatDirection(Goal.Position - TargetPosition, TargetLook)
+or TargetLook
+local SideDirection = Vector3.new(-BlockDirection.Z, 0, BlockDirection.X)
+local TargetRight = FlatDirection(TargetRoot.CFrame.RightVector, SideDirection)
+local Velocity = Vector3.new(
+TargetRoot.AssemblyLinearVelocity.X, 0, TargetRoot.AssemblyLinearVelocity.Z)
+if Velocity.Magnitude > 100 then Velocity = Velocity.Unit * 100 end
+local MoveDirection = Vector3.new(
+TargetHumanoid.MoveDirection.X, 0, TargetHumanoid.MoveDirection.Z)
+local Motion = Velocity.Magnitude > 0.75 and Velocity
+or (MoveDirection * math.max(tonumber(TargetHumanoid.WalkSpeed) or 16, 1))
+
+if TargetHumanoid.FloorMaterial ~= Enum.Material.Air
+and math.abs(TargetRoot.AssemblyLinearVelocity.Y) < 4 then
+BotDefender.GroundY = TargetPosition.Y
+end
+BotDefender.GroundY = BotDefender.GroundY or TargetPosition.Y
+
+local Gap = math.clamp((tonumber(CONFIG.BotGuardGap) or 2.8)
++ (tonumber(BotDefender.DecisionGapOffset) or 0), 1.8, 12)
+local Prediction = math.clamp(tonumber(BotDefender.DecisionPrediction)
+or tonumber(CONFIG.BotPrediction) or 0.16, -0.75, 1.5)
+local LateralLead = math.clamp(tonumber(CONFIG.BotLateralLead) or 0.10, -1, 1.5)
+local Style = tostring(CONFIG.BotStyle or 'Predictive')
+local Predicted = TargetPosition + Motion * Prediction
+local Lateral = math.clamp(Motion:Dot(SideDirection) * LateralLead, -4, 4)
+local Desired
+
+if Style == 'Mirror' then
+Desired = TargetPosition + BlockDirection * Gap + SideDirection * Lateral
+elseif Style == 'Cutoff' then
+local DriveDirection = Motion.Magnitude > 0.1 and Motion.Unit or BlockDirection
+local CutDirection = BlockDirection * 0.55 + DriveDirection * 0.45
+CutDirection = CutDirection.Magnitude > 0.01 and CutDirection.Unit or BlockDirection
+Desired = Predicted + CutDirection * (Gap + math.clamp(Motion.Magnitude * 0.035, 0, 1.1))
++ SideDirection * Lateral
+elseif Style == 'Smother' then
+Desired = TargetPosition + BlockDirection * math.min(Gap, 1.15)
++ SideDirection * math.clamp(Lateral, -0.55, 0.55)
+elseif Style == 'Force Left' then
+local Offset = math.clamp(tonumber(CONFIG.BotForceOffset) or 1.8, 0, 8)
+Desired = Predicted + BlockDirection * (Gap * 0.62) + TargetRight * Offset
+elseif Style == 'Force Right' then
+local Offset = math.clamp(tonumber(CONFIG.BotForceOffset) or 1.8, 0, 8)
+Desired = Predicted + BlockDirection * (Gap * 0.62) - TargetRight * Offset
+elseif Style == 'Legit' then
+local LegitPrediction = math.min(Prediction, 0.14)
+Desired = TargetPosition + Motion * LegitPrediction + BlockDirection * Gap
++ SideDirection * math.clamp(Lateral * 0.55, -1.1, 1.1)
+else
+Desired = Predicted + BlockDirection * Gap + SideDirection * Lateral
+end
+
+if tostring(CONFIG.BotMovementPattern or 'Direct') == 'Zigzag' then
+local Width = math.clamp(tonumber(CONFIG.BotZigzagWidth) or 1.25, 0, 8)
+local Speed = math.clamp(tonumber(CONFIG.BotZigzagSpeed) or 2.25, 0.05, 15)
+Desired += SideDirection * math.sin(os.clock() * Speed * math.pi * 2) * Width
+end
+if CONFIG.BotHumanize ~= false and os.clock() < (BotDefender.MistakeUntil or 0) then
+Desired += SideDirection * (tonumber(BotDefender.MistakeLateral) or 0)
+end
+return Vector3.new(Desired.X, BotDefender.GroundY, Desired.Z)
+end
+
+function BotDefender.Reset()
+if not BotDefender.Enabled then
+BotDefender.Status = 'ENABLE BOT FIRST'
+return false
+end
+if not (BotDefender.Model and BotDefender.Root and BotDefender.Humanoid) then
+return BotDefender.Build()
+end
+local Character = LP.Character
+local TargetRoot = Character and safe_find(Character, 'HumanoidRootPart')
+local TargetHumanoid = Character and Character:FindFirstChildOfClass('Humanoid')
+if not (TargetRoot and TargetHumanoid) then return false end
+local Desired = BotDefender.GetDesiredPosition(TargetRoot, TargetHumanoid)
+local Facing = FlatDirection(TargetRoot.Position - Desired, TargetRoot.CFrame.LookVector)
+BotDefender.Model:PivotTo(CFrame.lookAt(Desired, Desired + Facing, Vector3.new(0, 1, 0)))
+for _, Object in ipairs(BotDefender.Model:GetDescendants()) do
+if Object:IsA('BasePart') then
+Object.AssemblyLinearVelocity = Vector3.zero
+Object.AssemblyAngularVelocity = Vector3.zero
+end
+end
+BotDefender.Humanoid:Move(Vector3.zero, false)
+BotDefender.SampledPosition = Desired
+BotDefender.CurrentMoveDirection = Vector3.zero
+BotDefender.CommittedDirection = Vector3.zero
+BotDefender.CommitUntil = 0
+BotDefender.NextHumanDecisionAt = 0
+BotDefender.NextSampleAt = 0
+BotDefender.NextMoveToAt = 0
+BotDefender.StealUntil = 0
+BotDefender.NextStealAt = 0
+BotDefender.Stealing = false
+BotDefender.Status = 'RESET | HUMAN SHIFTLOCK ' .. BotDefender.RigLabel
+return true
+end
+
+function BotDefender.Step(DeltaTime)
+if not (State.Active and BotDefender.Enabled) then return end
+local Character = LP.Character
+local TargetRoot = Character and safe_find(Character, 'HumanoidRootPart')
+local TargetHumanoid = Character and Character:FindFirstChildOfClass('Humanoid')
+if not (TargetRoot and TargetHumanoid and TargetHumanoid.Health > 0) then
+BotDefender.Status = 'WAITING FOR CHARACTER'
+return
+end
+if not (BotDefender.Model and BotDefender.Model.Parent
+and BotDefender.Root and BotDefender.Root.Parent
+and BotDefender.Humanoid and BotDefender.Humanoid.Health > 0
+and BotDefender.SourceCharacter == Character) then
+BotDefender.Build()
+return
+end
+
+local BotRoot = BotDefender.Root
+local BotHumanoid = BotDefender.Humanoid
+local Now = os.clock()
+BotDefender.UpdateHumanDecision(Now)
+local Desired = BotDefender.GetDesiredPosition(TargetRoot, TargetHumanoid)
+local Reaction = math.clamp(tonumber(CONFIG.BotReactionDelay) or 0.12, 0, 1)
+if not BotDefender.SampledPosition or Now >= BotDefender.NextSampleAt then
+BotDefender.SampledPosition = Desired
+BotDefender.NextSampleAt = Now + Reaction
+end
+local Sample = BotDefender.SampledPosition or Desired
+
+-- Steals in the real game connect by running into the ball's hitbox, so the
+-- BOT keeps its spacing at all times and only closes in during a timed lunge.
+local Stealing = false
+local StealBall = GetLocalBallHandle()
+if CONFIG.BotStealAttempts ~= false and StealBall then
+if Now < (BotDefender.StealUntil or 0) then
+Stealing = true
+elseif Now >= (BotDefender.NextStealAt or 0)
+and Now >= (BotDefender.NextStealRollAt or 0) then
+BotDefender.NextStealRollAt = Now + 0.15
+local StealRange = math.clamp(tonumber(CONFIG.BotStealRange) or 3.2, 0, 8)
+local StealChance = math.clamp(tonumber(CONFIG.BotStealChance) or 10, 0, 100)
+local BallFlat = Vector3.new(StealBall.Position.X, 0, StealBall.Position.Z)
+local BotFlat = Vector3.new(BotRoot.Position.X, 0, BotRoot.Position.Z)
+if (BallFlat - BotFlat).Magnitude <= StealRange and math.random() * 100 < StealChance then
+BotDefender.StealUntil = Now + math.clamp(tonumber(CONFIG.BotStealDuration) or 0.35, 0.1, 1)
+BotDefender.NextStealAt = Now + math.clamp(tonumber(CONFIG.BotStealCooldown) or 3.5, 0.5, 10)
+Stealing = true
+end
+end
+if Stealing then
+Sample = Vector3.new(StealBall.Position.X, BotRoot.Position.Y, StealBall.Position.Z)
+end
+end
+BotDefender.Stealing = Stealing
+
+local TargetHorizontal = Vector3.new(TargetRoot.Position.X, 0, TargetRoot.Position.Z)
+local BotHorizontal = Vector3.new(BotRoot.Position.X, 0, BotRoot.Position.Z)
+local TargetDistance = (TargetHorizontal - BotHorizontal).Magnitude
+BotDefender.Distance = TargetDistance
+if BotRoot.Position.Y < TargetRoot.Position.Y - 18 or TargetDistance > 80 then
+BotDefender.Status = 'RECOVERING RIG'
+BotDefender.Reset()
+return
+end
+
+BotHumanoid.PlatformStand = false
+BotHumanoid.WalkSpeed = 16 -- locked: the real game never changes WalkSpeed
+BotDefender.ApplyDefensiveShiftLock(TargetRoot)
+local Difference = Vector3.new(Sample.X - BotRoot.Position.X, 0, Sample.Z - BotRoot.Position.Z)
+local StopDistance = math.clamp(tonumber(CONFIG.BotStopDistance) or 0.85, 0.05, 6)
+local Moving = Stealing or Difference.Magnitude > StopDistance
+if Moving then
+local CandidateDirection = Difference.Unit
+local WantedDirection = CandidateDirection
+if CONFIG.BotHumanize ~= false then
+local CommitTime = math.clamp(tonumber(CONFIG.BotCommitTime) or 0.08, 0, 0.5)
+local Committed = BotDefender.CommittedDirection or Vector3.zero
+if Now >= (BotDefender.CommitUntil or 0) or Committed.Magnitude <= 0.05 then
+BotDefender.CommittedDirection = CandidateDirection
+BotDefender.CommitUntil = Now + CommitTime * (0.80 + math.random() * 0.40)
+elseif CandidateDirection:Dot(Committed) > 0.55 then
+local Adjusted = Committed:Lerp(CandidateDirection, 0.22)
+if Adjusted.Magnitude > 0.05 then BotDefender.CommittedDirection = Adjusted.Unit end
+end
+WantedDirection = BotDefender.CommittedDirection
+end
+local Smoothing = math.clamp(tonumber(CONFIG.BotSmoothing) or 10, 0.5, 50)
+local Alpha = 1 - math.exp(-Smoothing * math.max(tonumber(DeltaTime) or 0.016, 0.001))
+local SmoothedDirection = (BotDefender.CurrentMoveDirection or Vector3.zero):Lerp(
+WantedDirection, math.clamp(Alpha, 0, 1))
+if SmoothedDirection.Magnitude > 1 then SmoothedDirection = SmoothedDirection.Unit end
+BotDefender.CurrentMoveDirection = SmoothedDirection
+if tostring(CONFIG.BotMoveMethod or 'Humanoid Move') == 'MoveTo' then
+local Interval = math.clamp(tonumber(CONFIG.BotMoveToInterval) or 0.12, 0.02, 1)
+if Now >= BotDefender.NextMoveToAt then
+BotDefender.NextMoveToAt = Now + Interval
+BotHumanoid:MoveTo(Vector3.new(Sample.X, BotRoot.Position.Y, Sample.Z))
+end
+else
+-- The normal path: Roblox's own character controller owns acceleration,
+-- floor contact, AutoRotate, state transitions, and joint animation timing.
+BotHumanoid:Move(SmoothedDirection, false)
+end
+else
+BotDefender.CurrentMoveDirection = Vector3.zero
+BotDefender.CommittedDirection = Vector3.zero
+BotDefender.CommitUntil = 0
+BotHumanoid:Move(Vector3.zero, false)
+end
+
+local TargetState = TargetHumanoid:GetState()
+local TargetJumping = TargetState == Enum.HumanoidStateType.Jumping
+or (TargetState == Enum.HumanoidStateType.Freefall
+and TargetRoot.AssemblyLinearVelocity.Y > -2)
+if CONFIG.BotAutoContest ~= false and TargetJumping and not BotDefender.LastTargetJumping
+and GetLocalBallHandle() ~= nil
+and TargetDistance <= math.clamp(tonumber(CONFIG.BotContestRange) or 7, 0, 25)
+and BotHumanoid.FloorMaterial ~= Enum.Material.Air then
+local Height = math.clamp(tonumber(CONFIG.BotContestHeight) or 3.2, 0.1, 12)
+if BotHumanoid.UseJumpPower then
+BotHumanoid.JumpPower = math.sqrt(2 * math.max(Workspace.Gravity, 1) * Height)
+else
+BotHumanoid.JumpHeight = Height
+end
+BotHumanoid.Jump = true
+pcall(function() BotHumanoid:ChangeState(Enum.HumanoidStateType.Jumping) end)
+BotDefender.ContestUntil = Now + 0.65
+end
+BotDefender.LastTargetJumping = TargetJumping
+
+BotDefender.UpdateNaturalAnimation()
+if Now < (BotDefender.ContestUntil or 0) then
+BotDefender.Status = 'CONTESTING | HUMANOID JUMP'
+elseif Stealing then
+BotDefender.Status = 'STEAL ATTEMPT | BALL HITBOX'
+elseif Moving then
+BotDefender.Status = 'DEFENDING | ' .. tostring(CONFIG.BotMoveMethod or 'Humanoid Move')
+.. ' | ' .. tostring(BotDefender.HumanStatus or 'HUMAN READS')
+else
+BotDefender.Status = 'HOLDING GAP | NATURAL IDLE'
+end
+end
+
+function BotDefender.UpdateBinding()
+pcall(function() State.Lifecycle:UnbindFromRenderStep(BotDefender.BindName) end)
+if not BotDefender.Enabled then return end
+State.Lifecycle:BindToRenderStep(
+BotDefender.BindName,
+Enum.RenderPriority.Input.Value + 2,
+WYNF_JIT(function(DeltaTime)
+local Ok, Error = pcall(BotDefender.Step, DeltaTime)
+if not Ok then
+BotDefender.LastError = tostring(Error)
+BotDefender.Status = 'BOT ERROR'
+end
+end)
+)
+end
+
+function BotDefender.SetEnabled(Enabled)
+Enabled = Enabled == true
+CONFIG.BotEnabled = Enabled
+if Enabled == BotDefender.Enabled then
+if Enabled and not BotDefender.Model then BotDefender.Build() end
+BotDefender.UpdateBinding()
+if HubUI.Sync then HubUI.Sync() end
+return
+end
+BotDefender.Enabled = Enabled
+if Enabled then
+BotDefender.Status = 'STARTING HUMAN SHIFTLOCK R6'
+BotDefender.Build()
+else
+BotDefender.Destroy('OFF')
+end
+BotDefender.UpdateBinding()
+if HubUI.Sync then HubUI.Sync() end
+end
+end -- BOT defender private scope
 
 State.AutoGetOpen = State.AutoGetOpen or {}
 State.AutoGetOpen.FloorCache =
@@ -22181,13 +23324,6 @@ BallSwitchAdvantage = 0.30,
 EmergencyDefenderDistance = 6.75,
 StealLaneOffset = 2.85,
 DefenderPredictionTime = 0.28,
-EffectivePredictionTime = 0.28,
-DefenderPingMs = 0,
-DefenderPingSource = 'WAITING',
-DefenderPingPlayer = nil,
-DefenderPingUpdatedAt = 0,
-DefenderPingSmoothed = nil,
-PingLeadSeconds = 0,
 BackdownForwardWeight = 0.28,
 OOBProbeDistance = 7,
 OOBProbeForward = 0.8,
@@ -22196,6 +23332,10 @@ BackdownStrafeSign = 1,
 BackdownStrafeChanged = 0,
 BackdownHasCommittedSide = false,
 LastCutbackAt = 0,
+StrafeLockUntil = 0,
+PendingHardCut = false,
+StealRangeLatched = false,
+StealRangeClearSince = 0,
 DefenderCanReachBall = false,
 OppositeBallClearance = math.huge,
 StrafeReason = 'GOAL ROUTE',
@@ -22211,6 +23351,9 @@ RotationOwned = false,
 HandCandidate = nil,
 HandCandidateSince = 0,
 HandStatus = 'WAITING',
+HandSwitchAllowed = false,
+HandSwitchBlockedUntil = 0,
+HandTurnAlignedSince = 0,
 ProtectStatus = '-',
 BallLaneWeight = 0.9,
 DefenderDriftWeight = 2.2,
@@ -22285,6 +23428,18 @@ ManualBlendActive = false,
 LastIssuedDirection = Vector3.zero,
 MovementIsReset = false,
 StatusUpdatedAt = 0,
+AntiRipActive = false,
+AntiRipStatus = CONFIG.AutoOffenseAntiRip and 'ARMED' or 'OFF',
+AntiRipClearance = math.huge,
+AntiRipProjectedClearance = math.huge,
+AntiRipLead = 0,
+AntiRipEscapeSign = 0,
+AntiRipEscapeDirection = Vector3.zero,
+AntiRipHoldUntil = 0,
+AntiRipLastThreatAt = 0,
+AntiRipLastNoStealAt = 0,
+AntiRipThreatPlayer = nil,
+AntiRipThreatPart = nil,
 }
 
 function State.AutoOffense.HasManualInput()
@@ -22370,127 +23525,212 @@ if Blended.Magnitude <= 0.05 then return Manual.Unit, true end
 return Blended.Unit, true
 end
 
-local AUTO_OFFENSE_PING_KEYS = {
-'Ping', 'PingMs', 'NetworkPing', 'NetworkPingMs', 'Latency', 'LatencyMs',
-}
-
-function State.AutoOffense.NormalizePingMs(Value)
-local Number = tonumber(Value)
-if not Number and Value ~= nil then
-Number = tonumber(tostring(Value):match('[-+]?%d+%.?%d*'))
+function State.AutoOffense.GetAntiRipLead(DeltaTime)
+local PingSeconds=0
+if CONFIG.AutoOffenseAntiRipPingLead~=false and State.Utility and State.Utility.GetPing then
+PingSeconds=math.max(0,tonumber(State.Utility.GetPing()) or 0)/1000
 end
-if not Number or Number < 0 then return nil end
--- Roblox's network API reports seconds; replicated UI stats normally report ms.
-if Number > 0 and Number < 1 then Number *= 1000 end
-if Number > 2000 then return nil end
-return math.clamp(Number, 0, 1000)
+local Frame=math.clamp(tonumber(DeltaTime) or (1/60),1/240,1/20)
+local Extra=math.clamp(tonumber(CONFIG.AutoOffenseAntiRipExtraLead) or .035,0,.20)
+local Maximum=math.clamp(tonumber(CONFIG.AutoOffenseAntiRipMaxLead) or .28,.05,.50)
+-- Half RTT approximates one-way replication delay; two simulation frames cover
+-- interpolation and ensure the cut is issued before the server touch frame.
+return math.clamp(PingSeconds*.5+Frame*2+Extra,.035,Maximum)
 end
 
-function State.AutoOffense.ReadReplicatedPlayerPing(Player)
-if not Player then return nil, nil end
-
--- Prefer a game-replicated value when one exists, because LocalScripts cannot
--- normally call GetNetworkPing on another player.
-for _, Key in ipairs(AUTO_OFFENSE_PING_KEYS) do
-local Value = safe_get_attribute(Player, Key)
-local Ping = State.AutoOffense.NormalizePingMs(Value)
-if Ping then return Ping, 'ATTRIBUTE' end
+function State.AutoOffense.BallPartClearance(BallPosition,BallRadius,Part,Lead,VelocityOverride)
+if not (Part and Part.Parent and safe_is_a(Part,'BasePart')) then return math.huge end
+local Velocity=typeof(VelocityOverride)=='Vector3' and VelocityOverride or Part.AssemblyLinearVelocity
+local FlatVelocity=Vector3.new(Velocity.X,0,Velocity.Z)
+local PredictedFrame=Part.CFrame+FlatVelocity*(tonumber(Lead) or 0)
+local LocalPoint=PredictedFrame:PointToObjectSpace(BallPosition)
+local Half=Part.Size*.5
+local Closest=Vector3.new(
+math.clamp(LocalPoint.X,-Half.X,Half.X),
+math.clamp(LocalPoint.Y,-Half.Y,Half.Y),
+math.clamp(LocalPoint.Z,-Half.Z,Half.Z))
+local ClosestWorld=PredictedFrame:PointToWorldSpace(Closest)
+return (BallPosition-ClosestWorld).Magnitude-BallRadius
 end
 
-local Containers = {}
-local Leaderstats = safe_find(Player, 'leaderstats')
-local StatsFolder = safe_find(Player, 'Stats')
-if Leaderstats then table.insert(Containers, Leaderstats) end
-if StatsFolder then table.insert(Containers, StatsFolder) end
-table.insert(Containers, Player)
-for _, Container in ipairs(Containers) do
-if Container then
-for _, Key in ipairs(AUTO_OFFENSE_PING_KEYS) do
-local Object = safe_find(Container, Key)
-if Object and Object:IsA('ValueBase') then
-local Ok, Value = pcall(function() return Object.Value end)
-local Ping = Ok and State.AutoOffense.NormalizePingMs(Value) or nil
-if Ping then return Ping, 'REPLICATED STAT' end
+function State.AutoOffense.ScanAntiRipClearance(BallPosition,BallRadius,Lead)
+local BestClearance=math.huge
+local BestPlayer=nil
+local BestPart=nil
+local MyRoot=LP.Character and safe_find(LP.Character,'HumanoidRootPart')
+for _,Candidate in ipairs(Players:GetPlayers()) do
+if Candidate~=LP and IsGuardOpponent(Candidate) then
+local Character=Candidate.Character
+local DefenderRoot=Character and safe_find(Character,'HumanoidRootPart')
+if DefenderRoot and (not MyRoot or (DefenderRoot.Position-MyRoot.Position).Magnitude<=18) then
+for _,Part in ipairs(Character:GetChildren()) do
+if safe_is_a(Part,'BasePart') and Part.CanTouch~=false then
+local Clearance=State.AutoOffense.BallPartClearance(
+BallPosition,BallRadius,Part,Lead)
+if Clearance<BestClearance then
+BestClearance=Clearance
+BestPlayer=Candidate
+BestPart=Part
 end
 end
+end
+end
+end
+end
+return BestClearance,BestPlayer,BestPart
+end
+
+function State.AutoOffense.TryEarlyNoSteal(Now)
+if CONFIG.AutoOffenseAntiRipNoSteal==false then return 'DISABLED' end
+if State.BallAssist.IsNoStealActive() then return 'PROTECTED' end
+local Cooldown=math.clamp(
+tonumber(CONFIG.AutoOffenseAntiRipNoStealCooldown) or .45,.15,1.5)
+if Now-(State.AutoOffense.AntiRipLastNoStealAt or 0)<Cooldown then return 'COOLDOWN' end
+local Remote=State.BallAssist.GetNoStealRemote()
+if not Remote then return 'NO REMOTE' end
+State.AutoOffense.AntiRipLastNoStealAt=Now
+local Ok=pcall(function() Remote:FireServer() end)
+return Ok and 'REQUESTED' or 'REMOTE ERROR'
+end
+
+function State.AutoOffense.StepAntiRip(DeltaTime)
+if not (State.Active and State.AutoOffense.Enabled and CONFIG.AutoOffenseAntiRip~=false) then
+if State.Runtime.MovementOwner=='AntiRip' then State.Runtime.ReleaseMovement('AntiRip') end
+State.AutoOffense.AntiRipActive=false
+State.AutoOffense.AntiRipStatus=CONFIG.AutoOffenseAntiRip==false and 'OFF' or 'STANDBY'
+return
+end
+local Character=LP.Character
+local Root=Character and safe_find(Character,'HumanoidRootPart')
+local Humanoid=Character and Character:FindFirstChildOfClass('Humanoid')
+local Basketball=GetHeldBasketballModel(LP)
+local Ball=Basketball and safe_find(Basketball,'Ball')
+if not (Root and Humanoid and Ball and safe_is_a(Ball,'BasePart'))
+or State.AutoOffense.InProgress then
+if State.Runtime.MovementOwner=='AntiRip' then State.Runtime.ReleaseMovement('AntiRip') end
+State.AutoOffense.AntiRipActive=false
+State.AutoOffense.AntiRipStatus=Ball and 'ACTION' or 'NEED BALL'
+return
+end
+
+local Now=os.clock()
+local Lead=State.AutoOffense.GetAntiRipLead(DeltaTime)
+local Padding=math.clamp(tonumber(CONFIG.AutoOffenseAntiRipPadding) or .90,0,3)
+local BallRadius=math.max(Ball.Size.X,Ball.Size.Y,Ball.Size.Z)*.5+Padding
+local RootVelocity=Root.AssemblyLinearVelocity
+local BallProjected=Ball.Position+Vector3.new(RootVelocity.X,0,RootVelocity.Z)*Lead
+local CurrentClearance,CurrentPlayer,CurrentPart=
+State.AutoOffense.ScanAntiRipClearance(Ball.Position,BallRadius,0)
+local ProjectedClearance,ProjectedPlayer,ProjectedPart=
+State.AutoOffense.ScanAntiRipClearance(BallProjected,BallRadius,Lead)
+State.AutoOffense.AntiRipLead=Lead
+State.AutoOffense.AntiRipClearance=CurrentClearance
+State.AutoOffense.AntiRipProjectedClearance=ProjectedClearance
+
+local Rim=State.AutoOffense.Target
+if not (Rim and Rim.Parent) then Rim=select(1,State.AutoOffense.GetScoringGoal()) end
+local GoalDelta=Rim and (Rim.Position-Root.Position) or Root.CFrame.LookVector
+local Forward=Vector3.new(GoalDelta.X,0,GoalDelta.Z)
+if Forward.Magnitude<=.01 then Forward=Vector3.new(Root.CFrame.LookVector.X,0,Root.CFrame.LookVector.Z) end
+Forward=Forward.Magnitude>.01 and Forward.Unit or Vector3.new(0,0,-1)
+local Right=Vector3.new(-Forward.Z,0,Forward.X)
+local WalkSpeed=math.max(12,tonumber(Humanoid.WalkSpeed) or 16)
+local Travel=WalkSpeed*Lead*1.05
+local BestSign=State.AutoOffense.BackdownStrafeSign>=0 and 1 or -1
+local BestDirection=nil
+local BestClearance=-math.huge
+for _,Sign in ipairs({-1,1}) do
+local Candidate=Forward*.16+Right*Sign
+Candidate=Candidate.Magnitude>.01 and Candidate.Unit or Right*Sign
+local CandidateBall=Ball.Position+Candidate*Travel
+local Clearance=State.AutoOffense.ScanAntiRipClearance(
+CandidateBall,BallRadius,Lead)
+-- Small tie preference preserves the current side without masking a real
+-- clearance advantage, preventing left/right frame chatter.
+if Sign==BestSign then Clearance+=.08 end
+if Clearance>BestClearance then
+BestClearance=Clearance
+BestSign=Sign
+BestDirection=Candidate
 end
 end
 
--- Some executor/server contexts expose the remote player's real RTT. On a
--- normal client this safely fails and the target-specific replication fallback
--- below is used instead.
-local Ok, Seconds = pcall(function() return Player:GetNetworkPing() end)
-local Ping = Ok and State.AutoOffense.NormalizePingMs(Seconds) or nil
-if Ping then return Ping, 'REMOTE API' end
-return nil, nil
+local ThreatClearance=math.min(CurrentClearance,ProjectedClearance)
+local Threat=ThreatClearance<=0
+local NearThreat=ThreatClearance<=math.max(.35,Padding*.40)
+if Threat or NearThreat then
+local ThreatPlayer=ProjectedClearance<=CurrentClearance and ProjectedPlayer or CurrentPlayer
+local ThreatPart=ProjectedClearance<=CurrentClearance and ProjectedPart or CurrentPart
+State.AutoOffense.AntiRipThreatPlayer=ThreatPlayer
+State.AutoOffense.AntiRipThreatPart=ThreatPart
+State.AutoOffense.AntiRipLastThreatAt=Now
+State.AutoOffense.AntiRipHoldUntil=Now+.20
+State.AutoOffense.AntiRipActive=true
+State.AutoOffense.AntiRipEscapeSign=BestSign
+State.AutoOffense.BackdownStrafeSign=BestSign
+State.AutoOffense.StealRangeLatched=true
+State.AutoOffense.StealRangeClearSince=0
+State.AutoOffense.StrafeLockUntil=Now+.12
+State.AutoOffense.LastCutbackAt=Now
+State.AutoOffense.PendingHardCut=false
+State.AutoOffense.HandSwitchAllowed=false
+State.AutoOffense.HandSwitchBlockedUntil=Now+.10
+State.AutoOffense.HandTurnAlignedSince=0
+State.AutoOffense.StrafeReason='PRESIM ANTI-RIP CUT'
+State.AutoOffense.DefenderCanReachBall=true
+local Court=State.AutoOffense.GetCourt()
+local Escape=BestDirection
+if Court then
+local Safe=State.AutoOffense.GetBoundarySafeDirection(Root,Escape,Court)
+if Safe and Safe.Magnitude>.01 then Escape=Safe.Unit end
+end
+State.AutoOffense.AntiRipEscapeDirection=Escape
+State.AutoOffense.SmoothedMoveDirection=Escape
+State.AutoOffense.LastIssuedDirection=Escape
+if CONFIG.AutoOffenseAntiRipInstantCut~=false
+and State.Runtime.AcquireMovement('AntiRip',.08) then
+Humanoid:Move(Escape,false)
+end
+local DefenderRoot=ThreatPlayer and ThreatPlayer.Character
+and safe_find(ThreatPlayer.Character,'HumanoidRootPart')
+if DefenderRoot then
+local Away=Root.Position-DefenderRoot.Position
+Away=Vector3.new(Away.X,0,Away.Z)
+if Away.Magnitude>.01 then
+State.AutoOffense.FaceDirection(Root,Away.Unit,DeltaTime,145)
+end
+end
+local Shield=State.AutoOffense.TryEarlyNoSteal(Now)
+State.AutoOffense.ProtectStatus=Shield
+State.AutoOffense.AntiRipStatus=string.format(
+'CUT %s | %.2f | %dMS | %s',
+BestSign<0 and 'LEFT' or 'RIGHT',ThreatClearance,
+math.floor(Lead*1000+.5),Shield)
+return
 end
 
-function State.AutoOffense.UpdateDefenderLatency(Player, DefenderRoot)
-local BasePrediction = math.max(0, tonumber(State.AutoOffense.DefenderPredictionTime) or 0.28)
-if not (Player and DefenderRoot) then
-State.AutoOffense.DefenderPingPlayer = nil
-State.AutoOffense.DefenderPingMs = 0
-State.AutoOffense.DefenderPingSource = 'WAITING'
-State.AutoOffense.DefenderPingUpdatedAt = 0
-State.AutoOffense.DefenderPingSmoothed = nil
-State.AutoOffense.PingLeadSeconds = 0
-State.AutoOffense.EffectivePredictionTime = BasePrediction
-State.AutoOffense.EffectiveCutoff = State.AutoOffense.CutoffDistance
-return BasePrediction
+-- Briefly hold the proven escape direction so one clean sample cannot let the
+-- normal smoothed route steer straight back into the defender next frame.
+if State.AutoOffense.AntiRipActive and Now<(State.AutoOffense.AntiRipHoldUntil or 0) then
+local Escape=State.AutoOffense.AntiRipEscapeDirection
+if Escape and Escape.Magnitude>.01 and CONFIG.AutoOffenseAntiRipInstantCut~=false
+and State.Runtime.AcquireMovement('AntiRip',.08) then
+Humanoid:Move(Escape,false)
+State.AutoOffense.SmoothedMoveDirection=Escape
+State.AutoOffense.LastIssuedDirection=Escape
+end
+State.AutoOffense.AntiRipStatus=string.format(
+'HOLD %s | %.2f',State.AutoOffense.AntiRipEscapeSign<0 and 'LEFT' or 'RIGHT',
+ThreatClearance)
+return
 end
 
-local Now = os.clock()
-if State.AutoOffense.DefenderPingPlayer ~= Player then
-State.AutoOffense.DefenderPingPlayer = Player
-State.AutoOffense.DefenderPingUpdatedAt = 0
-State.AutoOffense.DefenderPingSmoothed = nil
-end
-
-if Now - (State.AutoOffense.DefenderPingUpdatedAt or 0) >= 0.25 then
-local Ping, Source = State.AutoOffense.ReadReplicatedPlayerPing(Player)
-if not Ping then
--- ReceiveAge is target-specific replication staleness. It is not advertised as
--- RTT, but it is the best client-side signal when the game does not replicate
--- the defender's ping and is directly useful for movement prediction.
-local AgeOk, ReceiveAge = pcall(function() return DefenderRoot.ReceiveAge end)
-if AgeOk and tonumber(ReceiveAge) and ReceiveAge > 0 then
-Ping = math.clamp(ReceiveAge * 1000, 0, 1000)
-Source = 'REPLICATION AGE'
-end
-end
-if not Ping then
-local LocalPing = State.Utility.GetPing()
-if LocalPing and LocalPing > 0 then
-Ping = math.clamp(LocalPing, 0, 1000)
-Source = 'LOCAL PATH EST'
-end
-end
-
-if Ping then
-local Previous = State.AutoOffense.DefenderPingSmoothed
-local Smoothed = Previous and (Previous + (Ping - Previous) * 0.28) or Ping
-State.AutoOffense.DefenderPingSmoothed = Smoothed
-State.AutoOffense.DefenderPingMs = Smoothed
-State.AutoOffense.DefenderPingSource = Source or 'ESTIMATE'
-else
-State.AutoOffense.DefenderPingMs = 0
-State.AutoOffense.DefenderPingSource = 'UNAVAILABLE'
-end
-State.AutoOffense.DefenderPingUpdatedAt = Now
-end
-
-local Extra = 0
-if CONFIG.AutoOffensePingAware ~= false then
-local Ping = math.max(0, tonumber(State.AutoOffense.DefenderPingMs) or 0)
-local Baseline = math.clamp(tonumber(CONFIG.AutoOffensePingBaseline) or 60, 0, 300)
-local Strength = math.clamp(tonumber(CONFIG.AutoOffensePingStrength) or 1, 0, 3)
-local Maximum = math.clamp(tonumber(CONFIG.AutoOffensePingMaxLead) or 0.35, 0, 0.75)
-local Factor = State.AutoOffense.DefenderPingSource == 'REPLICATION AGE' and 1 or 0.5
-Extra = math.clamp(math.max(0, Ping - Baseline) / 1000 * Factor * Strength, 0, Maximum)
-end
-State.AutoOffense.PingLeadSeconds = Extra
-State.AutoOffense.EffectivePredictionTime = BasePrediction + Extra
-return State.AutoOffense.EffectivePredictionTime
+if State.Runtime.MovementOwner=='AntiRip' then State.Runtime.ReleaseMovement('AntiRip') end
+State.AutoOffense.AntiRipActive=false
+State.AutoOffense.AntiRipThreatPlayer=nil
+State.AutoOffense.AntiRipThreatPart=nil
+State.AutoOffense.AntiRipStatus=string.format(
+'CLEAR | %.2f | %dMS',ThreatClearance,math.floor(Lead*1000+.5))
 end
 
 function State.AutoOffense.GetDefender()
@@ -22718,10 +23958,7 @@ State.AutoOffense.LastClosing = Closing
 -- defender is actually closing on us, so a sprinting defender trips it early
 -- while a stationary or retreating one lets us keep working.
 local Base = State.AutoOffense.CutoffDistance
-local PingLead = CONFIG.AutoOffensePingAware ~= false
-and (State.AutoOffense.PingLeadSeconds or 0) or 0
-local Lead = math.max(0, Closing)
-* (State.AutoOffense.CutoffClosingLead + PingLead)
+local Lead = math.max(0, Closing) * State.AutoOffense.CutoffClosingLead
 local Effective = Base + math.min(Lead, Base)
 if Closing < 0 then
 Effective = math.max(Base * 0.55, Effective + Closing * 0.18)
@@ -22797,6 +24034,13 @@ return CurrentHand
 end
 
 local Now = os.clock()
+if not State.AutoOffense.HandSwitchAllowed
+or Now < (State.AutoOffense.HandSwitchBlockedUntil or 0) then
+State.AutoOffense.HandCandidate = nil
+State.AutoOffense.HandCandidateSince = 0
+State.AutoOffense.HandStatus = 'WAIT FOR FULL TURN'
+return CurrentHand
+end
 if State.AutoOffense.HandCandidate ~= DesiredHand then
 State.AutoOffense.HandCandidate = DesiredHand
 State.AutoOffense.HandCandidateSince = Now
@@ -22835,8 +24079,7 @@ DefenderRoot.AssemblyLinearVelocity.X,
 DefenderRoot.AssemblyLinearVelocity.Z
 )
 local Predicted = DefenderRoot.Position
-+ Velocity * (State.AutoOffense.EffectivePredictionTime
-or State.AutoOffense.DefenderPredictionTime)
++ Velocity * State.AutoOffense.DefenderPredictionTime
 local LaneOffset = State.AutoOffense.StealLaneOffset
 local LaneForward = Forward * 0.45
 
@@ -22885,6 +24128,8 @@ local Character = LP.Character
 if not (Character and Root and Humanoid) then return nil end
 
 if not DefenderRoot then
+State.AutoOffense.HandSwitchAllowed = true
+State.AutoOffense.HandTurnAlignedSince = 0
 State.AutoOffense.UpdateHands(Character, Humanoid, Root)
 State.AutoOffense.ShieldTurnAngle = 0
 State.AutoOffense.ShieldTurnStatus = 'CLEAR'
@@ -22892,6 +24137,9 @@ State.AutoOffense.ReleaseBackdown()
 return nil
 end
 
+-- Read the current hand, but block any switch until rotation alignment has
+-- completed and remained stable. This prevents exposing the ball mid-turn.
+State.AutoOffense.HandSwitchAllowed = false
 local CurrentHand = State.AutoOffense.UpdateHands(Character, Humanoid, Root)
 State.AutoBody.TakeRotation(Humanoid)
 State.AutoOffense.RotationOwned = true
@@ -22960,7 +24208,11 @@ local Negative = Rotate(DesiredDirection, -Angle)
 local PositiveScore, NegativeScore = Score(Positive), Score(Negative)
 local PreviousSign = (State.AutoOffense.ShieldTurnAngle or 0) >= 0 and 1 or -1
 local TurnSign
-if math.abs(PositiveScore - NegativeScore) <= 0.30 then
+if State.AutoOffense.StealRangeLatched then
+-- Keep the body turn on the committed cutback side. Re-scoring both shoulders
+-- every frame made the character twitch while the defender stayed close.
+TurnSign = State.AutoOffense.BackdownStrafeSign >= 0 and 1 or -1
+elseif math.abs(PositiveScore - NegativeScore) <= 0.30 then
 TurnSign = PreviousSign
 else
 TurnSign = PositiveScore > NegativeScore and 1 or -1
@@ -22978,10 +24230,23 @@ end
 
 local CurrentDirection = Vector3.new(
 Root.CFrame.LookVector.X, 0, Root.CFrame.LookVector.Z)
-if CurrentDirection.Magnitude > 0.001
-and CurrentDirection.Unit:Dot(DesiredDirection) > 0.99996 then
-return CurrentHand
+local Alignment = CurrentDirection.Magnitude > 0.001
+and CurrentDirection.Unit:Dot(DesiredDirection) or -1
+local Now = os.clock()
+if Alignment >= 0.997
+and Now >= (State.AutoOffense.HandSwitchBlockedUntil or 0) then
+if (State.AutoOffense.HandTurnAlignedSince or 0) <= 0 then
+State.AutoOffense.HandTurnAlignedSince = Now
 end
+if Now - State.AutoOffense.HandTurnAlignedSince >= 0.16 then
+State.AutoOffense.HandSwitchAllowed = true
+CurrentHand = State.AutoOffense.UpdateHands(Character, Humanoid, Root)
+end
+else
+State.AutoOffense.HandTurnAlignedSince = 0
+State.AutoOffense.HandSwitchAllowed = false
+end
+if Alignment > 0.99996 then return CurrentHand end
 
 local Desired = CFrame.lookAt(
 Root.Position, Root.Position + DesiredDirection, Vector3.yAxis)
@@ -22997,6 +24262,8 @@ end
 function State.AutoOffense.ResetMovement(Humanoid, YieldOnly)
 local Owned = State.Runtime.MovementOwner == 'Offense'
 State.Runtime.ReleaseMovement('Offense')
+State.Runtime.ReleaseMovement('AntiRip')
+State.AutoOffense.AntiRipActive = false
 State.AutoOffense.SmoothedMoveDirection = Vector3.zero
 State.AutoOffense.LastIssuedDirection = Vector3.zero
 State.AutoOffense.ManualBlendActive = false
@@ -23013,6 +24280,13 @@ State.AutoOffense.PhaseStarted = os.clock()
 State.AutoOffense.BackdownStrafeChanged = State.AutoOffense.PhaseStarted
 State.AutoOffense.BackdownHasCommittedSide = false
 State.AutoOffense.LastCutbackAt = 0
+State.AutoOffense.StrafeLockUntil = 0
+State.AutoOffense.PendingHardCut = false
+State.AutoOffense.StealRangeLatched = false
+State.AutoOffense.StealRangeClearSince = 0
+State.AutoOffense.HandSwitchAllowed = false
+State.AutoOffense.HandSwitchBlockedUntil = 0
+State.AutoOffense.HandTurnAlignedSince = 0
 State.AutoOffense.DefenderCanReachBall = false
 State.AutoOffense.OppositeBallClearance = math.huge
 State.AutoOffense.StrafeReason = 'GOAL ROUTE'
@@ -23146,8 +24420,7 @@ DefenderRoot.AssemblyLinearVelocity.X,
 0,
 DefenderRoot.AssemblyLinearVelocity.Z)
 local PredictedDefender = DefenderRoot.Position
-+ DefenderVelocity * (State.AutoOffense.EffectivePredictionTime
-or State.AutoOffense.DefenderPredictionTime)
++ DefenderVelocity * State.AutoOffense.DefenderPredictionTime
 local FlatPredictedDefender = Vector3.new(
 PredictedDefender.X, Root.Position.Y, PredictedDefender.Z)
 local FlatBall = Vector3.new(Ball.Position.X, Root.Position.Y, Ball.Position.Z)
@@ -23951,8 +25224,7 @@ local DefenderVelocity = Vector3.new(
 DefenderRoot.AssemblyLinearVelocity.X, 0,
 DefenderRoot.AssemblyLinearVelocity.Z)
 local PredictedDefender = DefenderRoot.Position
-+ DefenderVelocity * (State.AutoOffense.EffectivePredictionTime
-or State.AutoOffense.DefenderPredictionTime)
++ DefenderVelocity * State.AutoOffense.DefenderPredictionTime
 local BallSideDistance = math.max(1.35, math.abs(
 (Ball.Position - Root.Position):Dot(Right)))
 local PredictedBall = Root.Position
@@ -23979,6 +25251,14 @@ end
 
 function State.AutoOffense.Step(DeltaTime)
 if not (State.Active and State.AutoOffense.Enabled) then return end
+if false then
+local Character=LP.Character
+local Humanoid=Character and Character:FindFirstChildOfClass('Humanoid')
+State.AutoOffense.ResetMovement(Humanoid,true)
+State.AutoOffense.Status='RIPPED | LOCAL GHOST STEAL'
+State.AutoOffense.ClearPathVisual()
+return
+end
 
 local Character = LP.Character
 local Root = Character and Character:FindFirstChild('HumanoidRootPart')
@@ -24048,10 +25328,6 @@ local Defender, DefenderDistance = State.AutoOffense.GetDefender()
 local DefenderRoot = Defender and Defender.Character
 and Defender.Character:FindFirstChild('HumanoidRootPart')
 State.AutoOffense.LastDefenderDistance = DefenderDistance
-State.AutoOffense.UpdateDefenderLatency(Defender, DefenderRoot)
-local TurnAround = DefenderRoot
-and State.AutoOffense.EvaluateCutoff(Root, DefenderRoot, Forward)
-or false
 local BallThreat, EscapeSign, BallClearance =
 State.AutoOffense.EvaluateBallThreat(Root, DefenderRoot, Right)
 local ImmediateThreat = BallThreat
@@ -24059,17 +25335,23 @@ or (DefenderRoot and DefenderDistance <= 8.5)
 local ShieldThreat = BallThreat
 or State.AutoOffense.StealLaneAligned
 or Now < (State.AutoOffense.ShieldTurnUntil or 0)
+-- Do not permit an old-side hand switch on the same frame that a steal-range
+-- cutback is about to begin. Rotation must settle on the new side first.
+if DefenderRoot and ImmediateThreat and not State.AutoOffense.StealRangeLatched then
+State.AutoOffense.HandSwitchAllowed = false
+State.AutoOffense.HandSwitchBlockedUntil = math.max(
+State.AutoOffense.HandSwitchBlockedUntil or 0, Now + 0.18)
+State.AutoOffense.HandTurnAlignedSince = 0
+State.AutoOffense.HandCandidate = nil
+State.AutoOffense.HandCandidateSince = 0
+end
 if DefenderRoot then
 State.AutoOffense.ApplyBackToDefender(
-Root, Humanoid, DefenderRoot, DeltaTime, TurnAround,
+Root, Humanoid, DefenderRoot, DeltaTime, true,
 ShieldThreat, BallClearance)
-if TurnAround then
 State.AutoOffense.DriveStatus = ShieldThreat
 and 'SHIELD TURN | FAST TO 72 LINE'
 or 'BACK TURNED | FAST TO 72 LINE'
-else
-State.AutoOffense.DriveStatus = 'SQUARED UP | FAST TO 72 LINE'
-end
 else
 State.AutoOffense.ReleaseBackdown()
 end
@@ -24198,41 +25480,80 @@ local OppositeReach, OppositeClearance = false, math.huge
 if DefenderRoot then
 local Ok, Result = pcall(State.BallAssist.StepNoStealKeeper, Root)
 State.AutoOffense.ProtectStatus = Ok and tostring(Result) or 'KEEPER ERROR'
-local BallSideSign = State.AutoOffense.GetBallSideSign(Root, Right)
-local SuggestedSign = State.AutoOffense.SolveStrafeSign(
-Root, DefenderRoot, Right, Forward, BallSideSign,
-ImmediateThreat, Court) or Sign
 CurrentReach, CurrentClearance = State.AutoOffense.EvaluateStrafeBallReach(
 Root, DefenderRoot, Forward, Right, Sign)
 OppositeReach, OppositeClearance = State.AutoOffense.EvaluateStrafeBallReach(
 Root, DefenderRoot, Forward, Right, -Sign)
-local CanCutBack = Now - (State.AutoOffense.LastCutbackAt or 0)
+local InStealRange = BallThreat or CurrentReach
+local CanCutBack = not State.AutoOffense.StealRangeLatched
+and Now >= (State.AutoOffense.StrafeLockUntil or 0)
+and Now - (State.AutoOffense.LastCutbackAt or 0)
 >= math.max(0.12, State.AutoOffense.StrafeFlipCooldown)
-local ReachThreat = BallThreat or CurrentReach
-if CanCutBack and ReachThreat
-and (not OppositeReach or OppositeClearance >= CurrentClearance + 0.35) then
+if InStealRange then
+State.AutoOffense.StealRangeClearSince = 0
+-- Switch exactly once when entering steal range, then hold the new side until
+-- the defender has been safely out of range for a short hysteresis window.
+if not State.AutoOffense.StealRangeLatched and CanCutBack then
 Sign = -Sign
+State.AutoOffense.StealRangeLatched = true
 State.AutoOffense.LastCutbackAt = Now
-State.AutoOffense.StrafeReason = 'BALL REACH CUTBACK'
-elseif CanCutBack and SuggestedSign ~= Sign
-and OppositeClearance >= CurrentClearance + 0.75 then
-Sign = SuggestedSign
-State.AutoOffense.LastCutbackAt = Now
-State.AutoOffense.StrafeReason = 'OPEN SIDE CUTBACK'
+State.AutoOffense.StrafeLockUntil = Now + 1.25
+State.AutoOffense.PendingHardCut = true
+State.AutoOffense.HandSwitchAllowed = false
+State.AutoOffense.HandSwitchBlockedUntil = Now + 0.18
+State.AutoOffense.HandTurnAlignedSince = 0
+State.AutoOffense.HandCandidate = nil
+State.AutoOffense.HandCandidateSince = 0
+State.AutoOffense.StrafeReason = 'TURN FIRST | THEN SWITCH HAND'
 else
-State.AutoOffense.StrafeReason = ReachThreat and 'PROTECT BALL' or 'GOAL STRAFE'
+State.AutoOffense.StrafeReason = 'STEAL RANGE | HOLD SIDE'
+end
+else
+if State.AutoOffense.StealRangeLatched then
+if (State.AutoOffense.StealRangeClearSince or 0) <= 0 then
+State.AutoOffense.StealRangeClearSince = Now
+elseif Now >= (State.AutoOffense.StrafeLockUntil or 0)
+and Now - State.AutoOffense.StealRangeClearSince >= 0.85 then
+State.AutoOffense.StealRangeLatched = false
+State.AutoOffense.StealRangeClearSince = 0
+end
+end
+State.AutoOffense.StrafeReason = 'STICKY GOAL STRAFE'
 end
 else
 State.AutoOffense.ProtectStatus = 'CLEAR'
-State.AutoOffense.StrafeReason = 'GOAL STRAFE'
+State.AutoOffense.DefenderCanReachBall = false
+if State.AutoOffense.StealRangeLatched then
+if (State.AutoOffense.StealRangeClearSince or 0) <= 0 then
+State.AutoOffense.StealRangeClearSince = Now
+elseif Now >= (State.AutoOffense.StrafeLockUntil or 0)
+and Now - State.AutoOffense.StealRangeClearSince >= 0.85 then
+State.AutoOffense.StealRangeLatched = false
+State.AutoOffense.StealRangeClearSince = 0
+end
+end
+State.AutoOffense.StrafeReason = 'STICKY GOAL STRAFE'
 end
 
 local SafeSign, BoundaryFlip = State.AutoOffense.GetSafeStrafeSign(
 Root.Position, Forward, Right, Sign, Court)
-if SafeSign then Sign = SafeSign end
+local CurrentRoom = State.AutoOffense.LaneRoom(
+Root.Position, Right * Sign, Court, State.AutoOffense.KeepInDistance,
+Sign < 0 and 'locked-left' or 'locked-right')
+local HardBoundary = CurrentRoom <= 2
+if SafeSign and (Now >= (State.AutoOffense.StrafeLockUntil or 0) or HardBoundary) then
+Sign = SafeSign
+end
 if BoundaryFlip and Sign ~= CurrentSign then
 State.AutoOffense.LastCutbackAt = Now
-State.AutoOffense.StrafeReason = 'COURT EDGE CUTBACK'
+State.AutoOffense.StrafeLockUntil = Now + 1.25
+State.AutoOffense.PendingHardCut = true
+State.AutoOffense.HandSwitchAllowed = false
+State.AutoOffense.HandSwitchBlockedUntil = Now + 0.18
+State.AutoOffense.HandTurnAlignedSince = 0
+State.AutoOffense.HandCandidate = nil
+State.AutoOffense.HandCandidateSince = 0
+State.AutoOffense.StrafeReason = 'COURT EDGE | TURN FIRST'
 end
 State.AutoOffense.BackdownStrafeSign = Sign
 State.AutoOffense.BackdownHasCommittedSide = true
@@ -24241,6 +25562,13 @@ State.AutoOffense.OppositeBallClearance = OppositeClearance
 
 local Direction = State.AutoOffense.GetGoalStrafeDirection(
 Forward, Right, Sign)
+if State.AutoOffense.PendingHardCut then
+-- Drop the old smoothed lateral vector immediately. Carrying it through the
+-- new direction caused a visible left-right twitch on the cut frame.
+State.AutoOffense.SmoothedMoveDirection = Direction
+State.AutoOffense.LastIssuedDirection = Direction
+State.AutoOffense.PendingHardCut = false
+end
 State.AutoOffense.ActionType = State.AutoOffense.DefenderCanReachBall
 and 'CUTBACK' or 'GOAL STRAFE'
 State.AutoOffense.DriveStatus = string.format(
@@ -24330,18 +25658,21 @@ State.AutoOffense.InboundStartPosition = nil
 State.AutoOffense.InboundTarget = nil
 State.AutoOffense.BackdownStrafeSign = 1
 State.AutoOffense.LastCutbackAt = 0
+State.AutoOffense.StrafeLockUntil = 0
+State.AutoOffense.PendingHardCut = false
+State.AutoOffense.StealRangeLatched = false
+State.AutoOffense.StealRangeClearSince = 0
+State.AutoOffense.HandSwitchAllowed = false
+State.AutoOffense.HandSwitchBlockedUntil = 0
+State.AutoOffense.HandTurnAlignedSince = 0
 State.AutoOffense.DefenderCanReachBall = false
 State.AutoOffense.OppositeBallClearance = math.huge
 State.AutoOffense.StrafeReason = 'GOAL ROUTE'
-State.AutoOffense.DefenderPingPlayer = nil
-State.AutoOffense.DefenderPingMs = 0
-State.AutoOffense.DefenderPingSource = 'WAITING'
-State.AutoOffense.DefenderPingUpdatedAt = 0
-State.AutoOffense.DefenderPingSmoothed = nil
-State.AutoOffense.PingLeadSeconds = 0
-State.AutoOffense.EffectivePredictionTime = State.AutoOffense.DefenderPredictionTime
-State.AutoOffense.EffectiveCutoff = State.AutoOffense.CutoffDistance
 State.AutoOffense.SmoothedMoveDirection = Vector3.zero
+State.AutoOffense.AntiRipActive = false
+State.AutoOffense.AntiRipHoldUntil = 0
+State.AutoOffense.AntiRipStatus = Enabled and 'ARMED' or 'OFF'
+State.Runtime.ReleaseMovement('AntiRip')
 if not Enabled then State.AutoOffense.ClearPathVisual() end
 State.AutoOffense.Generation += 1
 State.AutoOffense.InProgress = false
@@ -24369,400 +25700,6 @@ if ShouldNotify and Enabled then
 Notify('SILVER SURFER', 'Auto Offense enabled')
 end
 end
-
--- AUTO RAGE ---------------------------------------------------------------
--- Reuses the existing reach, movement, guard, silent-aim, flight, and dunk
--- controllers instead of maintaining parallel implementations.
-State.AutoRage = {
-Enabled = false,
-BindName = 'OBLITERATE_V2_AutoRage',
-Status = CONFIG.AutoRage and 'STARTING' or 'OFF',
-Target = nil,
-TargetDistance = math.huge,
-HasPossession = false,
-ForcedFlight = false,
-StartedDunk = false,
-LastEnforceAt = 0,
-LastAimRequestAt = 0,
-LastFlightDirection = nil,
-CommitDirection = nil,
-CommitUntil = 0,
-Saved = nil,
-}
-
-function State.AutoRage.CaptureSettings()
-return {
-ReachEnabled = State.BallAssist.ReachEnabled,
-ReachRadius = State.BallAssist.ReachRadius,
-SmartReach = CONFIG.SmartReach,
-WalkSpeedEnabled = State.Movement.WalkSpeedEnabled,
-WalkSpeedValue = State.Movement.WalkSpeedValue,
-AutoGuardEnabled = State.AutoGuardEnabled,
-AutoGuardStyle = State.AutoGuardStyle,
-AutoGuardMethod = State.Movement.AutoGuardMethod,
-SilentAimRequested = State.RequestedEnabled,
-AimMode = CONFIG.AimMode,
-HumanizeEnabled = CONFIG.HumanizeEnabled,
-AutoPower = CONFIG.AutoPower,
-AimRequireBall = CONFIG.AimRequireBall,
-PerfectRelease = CONFIG.PerfectRelease,
-FlightEnabled = State.Movement.FlightEnabled,
-FlightSpeed = State.Movement.FlightSpeed,
-FlightMethod = State.Movement.FlightMethod,
-AutoDunkEnabled = State.AutoDunkEnabled,
-AutoDunkMode = State.AutoDunkMode,
-AutoDunkManualOverride = CONFIG.AutoDunkManualOverride,
-AutoDunkLaneCheck = CONFIG.AutoDunkLaneCheck,
-AutoDunkTriggerDistance = CONFIG.AutoDunkTriggerDistance,
-AutoDunkApproachDistance = CONFIG.AutoDunkApproachDistance,
-AutoDunkHoldTime = CONFIG.AutoDunkHoldTime,
-AutoDunkRetryDelay = CONFIG.AutoDunkRetryDelay,
-AutoOffenseEnabled = State.AutoOffense.Enabled,
-AutoMixEnabled = State.AutoMix.Enabled,
-AutoGetOpenEnabled = State.AutoGetOpenEnabled,
-AutoBodyEnabled = State.AutoBody.Enabled,
-AutoHeadRideEnabled = State.AutoHeadRide.Enabled,
-AirWalkEnabled = State.Movement.AirWalkEnabled,
-IcePhysics = CONFIG.IcePhysics,
-}
-end
-
-function State.AutoRage.ResetRoute(Status)
-State.AutoRage.Target = nil
-State.AutoRage.TargetDistance = math.huge
-State.AutoRage.HasPossession = false
-State.AutoRage.LastFlightDirection = nil
-State.AutoRage.CommitDirection = nil
-State.AutoRage.CommitUntil = 0
-State.AutoRage.Status = Status or (State.AutoRage.Enabled and 'WAITING FOR BALL' or 'OFF')
-end
-
-function State.AutoRage.GetFlightDirection()
-if not (State.AutoRage.Enabled and State.AutoRage.HasPossession) then return nil end
-local Character = LP.Character
-local Root = Character and safe_find(Character, 'HumanoidRootPart')
-local Target = State.AutoRage.Target
-if not (Root and Target and Target.Parent) then return Vector3.zero end
-
-if os.clock() < (State.AutoRage.CommitUntil or 0)
-and State.AutoRage.CommitDirection then
-return State.AutoRage.CommitDirection
-end
-
-local Delta = Target.Position - Root.Position
-if Delta.Magnitude > 0.05 then
-State.AutoRage.LastFlightDirection = Delta.Unit
-return Delta.Unit
-end
-return State.AutoRage.LastFlightDirection or Root.CFrame.LookVector
-end
-
-function State.AutoRage.StopFlight()
-if State.AutoRage.ForcedFlight and State.Movement.FlightEnabled then
-State.Movement.SetFlight(false)
-end
-State.AutoRage.ForcedFlight = false
-end
-
-function State.AutoRage.ApplySettings()
-local Speed = math.clamp(tonumber(CONFIG.AutoRageSpeed) or 19, 1, 250)
-local Reach = math.clamp(tonumber(CONFIG.AutoRageReach) or 100, 2, 100)
-
--- Disable movement owners that would fight the direct rim route.
-if State.AutoOffense.Enabled then State.AutoOffense.SetEnabled(false, false) end
-if State.AutoMix.Enabled then State.AutoMix.SetEnabled(false) end
-if State.AutoGetOpenEnabled then SetAutoGetOpenEnabled(false, false) end
-if State.AutoBody.Enabled then State.AutoBody.SetEnabled(false) end
-if State.AutoHeadRide.Enabled then State.AutoHeadRide.SetEnabled(false, false) end
-if State.Movement.AirWalkEnabled then State.Movement.SetAirWalk(false) end
-if CONFIG.IcePhysics then State.Movement.SetIcePhysics(false) end
-
-CONFIG.SmartReach = false
-State.BallAssist.SetReachRadius(Reach)
-State.BallAssist.SetReach(true)
-
-State.Movement.SetWalkSpeedValue(Speed)
-State.Movement.SetWalkSpeed(true)
-
-State.AutoGuardStyle = 'Predictive'
-CONFIG.AutoGuardStyle = 'Predictive'
-State.Movement.SetAutoGuardMethod('MoveTo')
-SetAutoGuardEnabled(true, false)
-
-CONFIG.AimMode = 'Silent'
-CONFIG.HumanizeEnabled = false
-CONFIG.AutoPower = true
-CONFIG.AimRequireBall = true
-CONFIG.PerfectRelease = true
-if not State.RequestedEnabled then
-State.AutoRage.LastAimRequestAt = os.clock()
-SetSilentAimEnabled(true, false)
-end
-
-CONFIG.AutoDunkManualOverride = false
-CONFIG.AutoDunkLaneCheck = false
-CONFIG.AutoDunkTriggerDistance = 20
-CONFIG.AutoDunkApproachDistance = 100
-CONFIG.AutoDunkHoldTime = 2.25
-CONFIG.AutoDunkRetryDelay = 0.65
-State.AutoDunkMode = 'Aggressive'
-CONFIG.AutoDunkMode = 'Aggressive'
-State.AutoDunk.SetEnabled(true, false)
-
-if State.Movement.FlightEnabled then State.Movement.SetFlight(false) end
-State.Movement.SetFlightMethod('Assembly Linear Velocity')
-State.Movement.SetFlightSpeed(Speed)
-end
-
-function State.AutoRage.EnforceSettings()
-local Now = os.clock()
-if Now - (State.AutoRage.LastEnforceAt or 0) < 0.35 then return end
-State.AutoRage.LastEnforceAt = Now
-local Speed = math.clamp(tonumber(CONFIG.AutoRageSpeed) or 19, 1, 250)
-local Reach = math.clamp(tonumber(CONFIG.AutoRageReach) or 100, 2, 100)
-
-if State.AutoOffense.Enabled then State.AutoOffense.SetEnabled(false, false) end
-if State.AutoMix.Enabled then State.AutoMix.SetEnabled(false) end
-if State.AutoGetOpenEnabled then SetAutoGetOpenEnabled(false, false) end
-if State.AutoBody.Enabled then State.AutoBody.SetEnabled(false) end
-if State.AutoHeadRide.Enabled then State.AutoHeadRide.SetEnabled(false, false) end
-if State.Movement.AirWalkEnabled then State.Movement.SetAirWalk(false) end
-if CONFIG.IcePhysics then State.Movement.SetIcePhysics(false) end
-
-if CONFIG.SmartReach then CONFIG.SmartReach = false end
-if not State.BallAssist.ReachEnabled then State.BallAssist.SetReach(true) end
-if State.BallAssist.ReachRadius ~= Reach then State.BallAssist.SetReachRadius(Reach) end
-if not State.Movement.WalkSpeedEnabled then State.Movement.SetWalkSpeed(true) end
-if State.Movement.WalkSpeedValue ~= Speed then State.Movement.SetWalkSpeedValue(Speed) end
-if State.AutoGuardStyle ~= 'Predictive' then
-State.AutoGuardStyle = 'Predictive'
-CONFIG.AutoGuardStyle = 'Predictive'
-end
-if State.Movement.AutoGuardMethod ~= 'MoveTo' then
-State.Movement.SetAutoGuardMethod('MoveTo')
-end
-if not State.AutoGuardEnabled then SetAutoGuardEnabled(true, false) end
-
-CONFIG.AimMode = 'Silent'
-CONFIG.HumanizeEnabled = false
-CONFIG.AutoPower = true
-CONFIG.AimRequireBall = true
-CONFIG.PerfectRelease = true
-if not State.RequestedEnabled
-and Now - (State.AutoRage.LastAimRequestAt or 0) >= 2.5 then
-State.AutoRage.LastAimRequestAt = Now
-SetSilentAimEnabled(true, false)
-end
-
-CONFIG.AutoDunkManualOverride = false
-CONFIG.AutoDunkLaneCheck = false
-CONFIG.AutoDunkTriggerDistance = 20
-CONFIG.AutoDunkApproachDistance = 100
-CONFIG.AutoDunkHoldTime = 2.25
-CONFIG.AutoDunkRetryDelay = 0.65
-if State.AutoDunkMode ~= 'Aggressive' then
-State.AutoDunkMode = 'Aggressive'
-CONFIG.AutoDunkMode = 'Aggressive'
-end
-if not State.AutoDunkEnabled then State.AutoDunk.SetEnabled(true, false) end
-if State.Movement.FlightMethod ~= 'Assembly Linear Velocity' then
-State.Movement.SetFlightMethod('Assembly Linear Velocity')
-end
-if State.Movement.FlightSpeed ~= Speed then State.Movement.SetFlightSpeed(Speed) end
-end
-
-function State.AutoRage.Step()
-if not (State.Active and State.AutoRage.Enabled) then return end
-State.AutoRage.EnforceSettings()
-
-local Character = LP.Character
-local HumanoidObject = Character and safe_find(Character, 'Humanoid')
-local Root = Character and safe_find(Character, 'HumanoidRootPart')
-local Basketball = GetHeldBasketballModel(LP)
-if not (HumanoidObject and Root) or HumanoidObject.Health <= 0 then
-State.AutoRage.StopFlight()
-State.AutoRage.ResetRoute('WAITING FOR CHARACTER')
-return
-end
-
-if not Basketball then
-if State.AutoRage.StartedDunk and State.AutoDunk.InProgress then
-State.AutoDunk.ReleaseKey()
-end
-State.AutoRage.StartedDunk = false
-State.AutoRage.StopFlight()
-State.AutoRage.ResetRoute(State.AutoGuardEnabled
-and 'AUTO GUARD | WAITING FOR BALL' or 'WAITING FOR BALL')
-return
-end
-State.AutoRage.HasPossession = true
-
-local Target = select(1, State.AutoDunk.ResolveTarget())
-if not (Target and Target.Parent) then
-State.AutoRage.StopFlight()
-State.AutoRage.Target = nil
-State.AutoRage.TargetDistance = math.huge
-State.AutoRage.Status = 'NO SCORING RIM'
-return
-end
-
-State.AutoRage.Target = Target
-local Delta = Target.Position - Root.Position
-local FlightDistance = Delta.Magnitude
-State.AutoRage.TargetDistance = FlightDistance
-
-if not State.Movement.FlightEnabled then State.Movement.SetFlight(true) end
-State.AutoRage.ForcedFlight = true
-
-local Now = os.clock()
-if FlightDistance <= 3.5 and Now >= (State.AutoRage.CommitUntil or 0) then
-local Direction = Delta.Magnitude > 0.05 and Delta.Unit
-or State.AutoRage.LastFlightDirection or Root.CFrame.LookVector
-State.AutoRage.CommitDirection = Direction
-State.AutoRage.CommitUntil = Now + 0.45
-end
-
-local ArmDistance = math.clamp(
-tonumber(CONFIG.AutoRageDunkArmDistance) or 19, 8, 30)
-if not State.AutoDunk.InProgress and FlightDistance <= ArmDistance
-and Now - (State.AutoDunk.LastAttempt or 0)
->= math.max(0.25, tonumber(CONFIG.AutoDunkRetryDelay) or 0.65) then
-local CanStart, Reason = State.AutoDunk.CanStart(Basketball)
-if CanStart then
-State.AutoRage.StartedDunk = State.AutoDunk.Begin(Target) == true
-elseif Reason then
-State.AutoRage.Status = tostring(Reason)
-end
-end
-
-if State.AutoDunk.InProgress then
-State.AutoRage.Status = FlightDistance <= 3.5
-and 'DUNKING | RAMMING RIM'
-or string.format('DUNK ARMED | %.1f STUDS', FlightDistance)
-else
-State.AutoRage.Status = string.format('FLYING TO RIM | %.1f STUDS', FlightDistance)
-end
-end
-
-function State.AutoRage.UpdateBinding()
-pcall(function()
-State.Lifecycle:UnbindFromRenderStep(State.AutoRage.BindName)
-end)
-if not State.AutoRage.Enabled then return end
-State.Lifecycle:BindToRenderStep(
-State.AutoRage.BindName,
-Enum.RenderPriority.Input.Value + 6,
-WYNF_JIT(function() State.AutoRage.Step() end)
-)
-end
-
-function State.AutoRage.RestoreSettings()
-local Saved = State.AutoRage.Saved
-State.AutoRage.Saved = nil
-if not Saved then return end
-
-if State.AutoRage.StartedDunk and State.AutoDunk.InProgress then
-State.AutoDunk.ReleaseKey()
-end
-State.AutoRage.StartedDunk = false
-if State.Movement.FlightEnabled then State.Movement.SetFlight(false) end
-State.AutoRage.ForcedFlight = false
-
-CONFIG.SmartReach = Saved.SmartReach == true
-State.BallAssist.SetReachRadius(Saved.ReachRadius)
-State.BallAssist.SetReach(Saved.ReachEnabled)
-State.Movement.SetWalkSpeedValue(Saved.WalkSpeedValue)
-State.Movement.SetWalkSpeed(Saved.WalkSpeedEnabled)
-
-State.AutoGuardStyle = Saved.AutoGuardStyle or 'Predictive'
-CONFIG.AutoGuardStyle = State.AutoGuardStyle
-State.Movement.SetAutoGuardMethod(Saved.AutoGuardMethod or 'MoveTo')
-SetAutoGuardEnabled(Saved.AutoGuardEnabled, false)
-
-CONFIG.AimMode = Saved.AimMode
-CONFIG.HumanizeEnabled = Saved.HumanizeEnabled
-CONFIG.AutoPower = Saved.AutoPower
-CONFIG.AimRequireBall = Saved.AimRequireBall
-CONFIG.PerfectRelease = Saved.PerfectRelease
-SetSilentAimEnabled(Saved.SilentAimRequested, false)
-
-CONFIG.AutoDunkManualOverride = Saved.AutoDunkManualOverride
-CONFIG.AutoDunkLaneCheck = Saved.AutoDunkLaneCheck
-CONFIG.AutoDunkTriggerDistance = Saved.AutoDunkTriggerDistance
-CONFIG.AutoDunkApproachDistance = Saved.AutoDunkApproachDistance
-CONFIG.AutoDunkHoldTime = Saved.AutoDunkHoldTime
-CONFIG.AutoDunkRetryDelay = Saved.AutoDunkRetryDelay
-State.AutoDunkMode = Saved.AutoDunkMode or 'Smart Approach'
-CONFIG.AutoDunkMode = State.AutoDunkMode
-State.AutoDunk.SetEnabled(Saved.AutoDunkEnabled, false)
-
-State.Movement.SetFlightMethod(Saved.FlightMethod or 'Assembly Linear Velocity')
-State.Movement.SetFlightSpeed(Saved.FlightSpeed)
-if Saved.FlightEnabled then State.Movement.SetFlight(true) end
-if Saved.AirWalkEnabled then State.Movement.SetAirWalk(true) end
-if Saved.IcePhysics then State.Movement.SetIcePhysics(true) end
-
-if Saved.AutoHeadRideEnabled then State.AutoHeadRide.SetEnabled(true, false) end
-if Saved.AutoBodyEnabled then State.AutoBody.SetEnabled(true) end
-if Saved.AutoGetOpenEnabled then SetAutoGetOpenEnabled(true, false) end
-if Saved.AutoMixEnabled then State.AutoMix.SetEnabled(true) end
-if Saved.AutoOffenseEnabled then State.AutoOffense.SetEnabled(true, false) end
-end
-
-function State.AutoRage.SetEnabled(Enabled, ShouldNotify)
-Enabled = Enabled == true
-if Enabled and not State.Active then return end
-if Enabled == State.AutoRage.Enabled then
-if Enabled then
-State.AutoRage.ApplySettings()
-State.AutoRage.UpdateBinding()
-end
-return
-end
-
-if Enabled then
-State.AutoRage.Saved = State.AutoRage.CaptureSettings()
-State.AutoRage.Enabled = true
-State.AutoRageEnabled = true
-CONFIG.AutoRage = true
-State.AutoRage.Status = 'STARTING'
-State.AutoRage.LastEnforceAt = 0
-State.AutoRage.LastAimRequestAt = 0
-State.AutoRage.ApplySettings()
-State.AutoRage.UpdateBinding()
-pcall(State.AutoRage.Step)
-else
-State.AutoRage.Enabled = false
-State.AutoRageEnabled = false
-CONFIG.AutoRage = false
-State.AutoRage.UpdateBinding()
-State.AutoRage.StopFlight()
-State.AutoRage.RestoreSettings()
-State.AutoRage.ResetRoute('OFF')
-end
-
-if HubUI.Sync then HubUI.Sync() end
-if ShouldNotify then
-Notify('SILVER SURFER', Enabled
-and 'Auto Rage enabled: max reach, speed 19, auto guard, silent aim, and rim-flight dunk.'
-or 'Auto Rage disabled; previous settings restored.')
-end
-end
-
-function State.AutoRage.Cleanup()
-State.AutoRage.Enabled = false
-State.AutoRageEnabled = false
-CONFIG.AutoRage = false
-pcall(function() State.Lifecycle:UnbindFromRenderStep(State.AutoRage.BindName) end)
-if State.AutoRage.StartedDunk and State.AutoDunk.InProgress then
-pcall(State.AutoDunk.ReleaseKey)
-end
-State.AutoRage.StartedDunk = false
-State.AutoRage.ForcedFlight = false
-State.AutoRage.Saved = nil
-State.AutoRage.ResetRoute('OFF')
-end
-
 
 State.Desync = {
 Enabled = CONFIG.Desync == true,
@@ -27582,6 +28519,14 @@ GroupTransparency = 1,
 Visible = false,
 ZIndex = 4,
 }, Content)
+Pages.Bot = New('CanvasGroup', {
+Size = UDim2.fromScale(1, 1),
+BackgroundTransparency = 1,
+BorderSizePixel = 0,
+GroupTransparency = 1,
+Visible = false,
+ZIndex = 4,
+}, Content)
 Pages.Body = New('CanvasGroup', {
 Size = UDim2.fromScale(1, 1),
 BackgroundTransparency = 1,
@@ -27651,6 +28596,10 @@ Pages.Cosmetics = New('CanvasGroup', {
 Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
 BorderSizePixel = 0, GroupTransparency = 1, Visible = false, ZIndex = 4,
 }, Content)
+Pages.CosmeticStudio = New('CanvasGroup', {
+Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+BorderSizePixel = 0, GroupTransparency = 1, Visible = false, ZIndex = 4,
+}, Content)
 Pages.BallStudio = New('CanvasGroup', {
 Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
 BorderSizePixel = 0, GroupTransparency = 1, Visible = false, ZIndex = 4,
@@ -27688,9 +28637,10 @@ local TabDefinitions = {
 { Name = 'Stepback', DisplayName = 'Stepback', Category = 'GAMEPLAY', Search = 'auto stepback hop retreat side hop defender open space distance duration easing delay cooldown stop collision edge chain trickshot fadeaway ebl' },
 { Name = 'Pass', Category = 'GAMEPLAY', Search = 'pass passing teammate self pass jump pass' },
 { Name = 'Dunk', Category = 'GAMEPLAY', Search = 'dunk auto dunk animation lane' },
-{ Name = 'Offense', Category = 'AUTOMATION', Search = 'offense auto offense backdown drive cutoff turn around turnaround ping latency pull up shoot chance steal threat lane room strafe custom tuning' },
+{ Name = 'Offense', Category = 'AUTOMATION', Search = 'offense auto offense backdown drive cutoff pull up shoot chance steal threat anti rip' },
 { Name = 'GetOpen', DisplayName = 'Get Open', Category = 'AUTOMATION', Search = 'get open auto cut destination corner wing slot top backdoor practice spacing pass lane off ball' },
 { Name = 'Guard', Category = 'AUTOMATION', Search = 'guard auto guard defense on ball off ball predictive head ride mount jump close range' },
+{ Name = 'Bot', DisplayName = 'BOT', Category = 'AUTOMATION', Search = 'bot ghost 1v1 r6 humanoid 50 presets preset library random searchable steal hitbox lunge spacing realistic walkspeed 16 locked move moveto shiftlock shift lock strafe human realistic reaction prediction variance mistake commitment natural animation walk run jump self practice defender auto defense opaque contest cutoff smother force left right balanced rookie casual rec competitive elite pressure sag mirror trainer nightmare' },
 { Name = 'Body', Category = 'AUTOMATION', Search = 'body auto body defender back face rotate smooth tween hand switch crossover dribble opposite side space separation shoulder angle stickiness cooldown left right anti reach offense' },
 { Name = 'AutoMix', DisplayName = 'Mix', Category = 'AUTOMATION', Search = 'auto mix dribble spin threat strategic movement manual blend steal protection f g cross fake escape' },
 { Name = 'Queue', Category = 'AUTOMATION', Search = 'queue auto queue court match requeue' },
@@ -27699,6 +28649,7 @@ local TabDefinitions = {
 { Name = 'Ball', Category = 'PLAYER', Search = 'ball reach mag magnet loose held steal pickup catch rebound basketball opponent collider collision touch force safe grace' },
 { Name = 'Privacy', Category = 'PLAYER', Search = 'privacy anonymizer alias rank elo stats match history spoof' },
 { Name = 'Cosmetics', Category = 'PLAYER', Search = 'cosmetics aura trail ball skin body aura goal effects logos' },
+{ Name = 'CosmeticStudio', DisplayName = 'Cosmetic Studio', Category = 'PLAYER', Search = 'cosmetic studio custom aura body trail court overlay goal burst catalog tint scale' },
 { Name = 'BallStudio', DisplayName = 'Customization', Category = 'PLAYER', Search = 'customization perfect shot text animation color effects ball catalog flight trail decal texture mesh model sound tint cosmetic' },
 { Name = 'Interface', Category = 'CLIENT', Search = 'interface ui theme editor colors scale opacity transparency font animation intro tabs order hide profile preset customize' },
 { Name = 'Keybinds', Category = 'CLIENT', Search = 'keybinds hotkeys keys keyboard mouse toggle hold always press shortcuts key menu' },
@@ -27718,7 +28669,7 @@ SmartShot = 'SMART SHOT  /  DEFENDER-REACTIVE SELECTION',
 Stepback = 'STEPBACK  /  AUTOMATIC SHOT CREATION',
 Offense = 'OFFENSE  /  AUTO BALL HANDLING',
 GetOpen = 'GET OPEN  /  OFF-BALL',
-Guard = 'GUARD  /  DEFENSE', Body = 'BODY  /  BALL PROTECTION',
+Guard = 'GUARD  /  DEFENSE', Bot = 'BOT  /  1V1 GHOST DEFENDER', Body = 'BODY  /  BALL PROTECTION',
 AutoMix = 'MIX  /  DEFENSE-REACTIVE HANDLES',
 Queue = 'QUEUE  /  MATCHMAKING',
 Movement = 'MOVEMENT  /  LOCAL', Freecam = 'FREECAM  /  CAMERA FLIGHT', Ball = 'BALL  /  REACH + MAG', Privacy = 'PRIVACY  /  LOCAL', Cosmetics = 'COSMETICS  /  LOCAL',
@@ -28442,6 +29393,8 @@ local DunkGroup = CreateGroup('Auto Dunk', Pages.Dunk, UDim2.fromOffset(PageMarg
 local GetOpenGroup = CreateGroup('Auto Get Open', Pages.GetOpen, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
 local GuardGroup = CreateGroup('Auto Guard & Defense', Pages.Guard, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local GuardRideGroup = CreateGroup('Head Ride', Pages.Guard, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.BotControlGroup = CreateGroup('1v1 Ghost Bot', Pages.Bot, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.BotDefenseGroup = CreateGroup('Defense Tuning', Pages.Bot, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local BodyGroup = CreateGroup('Auto Body', Pages.Body, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local BodySettingsGroup = CreateGroup('Body Settings', Pages.Body, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local AutoMixControlGroup = CreateGroup('Mix Controls', Pages.AutoMix, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
@@ -28460,6 +29413,8 @@ local UtilitySafetyGroup = CreateGroup('Performance & Safety', Pages.Utilities, 
 HubUI.GhostRecordGroup = CreateGroup('Ghost Recording', Pages.Replay, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 HubUI.GhostPlaybackGroup = CreateGroup('Ghost Playback', Pages.Replay, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local PrivacyGroup = CreateGroup('Local Identity Privacy', Pages.Privacy, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight))
+HubUI.CosmeticStudioBodyGroup = CreateGroup('Character Studio', Pages.CosmeticStudio, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
+HubUI.CosmeticStudioWorldGroup = CreateGroup('World Studio', Pages.CosmeticStudio, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local CosmeticsGroup = CreateGroup('Appearance & Profile Logos', Pages.Cosmetics, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 local CosmeticSpoofsGroup = CreateGroup('Profile, Rank & Celebrations', Pages.Cosmetics, UDim2.fromOffset(RightX, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
 HubUI.BallTrailGroup = CreateGroup('Trail, Audio & Presets', Pages.BallStudio, UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(HalfWidth, GroupHeight))
@@ -30383,7 +31338,7 @@ function(Value) State.BallAssist.SetBallReachMethod(Value) end,
 118
 )
 HubUI.Controls.BallReachRadius = CreateNumberInput(
-BallReachGroup, 91, 'Reach radius', State.BallAssist.ReachRadius, 2, 100, 0,
+BallReachGroup, 91, 'Reach radius', State.BallAssist.ReachRadius, 2, 30, 0,
 function(Value) State.BallAssist.SetReachRadius(Value) end
 )
 HubUI.Controls.SmartReach = CreateCheckbox(
@@ -31827,6 +32782,85 @@ CONFIG.ShotSoundDuration = Value
 if HubUI.Controls.BallPreset then HubUI.Controls.BallPreset:Set('Custom', false) end
 end)
 
+
+CreateSectionHeader(HubUI.CosmeticStudioBodyGroup, 9, 'Studio')
+HubUI.Controls.CosmeticStudio = CreateCheckbox(
+HubUI.CosmeticStudioBodyGroup, 29, 'Enable Cosmetic Studio', CONFIG.CosmeticStudioEnabled == true,
+function(Value)
+CONFIG.CosmeticStudioEnabled = Value == true
+if Value then pcall(State.CosmeticStudio.Refresh) else pcall(State.CosmeticStudio.Cleanup) end
+end)
+CreateSectionHeader(HubUI.CosmeticStudioBodyGroup, 61, 'Custom body aura')
+HubUI.Controls.CustomBodyAuraEnabled = CreateCheckbox(
+HubUI.CosmeticStudioBodyGroup, 81, 'Use catalog body aura', CONFIG.CustomBodyAuraEnabled == true,
+function(Value) CONFIG.CustomBodyAuraEnabled = Value == true; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.CreateIdInput(HubUI.CosmeticStudioBodyGroup, 107, 'Body aura catalog ID', CONFIG.CustomBodyAuraCatalogId, function(Value)
+CONFIG.CustomBodyAuraCatalogId = Value; pcall(State.CosmeticStudio.Refresh)
+end)
+HubUI.Controls.CustomBodyAuraScale = CreateNumberInput(
+HubUI.CosmeticStudioBodyGroup, 133, 'Body aura scale', CONFIG.CustomBodyAuraScale, 0.05, 8, 2,
+function(Value) CONFIG.CustomBodyAuraScale = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBodyAuraTint = CreateCheckbox(
+HubUI.CosmeticStudioBodyGroup, 159, 'Tint body aura', CONFIG.CustomBodyAuraTint == true,
+function(Value) CONFIG.CustomBodyAuraTint = Value == true; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBodyAuraR = CreateNumberInput(HubUI.CosmeticStudioBodyGroup, 185, 'Body aura red', CONFIG.CustomBodyAuraR, 0, 255, 0, function(Value) CONFIG.CustomBodyAuraR = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBodyAuraG = CreateNumberInput(HubUI.CosmeticStudioBodyGroup, 211, 'Body aura green', CONFIG.CustomBodyAuraG, 0, 255, 0, function(Value) CONFIG.CustomBodyAuraG = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBodyAuraB = CreateNumberInput(HubUI.CosmeticStudioBodyGroup, 237, 'Body aura blue', CONFIG.CustomBodyAuraB, 0, 255, 0, function(Value) CONFIG.CustomBodyAuraB = Value; pcall(State.CosmeticStudio.Refresh) end)
+CreateSectionHeader(HubUI.CosmeticStudioBodyGroup, 271, 'Custom body trail')
+HubUI.Controls.CustomBodyTrailEnabled = CreateCheckbox(
+HubUI.CosmeticStudioBodyGroup, 291, 'Use custom body trail', CONFIG.CustomBodyTrailEnabled == true,
+function(Value) CONFIG.CustomBodyTrailEnabled = Value == true; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.CreateIdInput(HubUI.CosmeticStudioBodyGroup, 317, 'Trail decal ID', CONFIG.CustomBodyTrailTextureId, function(Value)
+CONFIG.CustomBodyTrailTextureId = Value; pcall(State.CosmeticStudio.Refresh)
+end)
+HubUI.Controls.CustomBodyTrailWidth = CreateNumberInput(HubUI.CosmeticStudioBodyGroup, 343, 'Trail width', CONFIG.CustomBodyTrailWidth, 0.1, 12, 2, function(Value) CONFIG.CustomBodyTrailWidth = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBodyTrailLifetime = CreateNumberInput(HubUI.CosmeticStudioBodyGroup, 369, 'Trail lifetime', CONFIG.CustomBodyTrailLifetime, 0.05, 8, 2, function(Value) CONFIG.CustomBodyTrailLifetime = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBodyTrailStartR = CreateNumberInput(HubUI.CosmeticStudioBodyGroup, 395, 'Trail start red', CONFIG.CustomBodyTrailStartR, 0, 255, 0, function(Value) CONFIG.CustomBodyTrailStartR = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBodyTrailStartG = CreateNumberInput(HubUI.CosmeticStudioBodyGroup, 421, 'Trail start green', CONFIG.CustomBodyTrailStartG, 0, 255, 0, function(Value) CONFIG.CustomBodyTrailStartG = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBodyTrailStartB = CreateNumberInput(HubUI.CosmeticStudioBodyGroup, 447, 'Trail start blue', CONFIG.CustomBodyTrailStartB, 0, 255, 0, function(Value) CONFIG.CustomBodyTrailStartB = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBodyTrailEndR = CreateNumberInput(HubUI.CosmeticStudioBodyGroup, 473, 'Trail end red', CONFIG.CustomBodyTrailEndR, 0, 255, 0, function(Value) CONFIG.CustomBodyTrailEndR = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBodyTrailEndG = CreateNumberInput(HubUI.CosmeticStudioBodyGroup, 499, 'Trail end green', CONFIG.CustomBodyTrailEndG, 0, 255, 0, function(Value) CONFIG.CustomBodyTrailEndG = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBodyTrailEndB = CreateNumberInput(HubUI.CosmeticStudioBodyGroup, 525, 'Trail end blue', CONFIG.CustomBodyTrailEndB, 0, 255, 0, function(Value) CONFIG.CustomBodyTrailEndB = Value; pcall(State.CosmeticStudio.Refresh) end)
+CreateParagraph(HubUI.CosmeticStudioBodyGroup, UDim2.fromOffset(8, 559), UDim2.new(1, -16, 0, 52), 'Paste any Roblox catalog / decal ID.\nThese stay local to your screen only.')
+
+CreateSectionHeader(HubUI.CosmeticStudioWorldGroup, 9, 'Custom ball aura')
+HubUI.Controls.CustomBallAuraEnabled = CreateCheckbox(
+HubUI.CosmeticStudioWorldGroup, 29, 'Use catalog ball aura', CONFIG.CustomBallAuraEnabled == true,
+function(Value) CONFIG.CustomBallAuraEnabled = Value == true; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.CreateIdInput(HubUI.CosmeticStudioWorldGroup, 55, 'Ball aura catalog ID', CONFIG.CustomBallAuraCatalogId, function(Value)
+CONFIG.CustomBallAuraCatalogId = Value; pcall(State.CosmeticStudio.Refresh)
+end)
+HubUI.Controls.CustomBallAuraScale = CreateNumberInput(
+HubUI.CosmeticStudioWorldGroup, 81, 'Ball aura scale', CONFIG.CustomBallAuraScale, 0.05, 8, 2,
+function(Value) CONFIG.CustomBallAuraScale = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBallAuraTint = CreateCheckbox(
+HubUI.CosmeticStudioWorldGroup, 107, 'Tint ball aura', CONFIG.CustomBallAuraTint == true,
+function(Value) CONFIG.CustomBallAuraTint = Value == true; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBallAuraR = CreateNumberInput(HubUI.CosmeticStudioWorldGroup, 133, 'Ball aura red', CONFIG.CustomBallAuraR, 0, 255, 0, function(Value) CONFIG.CustomBallAuraR = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBallAuraG = CreateNumberInput(HubUI.CosmeticStudioWorldGroup, 159, 'Ball aura green', CONFIG.CustomBallAuraG, 0, 255, 0, function(Value) CONFIG.CustomBallAuraG = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomBallAuraB = CreateNumberInput(HubUI.CosmeticStudioWorldGroup, 185, 'Ball aura blue', CONFIG.CustomBallAuraB, 0, 255, 0, function(Value) CONFIG.CustomBallAuraB = Value; pcall(State.CosmeticStudio.Refresh) end)
+CreateSectionHeader(HubUI.CosmeticStudioWorldGroup, 219, 'Custom court overlay')
+HubUI.Controls.CustomCourtOverlayEnabled = CreateCheckbox(
+HubUI.CosmeticStudioWorldGroup, 239, 'Use custom court overlay', CONFIG.CustomCourtOverlayEnabled == true,
+function(Value) CONFIG.CustomCourtOverlayEnabled = Value == true; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.CreateIdInput(HubUI.CosmeticStudioWorldGroup, 265, 'Court decal ID', CONFIG.CustomCourtDecalId, function(Value)
+CONFIG.CustomCourtDecalId = Value; pcall(State.CosmeticStudio.Refresh)
+end)
+HubUI.Controls.CustomCourtR = CreateNumberInput(HubUI.CosmeticStudioWorldGroup, 291, 'Court red', CONFIG.CustomCourtR, 0, 255, 0, function(Value) CONFIG.CustomCourtR = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomCourtG = CreateNumberInput(HubUI.CosmeticStudioWorldGroup, 317, 'Court green', CONFIG.CustomCourtG, 0, 255, 0, function(Value) CONFIG.CustomCourtG = Value; pcall(State.CosmeticStudio.Refresh) end)
+HubUI.Controls.CustomCourtB = CreateNumberInput(HubUI.CosmeticStudioWorldGroup, 343, 'Court blue', CONFIG.CustomCourtB, 0, 255, 0, function(Value) CONFIG.CustomCourtB = Value; pcall(State.CosmeticStudio.Refresh) end)
+CreateSectionHeader(HubUI.CosmeticStudioWorldGroup, 377, 'Custom goal burst')
+HubUI.Controls.CustomGoalBurstEnabled = CreateCheckbox(
+HubUI.CosmeticStudioWorldGroup, 397, 'Play catalog burst on score', CONFIG.CustomGoalBurstEnabled == true,
+function(Value) CONFIG.CustomGoalBurstEnabled = Value == true end)
+HubUI.CreateIdInput(HubUI.CosmeticStudioWorldGroup, 423, 'Goal burst catalog ID', CONFIG.CustomGoalBurstCatalogId, function(Value)
+CONFIG.CustomGoalBurstCatalogId = Value
+end)
+HubUI.Controls.CustomGoalBurstScale = CreateNumberInput(
+HubUI.CosmeticStudioWorldGroup, 449, 'Goal burst scale', CONFIG.CustomGoalBurstScale, 0.05, 8, 2,
+function(Value) CONFIG.CustomGoalBurstScale = Value end)
+CreateParagraph(HubUI.CosmeticStudioWorldGroup, UDim2.fromOffset(8, 483), UDim2.new(1, -16, 0, 78), 'Ball Studio still owns custom balls.\nThis page owns auras, trails, courts,\nand local score bursts.')
+
 CreateSectionHeader(CosmeticsGroup, 9, 'Local appearance')
 HubUI.Controls.LocalCosmeticSpoof = CreateCheckbox(
 CosmeticsGroup, 29, 'Enable cosmetic previews', State.LocalCosmeticSpoofEnabled,
@@ -32507,18 +33541,6 @@ UDim2.new(1, -16, 0, 79),
 'STATUS  OFF\nTARGET  --\nMODE    Smart Approach\nDUNK    Equipped rotation'
 )
 
-CreateSectionHeader(DunkGroup, 350, 'Rage automation')
-HubUI.Controls.AutoRage = CreateCheckbox(
-DunkGroup, 370, 'Auto Rage', State.AutoRage.Enabled,
-function(Value) State.AutoRage.SetEnabled(Value, true) end
-)
-HubUI.AutoRageStatusText = CreateParagraph(
-DunkGroup,
-UDim2.fromOffset(8, 400),
-UDim2.new(1, -16, 0, 92),
-'STATUS  OFF\nBALL    --\nRIM     --\nLOADOUT MAX REACH | SPEED 19 | GUARD + AIM'
-)
-
 HubUI.OffenseCoreGroup = CreateGroup(
 'Auto Offense', Pages.Offense,
 UDim2.fromOffset(PageMargin, GroupY), UDim2.fromOffset(FullWidth, GroupHeight)
@@ -32534,34 +33556,38 @@ HubUI.OffenseCoreGroup, 61, 'Show pathfinding', State.AutoOffense.PathVisualEnab
 function(Value) State.AutoOffense.SetPathVisualEnabled(Value) end
 )
 
-CreateSectionHeader(HubUI.OffenseCoreGroup, 93, 'Defender response')
-HubUI.Controls.AutoOffenseTurnAround = CreateNumberInput(
-HubUI.OffenseCoreGroup, 113, 'Turn around at (studs)',
-CONFIG.AutoOffenseTurnAround, 3, 20, 1,
-function(Value)
-State.AutoOffense.SetSimple('AutoOffenseTurnAround', Value)
-end
-)
-HubUI.Controls.AutoOffensePingAware = CreateCheckbox(
-HubUI.OffenseCoreGroup, 143, 'Use defender ping',
-CONFIG.AutoOffensePingAware ~= false,
-function(Value)
-CONFIG.AutoOffensePingAware = Value == true
-State.AutoOffense.UpdateDefenderLatency(
-State.AutoOffense.DefenderPingPlayer,
-State.AutoOffense.DefenderPingPlayer
-and State.AutoOffense.DefenderPingPlayer.Character
-and safe_find(State.AutoOffense.DefenderPingPlayer.Character, 'HumanoidRootPart'))
-end
-)
-
-CreateSectionHeader(HubUI.OffenseCoreGroup, 175, 'Live status')
+CreateSectionHeader(HubUI.OffenseCoreGroup, 93, 'Live status')
 HubUI.OffenseStatusText = CreateParagraph(
 HubUI.OffenseCoreGroup,
-UDim2.fromOffset(8, 195),
-UDim2.new(1, -16, 0, 188),
-'STATUS  OFF\nTARGET  85-power line\nPLAN    Ping-aware guarded route\nDEFENDER  -- | PING --\nTURN    9.0 BASE | 9.0 LIVE\nBALL REACH  --\nCOURT   --\nSHOT    Jump + Silent Aim'
+UDim2.fromOffset(8, 113),
+UDim2.new(1, -16, 0, 151),
+'STATUS  OFF\nTARGET  85-power line\nPLAN    Manual blend + guarded route\nCOURT   --\nSHOT    Jump + Silent Aim'
 )
+
+CreateSectionHeader(HubUI.OffenseCoreGroup, 268, 'Perfect anti-rip')
+HubUI.Controls.AutoOffenseAntiRip=CreateCheckbox(
+HubUI.OffenseCoreGroup,288,'PreSimulation anti-rip',CONFIG.AutoOffenseAntiRip~=false,
+function(Value) CONFIG.AutoOffenseAntiRip=Value==true; if not Value then State.Runtime.ReleaseMovement('AntiRip'); State.AutoOffense.AntiRipActive=false end end)
+HubUI.Controls.AutoOffenseAntiRipPingLead=CreateCheckbox(
+HubUI.OffenseCoreGroup,318,'Ping-compensated prediction',CONFIG.AutoOffenseAntiRipPingLead~=false,
+function(Value) CONFIG.AutoOffenseAntiRipPingLead=Value==true end)
+HubUI.Controls.AutoOffenseAntiRipPadding=CreateNumberInput(
+HubUI.OffenseCoreGroup,348,'Ball safety padding',CONFIG.AutoOffenseAntiRipPadding,0,3,2,
+function(Value) CONFIG.AutoOffenseAntiRipPadding=Value end)
+HubUI.Controls.AutoOffenseAntiRipExtraLead=CreateNumberInput(
+HubUI.OffenseCoreGroup,378,'Extra reaction lead',CONFIG.AutoOffenseAntiRipExtraLead,0,.20,3,
+function(Value) CONFIG.AutoOffenseAntiRipExtraLead=Value end)
+HubUI.Controls.AutoOffenseAntiRipInstantCut=CreateCheckbox(
+HubUI.OffenseCoreGroup,408,'Instant emergency strafe',CONFIG.AutoOffenseAntiRipInstantCut~=false,
+function(Value) CONFIG.AutoOffenseAntiRipInstantCut=Value==true end)
+HubUI.Controls.AutoOffenseAntiRipNoSteal=CreateCheckbox(
+HubUI.OffenseCoreGroup,438,'Early NoSteal shield',CONFIG.AutoOffenseAntiRipNoSteal~=false,
+function(Value) CONFIG.AutoOffenseAntiRipNoSteal=Value==true end)
+HubUI.Controls.AutoOffenseAntiRipNoStealCooldown=CreateNumberInput(
+HubUI.OffenseCoreGroup,468,'NoSteal request cooldown',CONFIG.AutoOffenseAntiRipNoStealCooldown,.15,1.5,2,
+function(Value) CONFIG.AutoOffenseAntiRipNoStealCooldown=Value end)
+
+
 
 CreateSectionHeader(GetOpenGroup, 11, 'Get-open control')
 HubUI.Controls.AutoGetOpen = CreateCheckbox(GetOpenGroup, 31, 'Auto Get Open', State.AutoGetOpenEnabled, function(Value)
@@ -32692,6 +33718,201 @@ function(Value) CONFIG.AutoGuardZigzagWidth = Value end
 HubUI.Controls.AutoGuardZigzagSpeed = CreateNumberInput(
 GuardGroup, 442, 'Zigzag speed', CONFIG.AutoGuardZigzagSpeed, 0.25, 8, 2,
 function(Value) CONFIG.AutoGuardZigzagSpeed = Value end
+)
+
+CreateSectionHeader(HubUI.BotControlGroup, 11, 'Human R6 defender')
+HubUI.Controls.BotEnabled = CreateCheckbox(
+HubUI.BotControlGroup, 31, 'Enable 1v1 BOT', State.BotDefender.Enabled,
+function(Value) State.BotDefender.SetEnabled(Value) end
+)
+HubUI.Controls.BotStyle = CreateSelector(
+HubUI.BotControlGroup, 61, 'Defense style',
+{ 'Predictive', 'Mirror', 'Cutoff', 'Smother', 'Force Left', 'Force Right', 'Legit' },
+CONFIG.BotStyle or 'Predictive',
+function(Value) CONFIG.BotStyle = Value; State.BotDefender.NextSampleAt = 0 end,
+142
+)
+HubUI.Controls.BotMoveMethod = CreateSelector(
+HubUI.BotControlGroup, 91, 'Movement method', { 'Humanoid Move', 'MoveTo' },
+CONFIG.BotMoveMethod or 'Humanoid Move',
+function(Value) CONFIG.BotMoveMethod = Value; State.BotDefender.NextMoveToAt = 0 end,
+142
+)
+HubUI.Controls.BotShiftLock = CreateCheckbox(
+HubUI.BotControlGroup, 121, 'Defensive shift lock', CONFIG.BotShiftLock ~= false,
+function(Value) CONFIG.BotShiftLock = Value == true end
+)
+HubUI.Controls.BotShiftLockTarget = CreateSelector(
+HubUI.BotControlGroup, 151, 'Shift-lock focus', { 'Player', 'Ball', 'Movement' },
+CONFIG.BotShiftLockTarget or 'Player',
+function(Value) CONFIG.BotShiftLockTarget = Value end,
+142
+)
+HubUI.BotResetButton = New('TextButton', {
+Position = UDim2.fromOffset(8, 183), Size = UDim2.new(1, -16, 0, 26),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = 'RESET HUMAN R6 BOT', TextColor3 = Theme.Text,
+TextSize = 10, ZIndex = 7,
+}, HubUI.BotControlGroup)
+AccentStroke(HubUI.BotResetButton, 1, 0.18)
+GiveSignal(HubUI.BotResetButton.MouseButton1Click:Connect(State.BotDefender.Reset))
+HubUI.Controls.BotResetAction = {
+SearchRoot = HubUI.BotResetButton, SearchParent = HubUI.BotControlGroup,
+SearchLabel = 'Reset human R6 BOT', Kind = 'Action', Trigger = State.BotDefender.Reset,
+}
+CreateSectionHeader(HubUI.BotControlGroup, 221, 'Live status')
+HubUI.BotStatusText = CreateParagraph(
+HubUI.BotControlGroup, UDim2.fromOffset(8, 241), UDim2.new(1, -16, 0, 130),
+'STATUS  OFF\nRIG     R6 HUMANOID\nMOVE    Humanoid Move\nFACE    SHIFTLOCK PLAYER\nREADS   HUMAN'
+)
+CreateSectionHeader(HubUI.BotControlGroup, 408, 'Rig / behavior')
+HubUI.Controls.BotHighlight = CreateCheckbox(
+HubUI.BotControlGroup, 428, 'Silver BOT outline', CONFIG.BotHighlight ~= false,
+function(Value) CONFIG.BotHighlight = Value == true; State.BotDefender.ApplyAppearance() end
+)
+HubUI.Controls.BotSolid = CreateCheckbox(
+HubUI.BotControlGroup, 458, 'Natural R6 collisions', CONFIG.BotSolid ~= false,
+function(Value) CONFIG.BotSolid = Value == true; State.BotDefender.ApplyAppearance() end
+)
+HubUI.Controls.BotHumanize = CreateCheckbox(
+HubUI.BotControlGroup, 488, 'Human reads / mistakes', CONFIG.BotHumanize ~= false,
+function(Value)
+CONFIG.BotHumanize = Value == true
+State.BotDefender.NextHumanDecisionAt = 0
+end
+)
+HubUI.BotInfoText = CreateParagraph(
+HubUI.BotControlGroup, UDim2.fromOffset(8, 524), UDim2.new(1, -16, 0, 110),
+'Rookie-plus human defender: real R6 Humanoid locomotion at a locked WalkSpeed of 16, a big beginner cushion, late reads, and frequent believable mistakes—just slightly sharper recovery than a pure rookie. It only closes the gap during a timed steal lunge into the ball hitbox, and every slider stays adjustable.'
+)
+
+CreateSectionHeader(HubUI.BotDefenseGroup, 11, 'Core movement')
+HubUI.Controls.BotGuardGap = CreateNumberInput(
+HubUI.BotDefenseGroup, 31, 'Guard gap', CONFIG.BotGuardGap, 1.8, 12, 2,
+function(Value) CONFIG.BotGuardGap = Value; State.BotDefender.NextSampleAt = 0 end
+)
+HubUI.Controls.BotPrediction = CreateNumberInput(
+HubUI.BotDefenseGroup, 61, 'Prediction time', CONFIG.BotPrediction, -0.75, 1.5, 2,
+function(Value) CONFIG.BotPrediction = Value; State.BotDefender.NextHumanDecisionAt = 0 end
+)
+HubUI.Controls.BotReactionDelay = CreateNumberInput(
+HubUI.BotDefenseGroup, 121, 'Reaction delay', CONFIG.BotReactionDelay, 0, 1, 2,
+function(Value) CONFIG.BotReactionDelay = Value; State.BotDefender.NextSampleAt = 0 end
+)
+HubUI.Controls.BotSmoothing = CreateNumberInput(
+HubUI.BotDefenseGroup, 151, 'Direction smoothing', CONFIG.BotSmoothing, 0.5, 50, 1,
+function(Value) CONFIG.BotSmoothing = Value end
+)
+HubUI.Controls.BotLateralLead = CreateNumberInput(
+HubUI.BotDefenseGroup, 181, 'Lateral lead', CONFIG.BotLateralLead, -1, 1.5, 2,
+function(Value) CONFIG.BotLateralLead = Value end
+)
+HubUI.Controls.BotStopDistance = CreateNumberInput(
+HubUI.BotDefenseGroup, 211, 'Stop distance', CONFIG.BotStopDistance, 0.05, 6, 2,
+function(Value) CONFIG.BotStopDistance = Value end
+)
+
+CreateSectionHeader(HubUI.BotDefenseGroup, 243, 'Defensive shift lock')
+HubUI.Controls.BotShiftLockResponsiveness = CreateNumberInput(
+HubUI.BotDefenseGroup, 263, 'Turn responsiveness', CONFIG.BotShiftLockResponsiveness, 1, 60, 0,
+function(Value) CONFIG.BotShiftLockResponsiveness = Value end
+)
+HubUI.Controls.BotShiftLockTurnSpeed = CreateNumberInput(
+HubUI.BotDefenseGroup, 293, 'Maximum turn speed', CONFIG.BotShiftLockTurnSpeed, 90, 1440, 0,
+function(Value) CONFIG.BotShiftLockTurnSpeed = Value end
+)
+HubUI.Controls.BotFacingLead = CreateNumberInput(
+HubUI.BotDefenseGroup, 323, 'Facing lead', CONFIG.BotFacingLead, -0.5, 1.5, 2,
+function(Value) CONFIG.BotFacingLead = Value end
+)
+
+CreateSectionHeader(HubUI.BotDefenseGroup, 355, 'Human decision model')
+HubUI.Controls.BotDecisionInterval = CreateNumberInput(
+HubUI.BotDefenseGroup, 375, 'Decision interval', CONFIG.BotDecisionInterval, 0.02, 0.8, 2,
+function(Value) CONFIG.BotDecisionInterval = Value; State.BotDefender.NextHumanDecisionAt = 0 end
+)
+HubUI.Controls.BotPredictionVariance = CreateNumberInput(
+HubUI.BotDefenseGroup, 405, 'Prediction variance', CONFIG.BotPredictionVariance, 0, 1, 2,
+function(Value) CONFIG.BotPredictionVariance = Value end
+)
+HubUI.Controls.BotGapVariance = CreateNumberInput(
+HubUI.BotDefenseGroup, 435, 'Gap variance', CONFIG.BotGapVariance, 0, 3, 2,
+function(Value) CONFIG.BotGapVariance = Value end
+)
+HubUI.Controls.BotMistakeChance = CreateNumberInput(
+HubUI.BotDefenseGroup, 465, 'Wrong-step chance %', CONFIG.BotMistakeChance, 0, 60, 0,
+function(Value) CONFIG.BotMistakeChance = Value end
+)
+HubUI.Controls.BotMistakeDistance = CreateNumberInput(
+HubUI.BotDefenseGroup, 495, 'Wrong-step distance', CONFIG.BotMistakeDistance, 0, 5, 2,
+function(Value) CONFIG.BotMistakeDistance = Value end
+)
+HubUI.Controls.BotMistakeDuration = CreateNumberInput(
+HubUI.BotDefenseGroup, 525, 'Wrong-step duration', CONFIG.BotMistakeDuration, 0.05, 1, 2,
+function(Value) CONFIG.BotMistakeDuration = Value end
+)
+HubUI.Controls.BotCommitTime = CreateNumberInput(
+HubUI.BotDefenseGroup, 555, 'Direction commitment', CONFIG.BotCommitTime, 0, 0.5, 2,
+function(Value) CONFIG.BotCommitTime = Value end
+)
+
+CreateSectionHeader(HubUI.BotDefenseGroup, 587, 'Footwork / shading')
+HubUI.Controls.BotMovementPattern = CreateSelector(
+HubUI.BotDefenseGroup, 607, 'Footwork', { 'Direct', 'Zigzag' },
+CONFIG.BotMovementPattern or 'Direct',
+function(Value) CONFIG.BotMovementPattern = Value end, 108
+)
+HubUI.Controls.BotZigzagWidth = CreateNumberInput(
+HubUI.BotDefenseGroup, 637, 'Zigzag width', CONFIG.BotZigzagWidth, 0, 8, 2,
+function(Value) CONFIG.BotZigzagWidth = Value end
+)
+HubUI.Controls.BotZigzagSpeed = CreateNumberInput(
+HubUI.BotDefenseGroup, 667, 'Zigzag speed', CONFIG.BotZigzagSpeed, 0.05, 15, 2,
+function(Value) CONFIG.BotZigzagSpeed = Value end
+)
+HubUI.Controls.BotForceOffset = CreateNumberInput(
+HubUI.BotDefenseGroup, 697, 'Force-side shade', CONFIG.BotForceOffset, 0, 8, 2,
+function(Value) CONFIG.BotForceOffset = Value end
+)
+
+CreateSectionHeader(HubUI.BotDefenseGroup, 729, 'Contests / MoveTo')
+HubUI.Controls.BotAutoContest = CreateCheckbox(
+HubUI.BotDefenseGroup, 749, 'Humanoid jump contests', CONFIG.BotAutoContest ~= false,
+function(Value) CONFIG.BotAutoContest = Value == true end
+)
+HubUI.Controls.BotContestRange = CreateNumberInput(
+HubUI.BotDefenseGroup, 779, 'Contest range', CONFIG.BotContestRange, 0, 25, 1,
+function(Value) CONFIG.BotContestRange = Value end
+)
+HubUI.Controls.BotContestHeight = CreateNumberInput(
+HubUI.BotDefenseGroup, 809, 'Humanoid jump height', CONFIG.BotContestHeight, 0.1, 12, 1,
+function(Value) CONFIG.BotContestHeight = Value end
+)
+HubUI.Controls.BotMoveToInterval = CreateNumberInput(
+HubUI.BotDefenseGroup, 839, 'MoveTo refresh', CONFIG.BotMoveToInterval, 0.02, 1, 2,
+function(Value) CONFIG.BotMoveToInterval = Value end
+)
+
+CreateSectionHeader(HubUI.BotDefenseGroup, 871, 'Steal attempts')
+HubUI.Controls.BotStealAttempts = CreateCheckbox(
+HubUI.BotDefenseGroup, 891, 'Hitbox steal attempts', CONFIG.BotStealAttempts ~= false,
+function(Value) CONFIG.BotStealAttempts = Value == true end
+)
+HubUI.Controls.BotStealRange = CreateNumberInput(
+HubUI.BotDefenseGroup, 921, 'Steal trigger range', CONFIG.BotStealRange, 0, 8, 1,
+function(Value) CONFIG.BotStealRange = Value end
+)
+HubUI.Controls.BotStealChance = CreateNumberInput(
+HubUI.BotDefenseGroup, 951, 'Steal chance %', CONFIG.BotStealChance, 0, 100, 0,
+function(Value) CONFIG.BotStealChance = Value end
+)
+HubUI.Controls.BotStealDuration = CreateNumberInput(
+HubUI.BotDefenseGroup, 981, 'Steal lunge duration', CONFIG.BotStealDuration, 0.1, 1, 2,
+function(Value) CONFIG.BotStealDuration = Value end
+)
+HubUI.Controls.BotStealCooldown = CreateNumberInput(
+HubUI.BotDefenseGroup, 1011, 'Steal cooldown', CONFIG.BotStealCooldown, 0.5, 10, 1,
+function(Value) CONFIG.BotStealCooldown = Value end
 )
 
 CreateSectionHeader(GuardRideGroup, 11, 'Off-ball Head Ride')
@@ -35410,14 +36631,19 @@ CONFIG.AntiReachNoStealKeeper },
 State.Movement.BodyColliderIncludeSelf },
 { HubUI.Controls.AutoTipOff, State.BallAssist.TipOffEnabled },
 { HubUI.Controls.AutoDunk, State.AutoDunkEnabled },
-{ HubUI.Controls.AutoRage, State.AutoRage.Enabled },
 { HubUI.Controls.DunkManualOverride, CONFIG.AutoDunkManualOverride },
 { HubUI.Controls.DunkLaneCheck, CONFIG.AutoDunkLaneCheck },
 { HubUI.Controls.DunkRandomOwned, State.AutoDunkRandomOwned },
 { HubUI.Controls.DunkRangeIndicator, CONFIG.DunkRangeIndicator },
 { HubUI.Controls.AutoOffense, State.AutoOffense.Enabled },
 { HubUI.Controls.AutoOffenseShowPath, State.AutoOffense.PathVisualEnabled },
-{ HubUI.Controls.AutoOffensePingAware, CONFIG.AutoOffensePingAware ~= false },
+{ HubUI.Controls.AutoOffenseAntiRip, CONFIG.AutoOffenseAntiRip },
+{ HubUI.Controls.AutoOffenseAntiRipPingLead, CONFIG.AutoOffenseAntiRipPingLead },
+{ HubUI.Controls.AutoOffenseAntiRipPadding, CONFIG.AutoOffenseAntiRipPadding },
+{ HubUI.Controls.AutoOffenseAntiRipExtraLead, CONFIG.AutoOffenseAntiRipExtraLead },
+{ HubUI.Controls.AutoOffenseAntiRipInstantCut, CONFIG.AutoOffenseAntiRipInstantCut },
+{ HubUI.Controls.AutoOffenseAntiRipNoSteal, CONFIG.AutoOffenseAntiRipNoSteal },
+{ HubUI.Controls.AutoOffenseAntiRipNoStealCooldown, CONFIG.AutoOffenseAntiRipNoStealCooldown },
 { HubUI.Controls.AutoGuard, State.AutoGuardEnabled },
 { HubUI.Controls.AutoGuardNoJump, CONFIG.AutoGuardNoJump },
 { HubUI.Controls.AutoGuardBallCheckOnly, CONFIG.AutoGuardBallCheckOnly },
@@ -35425,6 +36651,43 @@ State.Movement.BodyColliderIncludeSelf },
 { HubUI.Controls.AutoGuardZigzagSpeed, CONFIG.AutoGuardZigzagSpeed },
 { HubUI.Controls.AutoDefense, State.AutoDefense.Enabled },
 { HubUI.Controls.AutoDefenseNoclip, CONFIG.AutoDefenseNoclip },
+{ HubUI.Controls.BotEnabled, State.BotDefender.Enabled },
+{ HubUI.Controls.BotStyle, CONFIG.BotStyle },
+{ HubUI.Controls.BotMoveMethod, CONFIG.BotMoveMethod },
+{ HubUI.Controls.BotShiftLock, CONFIG.BotShiftLock ~= false },
+{ HubUI.Controls.BotShiftLockTarget, CONFIG.BotShiftLockTarget },
+{ HubUI.Controls.BotHumanize, CONFIG.BotHumanize ~= false },
+{ HubUI.Controls.BotGuardGap, CONFIG.BotGuardGap },
+{ HubUI.Controls.BotPrediction, CONFIG.BotPrediction },
+{ HubUI.Controls.BotReactionDelay, CONFIG.BotReactionDelay },
+{ HubUI.Controls.BotSmoothing, CONFIG.BotSmoothing },
+{ HubUI.Controls.BotLateralLead, CONFIG.BotLateralLead },
+{ HubUI.Controls.BotStopDistance, CONFIG.BotStopDistance },
+{ HubUI.Controls.BotMoveToInterval, CONFIG.BotMoveToInterval },
+{ HubUI.Controls.BotStealAttempts, CONFIG.BotStealAttempts ~= false },
+{ HubUI.Controls.BotStealRange, CONFIG.BotStealRange },
+{ HubUI.Controls.BotStealChance, CONFIG.BotStealChance },
+{ HubUI.Controls.BotStealDuration, CONFIG.BotStealDuration },
+{ HubUI.Controls.BotStealCooldown, CONFIG.BotStealCooldown },
+{ HubUI.Controls.BotShiftLockResponsiveness, CONFIG.BotShiftLockResponsiveness },
+{ HubUI.Controls.BotShiftLockTurnSpeed, CONFIG.BotShiftLockTurnSpeed },
+{ HubUI.Controls.BotFacingLead, CONFIG.BotFacingLead },
+{ HubUI.Controls.BotDecisionInterval, CONFIG.BotDecisionInterval },
+{ HubUI.Controls.BotPredictionVariance, CONFIG.BotPredictionVariance },
+{ HubUI.Controls.BotGapVariance, CONFIG.BotGapVariance },
+{ HubUI.Controls.BotMistakeChance, CONFIG.BotMistakeChance },
+{ HubUI.Controls.BotMistakeDistance, CONFIG.BotMistakeDistance },
+{ HubUI.Controls.BotMistakeDuration, CONFIG.BotMistakeDuration },
+{ HubUI.Controls.BotCommitTime, CONFIG.BotCommitTime },
+{ HubUI.Controls.BotMovementPattern, CONFIG.BotMovementPattern },
+{ HubUI.Controls.BotZigzagWidth, CONFIG.BotZigzagWidth },
+{ HubUI.Controls.BotZigzagSpeed, CONFIG.BotZigzagSpeed },
+{ HubUI.Controls.BotForceOffset, CONFIG.BotForceOffset },
+{ HubUI.Controls.BotAutoContest, CONFIG.BotAutoContest ~= false },
+{ HubUI.Controls.BotContestRange, CONFIG.BotContestRange },
+{ HubUI.Controls.BotContestHeight, CONFIG.BotContestHeight },
+{ HubUI.Controls.BotSolid, CONFIG.BotSolid ~= false },
+{ HubUI.Controls.BotHighlight, CONFIG.BotHighlight ~= false },
 { HubUI.Controls.AutoHeadRide, State.AutoHeadRide.Enabled },
 { HubUI.Controls.AutoHeadRideAutoJump, CONFIG.AutoHeadRideAutoJump },
 { HubUI.Controls.AutoHeadRideManualOverride,
@@ -35491,6 +36754,14 @@ CONFIG.PerfectReleaseAutoCalibrate },
 { HubUI.Controls.Trajectory, CONFIG.TrajectoryPreviewEnabled },
 { HubUI.Controls.ArcPreview, CONFIG.ArcPreviewEnabled },
 { HubUI.Controls.ArcPreviewMarker, CONFIG.ArcPreviewLandingMarker },
+{ HubUI.Controls.CosmeticStudio, CONFIG.CosmeticStudioEnabled == true },
+{ HubUI.Controls.CustomBodyAuraEnabled, CONFIG.CustomBodyAuraEnabled == true },
+{ HubUI.Controls.CustomBodyAuraTint, CONFIG.CustomBodyAuraTint == true },
+{ HubUI.Controls.CustomBodyTrailEnabled, CONFIG.CustomBodyTrailEnabled == true },
+{ HubUI.Controls.CustomBallAuraEnabled, CONFIG.CustomBallAuraEnabled == true },
+{ HubUI.Controls.CustomBallAuraTint, CONFIG.CustomBallAuraTint == true },
+{ HubUI.Controls.CustomCourtOverlayEnabled, CONFIG.CustomCourtOverlayEnabled == true },
+{ HubUI.Controls.CustomGoalBurstEnabled, CONFIG.CustomGoalBurstEnabled == true },
 { HubUI.Controls.BallStudio, CONFIG.BallStudioEnabled },
 { HubUI.Controls.BallFlightTrail, CONFIG.BallFlightTrail },
 { HubUI.Controls.ShotSound, CONFIG.ShotSoundEnabled },
@@ -35635,7 +36906,6 @@ CONFIG.AntiReachCounterRadius },
 { HubUI.Controls.TurnaroundMinimumBackAngle, CONFIG.TurnaroundMinimumBackAngle },
 { HubUI.Controls.TurnaroundDuration, CONFIG.TurnaroundDuration },
 { HubUI.Controls.TurnaroundCooldown, CONFIG.TurnaroundCooldown },
-{ HubUI.Controls.AutoOffenseTurnAround, CONFIG.AutoOffenseTurnAround },
 { HubUI.Controls.AutoBodyHandRevertDeadzone,
 CONFIG.AutoBodyHandRevertDeadzone },
 { HubUI.Controls.AutoMixRange, CONFIG.AutoMixRange },
@@ -35671,6 +36941,15 @@ CONFIG.AutoBodyHandRevertDeadzone },
 { HubUI.Controls.StepbackRandomChance, CONFIG.StepbackRandomChance },
 { HubUI.Controls.StepbackDefenderRange, CONFIG.StepbackDefenderRange },
 { HubUI.Controls.StepbackEdgeMargin, CONFIG.StepbackEdgeMargin },
+{ HubUI.Controls.CustomBodyAuraScale, CONFIG.CustomBodyAuraScale },
+{ HubUI.Controls.CustomBodyAuraR, CONFIG.CustomBodyAuraR },
+{ HubUI.Controls.CustomBodyAuraG, CONFIG.CustomBodyAuraG },
+{ HubUI.Controls.CustomBodyAuraB, CONFIG.CustomBodyAuraB },
+{ HubUI.Controls.CustomBodyTrailWidth, CONFIG.CustomBodyTrailWidth },
+{ HubUI.Controls.CustomBodyTrailLifetime, CONFIG.CustomBodyTrailLifetime },
+{ HubUI.Controls.CustomBallAuraScale, CONFIG.CustomBallAuraScale },
+{ HubUI.Controls.CustomCourtR, CONFIG.CustomCourtR },
+{ HubUI.Controls.CustomGoalBurstScale, CONFIG.CustomGoalBurstScale },
 }
 for _, Data in ipairs(NumberValues) do
 if Data[1] and Data[1].Value ~= Data[2] then Data[1]:Set(Data[2], false) end
@@ -35966,7 +37245,6 @@ DunkLaneCheck = 'Only triggers the auto dunk when the driving lane is actually c
 DunkRangeIndicator = 'Shows the zone where the auto dunk can trigger.',
 DunkManualOverride = 'Your own inputs instantly cancel an in-progress auto dunk.',
 DunkRandomOwned = 'Picks a random dunk you own each time instead of repeating one.',
-AutoRage = 'One-switch rage preset: maximum reach, 19 WalkSpeed, adaptive guard, full silent aim, and 19-speed velocity flight that carries the ball directly through the rim while holding dunk.',
 AutoPass = 'Automatically passes to the best open teammate when you are pressured.',
 AutoSelfPass = 'Bounces the ball off the board or floor back to yourself for self-alley plays.',
 JumpBeforePass = 'Hops right before passing to sell fake animations.',
@@ -35975,12 +37253,43 @@ PassArcMode = 'Arc shape used for automatic passes. Flat is fastest, lob clears 
 PassRangeIndicator = 'Shows the range where auto pass will consider teammates.',
 AutoDefense = 'Defensive autopilot. Marks the ball handler, mirrors movement, and contests shots.',
 AutoDefenseNoclip = 'Lets the defense autopilot clip through screens to stay attached. Very visible.',
+BotEnabled = 'Spawns a local R6 Humanoid defender with natural WalkSpeed, physics, shift-lock strafing, and humanized reads.',
+BotStyle = 'Predictive anticipates; Mirror maintains the rim line; Cutoff attacks drives; Smother crowds; Force Left/Right shades; Legit reacts conservatively.',
+BotMoveMethod = 'Humanoid Move calls Humanoid:Move every frame. MoveTo uses the Humanoid destination API. Neither CFrames the BOT during defense.',
+BotShiftLock = 'Faces the handler with AlignOrientation while Humanoid:Move strafes and backpedals like a shift-lock defender.',
+BotShiftLockTarget = 'Player faces the body, Ball faces the held ball, and Movement leads the handler velocity.',
+BotHumanize = 'Adds sampled decisions, prediction and gap variance, direction commitment, and configurable wrong steps.',
+BotGuardGap = 'Spacing the BOT keeps from you at all times (minimum 1.8 studs, like a real defender). It only gets closer during a timed steal lunge at the ball hitbox.',
+BotPrediction = 'Movement prediction in seconds. Negative values trail the handler; positive values anticipate drives.',
+BotReactionDelay = 'Delay before a new defensive destination is accepted. Higher values create slower human reactions.',
+BotSmoothing = 'Smooths direction passed to Humanoid:Move. Low is heavy; high is sharp.',
+BotLateralLead = 'Side-to-side anticipation. Negative values trail lateral movement; positive values cut it off.',
+BotStopDistance = 'Distance from the selected defensive spot where the Humanoid stops and idles.',
+BotShiftLockResponsiveness = 'How strongly the physics orientation follows its shift-lock target.',
+BotShiftLockTurnSpeed = 'Maximum physics turn speed in degrees per second.',
+BotFacingLead = 'How far shift lock looks ahead or behind handler movement.',
+BotDecisionInterval = 'Time between human defensive reads. The actual interval gets a small natural random variation.',
+BotPredictionVariance = 'Random variation around prediction time on each human read.',
+BotGapVariance = 'Random spacing variation so the defender does not hold an exact robotic gap.',
+BotMistakeChance = 'Chance per decision for a brief wrong step. Set to 0 for no mistakes.',
+BotMistakeDistance = 'Maximum size of a generated wrong step.',
+BotMistakeDuration = 'How long a wrong step influences the defensive destination.',
+BotCommitTime = 'Minimum time the defender commits to a direction before fully changing course.',
+BotMovementPattern = 'Direct uses normal defensive routes. Zigzag moves the destination while Humanoid locomotion stays natural.',
+BotAutoContest = 'Uses Humanoid.Jump and the normal Jumping state when you begin a jump shot.',
+BotContestRange = 'Maximum distance where the R6 Humanoid attempts a jump contest.',
+BotContestHeight = 'Natural Humanoid jump height used for contests.',
+BotStealAttempts = 'Lets the BOT lunge into the ball hitbox for a steal, exactly how steals connect in the real game. Outside a lunge it always keeps its spacing.',
+BotStealRange = 'How close the ball must be before the BOT considers a steal lunge.',
+BotStealChance = 'Chance per defensive read that an in-range ball triggers a steal lunge.',
+BotStealDuration = 'How long the BOT commits to running through the ball hitbox before returning to its spacing.',
+BotStealCooldown = 'Minimum time between steal attempts.',
+BotSolid = 'Restores natural R6 body collisions. Off keeps only torso floor collision.',
+BotHighlight = 'Adds a silver outline while leaving the avatar fully opaque.',
 AutoGuard = 'Sticks to your assigned matchup and mirrors their movement on defense.',
 GuardMode = 'How the auto guard picks who to lock onto.',
 GuardStyle = 'How tightly the auto guard presses. Tight denies drives, soft protects the paint.',
 AutoOffense = 'Offensive autopilot. Drives, spaces, and takes shots automatically.',
-AutoOffenseTurnAround = 'Base defender distance where Auto Offense turns its back to seal the drive. Ping and closing speed can make the live trigger fire earlier.',
-AutoOffensePingAware = 'Reads the defender ping when available, otherwise uses target replication age, and adds latency lead to movement prediction and the turnaround trigger.',
 OffenseStyle = 'Shot selection profile the offense autopilot uses.',
 OffenseManualOverride = 'Your own inputs instantly take control back from the offense autopilot.',
 AutoMix = 'Manual-first mixer: Auto Body stays active while your real F/G inputs perform the handles and spins.',
@@ -36002,7 +37311,7 @@ AutoHeadRide = 'Follows a chosen player and rides on top of them. Meme feature, 
 AutoTipOff = 'Times the opening tip-off jump automatically.',
 BallMagRadius = 'Pull radius in studs for the ball magnet. Keep at 12 or less to stay subtle.',
 BallMagSpeed = 'How fast the magnet drags loose balls toward you.',
-BallReachRadius = 'Extra steal reach in studs. Adjustable from 2 to 100; high values are very noticeable.',
+BallReachRadius = 'Extra steal reach in studs. 6 to 8 stays under the radar.',
 AntiReachCounterRadius = 'Radius where reach-steal attempts against you get countered.',
 AntiReachCounterWindow = 'Time window after a steal attempt where the counter stays active.',
 AntiReachNoStealRange = 'Range of the no-steal protection bubble.',
@@ -37390,17 +38699,6 @@ State.AutoDunk.Target and string.format('%.1f studs', State.AutoDunk.TargetDista
 State.AutoDunkMode,
 State.AutoDunkRandomOwned and (State.AutoDunk.SelectedDunk or 'Random owned') or 'Equipped rotation'
 )
-if HubUI.AutoRageStatusText then
-local Rage = State.AutoRage
-HubUI.AutoRageStatusText.Text = string.format(
-'STATUS  %s\nBALL    %s\nRIM     %s\nLOADOUT REACH %d | SPEED %d | GUARD + AIM',
-Rage.Status or 'OFF',
-Rage.HasPossession and 'POSSESSED' or 'SEARCHING',
-Rage.Target and string.format('%.1f STUDS', Rage.TargetDistance) or '--',
-math.floor(tonumber(CONFIG.AutoRageReach) or 100),
-math.floor(tonumber(CONFIG.AutoRageSpeed) or 19)
-)
-end
 if HubUI.AutoHeadRideStatusText then
 HubUI.AutoHeadRideStatusText.Text = string.format(
 'STATUS  %s\nTARGET  %s\nDIST    %s',
@@ -37412,17 +38710,11 @@ and string.format('%.1f studs', State.AutoHeadRide.TargetDistance) or '--'
 end
 if HubUI.OffenseStatusText then
 HubUI.OffenseStatusText.Text = string.format(
-'STATUS  %s\nTARGET  %s\nPLAN    %s\nDEFENDER  %s | PING %s\nTURN    %.1f BASE | %.1f LIVE\nBALL REACH  %s\nCOURT   %s | EDGE %s\nSHOT    at 72 studs with Silent Aim',
+'STATUS  %s\nTARGET  %s\nPLAN    %s\nANTIRIP %s\nBALL REACH  %s\nCOURT   %s | EDGE %s\nSHOT    at 72 studs with Silent Aim',
 State.AutoOffense.Status,
 State.AutoOffense.Target and string.format('%.1f studs', State.AutoOffense.TargetDistance) or '--',
 State.AutoOffense.DriveStatus or 'GOAL STRAFE TO 72 LINE',
-State.AutoOffense.DefenderPingPlayer
-and ('@' .. State.AutoOffense.DefenderPingPlayer.Name) or '--',
-State.AutoOffense.DefenderPingMs > 0
-and string.format('%.0f MS (%s)', State.AutoOffense.DefenderPingMs,
-State.AutoOffense.DefenderPingSource or 'EST') or '--',
-tonumber(CONFIG.AutoOffenseTurnAround) or 9,
-tonumber(State.AutoOffense.EffectiveCutoff) or tonumber(CONFIG.AutoOffenseTurnAround) or 9,
+State.AutoOffense.AntiRipStatus or 'ARMED',
 State.AutoOffense.DefenderCanReachBall and 'YES - CUT BACK' or 'NO - HOLD SIDE',
 State.AutoOffense.BoundaryStatus or 'CLEAR',
 State.AutoOffense.EdgeClearance < math.huge
@@ -37581,6 +38873,22 @@ and (State.Utility.TravelHookMode or 'NOT INSTALLED')
 or 'OFF',
 State.Utility.TravelBlocked
 )
+
+if HubUI.BotStatusText then
+local DistanceText = State.BotDefender.Distance < math.huge
+and string.format('%.1f STUDS', State.BotDefender.Distance) or '--'
+local ShiftText = CONFIG.BotShiftLock ~= false
+and ('SHIFTLOCK ' .. tostring(State.BotDefender.ShiftLockFacing or 'PLAYER')) or 'AUTO ROTATE'
+HubUI.BotStatusText.Text = string.format(
+'STATUS  %s\nRIG     %s HUMANOID | WS 16\nMOVE    %s\nFACE    %s\nREADS   %s\nDIST    %s',
+State.BotDefender.Status or 'OFF',
+State.BotDefender.RigLabel or 'R6',
+tostring(CONFIG.BotMoveMethod or 'Humanoid Move'),
+ShiftText,
+tostring(State.BotDefender.HumanStatus or 'HUMAN READS'),
+DistanceText
+)
+end
 
 if HubUI.GhostRecordStatus then
 HubUI.GhostRecordStatus.Text = string.format(
@@ -38714,6 +40022,7 @@ pcall(State.LocalSpoofs.RestoreGoalEffects)
 pcall(function() ClearManualBodyAura(LP.Character) end)
 pcall(function() State.AutoBody.SetEnabled(false) end)
 pcall(function() State.AutoDefense.SetEnabled(false) end)
+pcall(function() State.BotDefender.SetEnabled(false) end)
 pcall(function()
 State.AutoHeadRide.Enabled = false
 CONFIG.AutoHeadRide = false
@@ -38750,7 +40059,6 @@ State.AutoHeadRide.Enabled = false
 State.AutoHeadRide.Target = nil
 State.AutoDunkEnabled = false
 State.AutoDunkStatus = 'OFF'
-if State.AutoRage then State.AutoRage.Cleanup() end
 State.AutoQueueEnabled = false
 State.AutoPassEnabled = false
 State.AutoSelfPassEnabled = false
@@ -38761,7 +40069,6 @@ CONFIG.AutoGuard = false
 CONFIG.AutoGetOpen = false
 CONFIG.AutoHeadRide = false
 CONFIG.AutoDunk = false
-CONFIG.AutoRage = false
 CONFIG.AutoQueue = false
 CONFIG.AutoPass = false
 CONFIG.AutoSelfPass = false
@@ -38786,12 +40093,12 @@ AUTO_GUARD_BIND_NAME,
 AUTO_BODY_BIND_NAME,
 LEGIT_AIM_BIND_NAME,
 State.AutoDunk and State.AutoDunk.BindName,
-State.AutoRage and State.AutoRage.BindName,
 State.AutoOffense and State.AutoOffense.BindName,
 State.Outline and State.Outline.BindName,
 State.Movement and State.Movement.FlightRenderName,
 State.Freecam and State.Freecam.BindName,
 State.AutoMix and State.AutoMix.ShiftLockBindName,
+State.BotDefender and State.BotDefender.BindName,
 'SilverSurferProfileStatsLock',
 }) do
 if BindName then pcall(function() State.Lifecycle:UnbindFromRenderStep(BindName) end) end
@@ -38801,6 +40108,7 @@ SilentAim.RestoreAllHooks()
 ClearPassLabels()
 if State.MobilePass then State.MobilePass.Clear() end
 DestroyVisuals()
+pcall(State.CosmeticStudio.Cleanup)
 pcall(State.BallStudio.Cleanup)
 pcall(State.PassRange.Destroy)
 pcall(function() State.Watch.SetActive(false) end)
@@ -38855,11 +40163,11 @@ State.Utility.SetAntiFall(CONFIG.AntiFall)
 if CONFIG.AutoStreamerMode then State.Utility.SetStreamerMode(true) end
 BindSelfPassJumpDetector()
 if State.AutoGuardEnabled then UpdateAutoGuardBinding() end
+if State.BotDefender.Enabled then State.BotDefender.UpdateBinding() end
 if State.AutoBody.Enabled then UpdateAutoBodyBinding() end
 if State.AutoGetOpenEnabled then UpdateAutoGetOpenBinding() end
 if State.AutoDunkEnabled then State.AutoDunk.UpdateBinding() end
 if State.AutoOffense.Enabled then State.AutoOffense.UpdateBinding() end
-if State.AutoRageEnabled and State.AutoRage then State.AutoRage.SetEnabled(true, false) end
 pcall(function() if type(writefile) == 'function' then writefile('SilverSurfer_Crash.txt', '[STAGE] Building safe interface.\n') end end)
 State.UiBuildResult = table.pack(pcall(State.BuildSilentAimHub))
 if not State.UiBuildResult[1] then
