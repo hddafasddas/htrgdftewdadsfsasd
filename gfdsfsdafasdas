@@ -525,6 +525,12 @@ AutoDunkRandomOwned = false,
 
 AutoOffense = false,
 AutoOffenseMode = 'balanced',
+AutoOffenseBehavior = 'adaptive',
+AutoOffensePredictive = true,
+AutoOffenseNativeHandles = true,
+AutoOffenseRimSafeHand = true,
+AutoOffenseContinueAfterShot = true,
+AutoOffenseShotCooldown = 0.90,
 AutoOffenseManualOverride = true,
 AutoOffenseStyle = 'Get To Spot',
 AutoOffenseTurnAround = 9,
@@ -17712,6 +17718,20 @@ State.AutoMix.SafestMove = Choice.Name
 return Choice.Name
 end
 
+State.AutoMix.NativeActionDefaults = {
+Increase_power = Enum.KeyCode.E,
+Decrease_power = Enum.KeyCode.Q,
+Switch_handles = Enum.KeyCode.H,
+Behind_the_back_left = Enum.KeyCode.F,
+Behind_the_back_right = Enum.KeyCode.G,
+Toggle_shiftlock = Enum.KeyCode.LeftShift,
+Dunk = Enum.KeyCode.T,
+Fake_behind_left = Enum.KeyCode.V,
+Fake_behind_right = Enum.KeyCode.B,
+Fake_out = Enum.KeyCode.R,
+Cross_up = Enum.KeyCode.C,
+}
+
 function State.AutoMix.RawKey(Action)
 local Value
 local Controls = safe_find(LP, 'Controls1')
@@ -17723,10 +17743,11 @@ pcall(function() Value = PlayerData.Get('Controls_Keyboard', Action) end)
 end
 end
 if typeof(Value) == 'EnumItem' then return Value end
-if type(Value) ~= 'string' or Value == '' then return nil end
+local Default = State.AutoMix.NativeActionDefaults[Action]
+if type(Value) ~= 'string' or Value == '' then return Default end
 Value = Value:gsub('Enum%.KeyCode%.', '')
 local Ok, Key = pcall(function() return Enum.KeyCode[Value] end)
-return Ok and Key or nil
+return Ok and Key or Default
 end
 
 function State.AutoMix.GetKeyConflict(Action, Key)
@@ -20792,6 +20813,20 @@ return Root.Position + Vector3.new(Velocity.X, 0, Velocity.Z)
 * CONFIG.AutoGetOpenTeammatePrediction
 end
 
+function State.AutoGetOpen.GetNearestLooseBall(Root)
+if not Root or not State.BallAssist then return nil, math.huge end
+local BestBall, BestDistance
+for Ball in pairs(State.BallAssist.Candidates or {}) do
+if Ball and Ball.Parent and State.BallAssist.IsLooseBall(Ball) then
+local Distance = (Ball.Position - Root.Position).Magnitude
+if not BestDistance or Distance < BestDistance then
+BestBall, BestDistance = Ball, Distance
+end
+end
+end
+return BestBall, BestDistance or math.huge
+end
+
 function State.AutoGetOpen.GetAutoGetOpenContext()
 local Character = LP.Character
 local Root = Character and safe_find(Character, 'HumanoidRootPart')
@@ -21211,6 +21246,30 @@ RootPosition
 14, Away, false, 'Backdoor')
 end
 
+if UseSmartSelection then
+local DynamicDepth = math.clamp(
+(Context.BallAnchor - Context.Center):Dot(Context.ToOffense) - 8,
+CONFIG.AutoGetOpenFrontcourtDepth, 34)
+for _, SideSign in ipairs({ -1, 1 }) do
+local DynamicPosition = Context.Center
++ Context.ToOffense * DynamicDepth
++ Context.Right * (SideSign * math.min(HalfWidth * 0.72, 15))
+Finalize(SideSign < 0 and 'Dynamic Left' or 'Dynamic Right',
+DynamicPosition, 6, SideSign, false, nil)
+end
+for _, Spot in ipairs(State.AutoGetOpen.FixedSpots) do
+local GoalDistance = MinimumGoalDistance
++ (MaximumGoalDistance - MinimumGoalDistance) * Spot.GoalDistanceAlpha
+local BasePosition = Context.Goal.Position
+- Context.ToOffense * GoalDistance
++ Context.Right * (HalfWidth * Spot.Lateral)
+for _, Shift in ipairs({ -5, 5 }) do
+Finalize(Spot.Name .. (Shift < 0 and ' Shift L' or ' Shift R'),
+BasePosition + Context.Right * Shift, 2, Spot.Side, true, Spot.Name)
+end
+end
+end
+
 return Candidates
 end
 
@@ -21242,6 +21301,13 @@ end
 end
 
 local RepeatPenalty = 0
+local RecentHeld = State.AutoGetOpenLastHeldPosition
+if RecentHeld then
+local RecentDistance = (Candidate.Position - RecentHeld).Magnitude
+if RecentDistance < 5 then
+RepeatPenalty += 85
+end
+end
 local Cooldowns = State.AutoGetOpenRouteCooldowns
 local AbandonedAt = Cooldowns and Cooldowns[Candidate.Name]
 if AbandonedAt and os.clock() - AbandonedAt
@@ -21885,6 +21951,7 @@ State.AutoGetOpenTarget = nil
 State.AutoGetOpenRoute = 'Waiting'
 State.AutoGetOpenStatus = 'OFF'
 State.AutoGetOpenLastDirection = nil
+State.AutoGetOpenLastHeldPosition = nil
 State.AutoGetOpenLastSide = nil
 State.AutoGetOpenPlanAt = 0
 State.AutoGetOpenPreferenceFallback = false
@@ -21912,6 +21979,29 @@ end
 
 local PlanNow = os.clock()
 local PlanInterval = 1 / 12
+local EarlyCharacter = LP.Character
+local EarlyRoot = EarlyCharacter and EarlyCharacter:FindFirstChild('HumanoidRootPart')
+local EarlyHumanoid = EarlyCharacter and EarlyCharacter:FindFirstChildOfClass('Humanoid')
+if EarlyRoot and EarlyHumanoid and EarlyHumanoid.Health > 0
+and not safe_find(EarlyCharacter, 'Basketball') then
+local LooseBall, LooseDistance = State.AutoGetOpen.GetNearestLooseBall(EarlyRoot)
+if LooseBall and LooseDistance <= 85 then
+local BallDirection = Vector3.new(
+LooseBall.Position.X - EarlyRoot.Position.X, 0,
+LooseBall.Position.Z - EarlyRoot.Position.Z)
+if LooseDistance <= 4.5 and State.BallAssist.TryTouch then
+local TouchPart = State.BallAssist.GetNearestLocalPart(LooseBall)
+pcall(State.BallAssist.TryTouch, LooseBall, TouchPart, false)
+end
+if BallDirection.Magnitude > 0.08 and State.Runtime.AcquireMovement('GetOpen') then
+EarlyHumanoid:Move(BallDirection.Unit, false)
+end
+State.AutoGetOpenTarget = LooseBall.Position
+State.AutoGetOpenRoute = 'Loose ball recovery'
+State.AutoGetOpenStatus = string.format('GOING FOR LOOSE BALL | %.1f', LooseDistance)
+return
+end
+end
 if PlanNow - (State.AutoGetOpenPlanAt or 0) < PlanInterval then
 local Character = LP.Character
 local HumanoidObject = Character and Character:FindFirstChildOfClass('Humanoid')
@@ -22068,12 +22158,22 @@ Target.X - Root.Position.X, 0,
 Target.Z - Root.Position.Z)
 
 if Arrived and IsOpen and CONFIG.AutoGetOpenHoldWhenOpen then
+-- A held spot is valid only until the next decision. Clear the target so the
+-- next planning pass chooses a different open lane instead of strafe-looping.
+State.AutoGetOpenLastHeldPosition = Target
+State.AutoGetOpenTarget = nil
+State.AutoGetOpenLastSelectAt = 0
+State.AutoGetOpenPlanAt = 0
+State.AutoGetOpenLastDirection = nil
+State.AutoGetOpenRoute = 'Retargeting open space'
 State.AutoGetOpenStatus = string.format(
-'OPEN | LATERAL CUT %s | SCORE %.1f',
+'OPEN | HOLDING %s | SCORE %.1f',
 State.AutoGetOpenRoute, State.AutoGetOpenOpenScore or 0)
-State.AutoGetOpen.DriveContinuous(
-Context, HumanoidObject,
-State.AutoGetOpen.ShuffleMove(Context, 1), 1, false)
+State.AutoGetOpenLastDirection = Vector3.zero
+State.AutoGetOpenLastMoveAt = os.clock()
+if State.Runtime.AcquireMovement('GetOpen') then
+HumanoidObject:Move(Vector3.zero, false)
+end
 return
 end
 
@@ -22136,6 +22236,7 @@ State.AutoGetOpenEnabled = Enabled
 CONFIG.AutoGetOpen = Enabled
 State.AutoGetOpenTarget = nil
 State.AutoGetOpenLastSelectAt = 0
+State.AutoGetOpenLastHeldPosition = nil
 State.AutoGetOpenPreferenceFallback = false
 if Enabled then
 -- Re-enabling in practice intentionally picks whichever basket is nearest now.
@@ -23525,10 +23626,16 @@ end
 State.AutoOffense = {
 Enabled = CONFIG.AutoOffense == true,
 Mode = tostring(CONFIG.AutoOffenseMode or 'balanced'),
+BehaviorMode = tostring(CONFIG.AutoOffenseBehavior or 'adaptive'),
+PredictiveEnabled = CONFIG.AutoOffensePredictive ~= false,
+NativeHandlesEnabled = CONFIG.AutoOffenseNativeHandles ~= false,
+RimSafeHandEnabled = CONFIG.AutoOffenseRimSafeHand ~= false,
+ContinueAfterShot = CONFIG.AutoOffenseContinueAfterShot ~= false,
 Status = CONFIG.AutoOffense and 'READY' or 'OFF',
 Target = nil,
 TargetDistance = math.huge,
 LastAction = 0,
+ShotRecoveryUntil = 0,
 ActionCooldown = 1.5,
 ShootChance = 0.45,
 ApproachDistance = 45,
@@ -23569,6 +23676,8 @@ OppositeBallClearance = math.huge,
 StrafeReason = 'GOAL ROUTE',
 LastBallClearance = math.huge,
 LastDefenderDistance = math.huge,
+LastEscapeRoute = nil,
+LastEscapeRouteAt = 0,
 StealLaneAligned = false,
 StealLaneAlignment = -1,
 StealLaneWidth = math.huge,
@@ -23639,6 +23748,14 @@ BoundaryStatus = 'CLEAR',
 EdgeClearance = math.huge,
 LastLineAttempt = 0,
 LineShotDistance = math.huge,
+LastHandleActionAt = 0,
+LastHandleAction = nil,
+LastAutoHandAt = 0,
+AutoHandStatus = 'WAITING',
+LastTauntAt = 0,
+ShotFacingAt = 0,
+ShotShiftLockOwned = false,
+ShotFacingGeneration = 0,
 HadBall = false,
 PossessionAt = 0,
 InboundActive = false,
@@ -23921,6 +24038,12 @@ Humanoid:Move(Escape,false)
 end
 local DefenderRoot=ThreatPlayer and ThreatPlayer.Character
 and safe_find(ThreatPlayer.Character,'HumanoidRootPart')
+local HandleAction
+if DefenderRoot and State.AutoOffense.TryBallProtection then
+HandleAction = State.AutoOffense.TryBallProtection(
+Root, DefenderRoot, Forward, Right,
+BestSign < 0 and 'LEFT' or 'RIGHT')
+end
 if DefenderRoot then
 local Away=Root.Position-DefenderRoot.Position
 Away=Vector3.new(Away.X,0,Away.Z)
@@ -23929,7 +24052,8 @@ State.AutoOffense.FaceDirection(Root,Away.Unit,DeltaTime,145)
 end
 end
 local Shield=State.AutoOffense.TryEarlyNoSteal(Now)
-State.AutoOffense.ProtectStatus=Shield
+State.AutoOffense.ProtectStatus = HandleAction
+and (Shield .. ' | ' .. HandleAction) or Shield
 State.AutoOffense.AntiRipStatus=string.format(
 'CUT %s | %.2f | %dMS | %s',
 BestSign<0 and 'LEFT' or 'RIGHT',ThreatClearance,
@@ -24095,6 +24219,53 @@ State.AutoOffense.Mode = Safe and 'conservative' or 'aggressive'
 CONFIG.AutoOffenseMode = State.AutoOffense.Mode
 State.AutoOffense.CaptureTunables()
 State.AutoOffense.LastAction = 0
+end
+
+function State.AutoOffense.GetBehaviorProfile()
+local Mode = State.AutoOffense.BehaviorMode or 'adaptive'
+if Mode == 'humanized' then
+return {
+Mode = Mode, Response = 8, RepeatWindow = 0.95,
+RepeatPenalty = 24, PredictionTime = 0.22,
+RouteCommit = 0.72, ShotCooldown = 0.45,
+}
+elseif Mode == 'robotic' then
+return {
+Mode = Mode, Response = 30, RepeatWindow = 0.20,
+RepeatPenalty = 5, PredictionTime = 0.40,
+RouteCommit = 0.95, ShotCooldown = 0.28,
+}
+end
+return {
+Mode = 'adaptive', Response = 14, RepeatWindow = 0.55,
+RepeatPenalty = 18, PredictionTime = 0.30,
+RouteCommit = 0.84, ShotCooldown = 0.35,
+}
+end
+
+function State.AutoOffense.ApplyBehaviorProfile()
+local Profile = State.AutoOffense.GetBehaviorProfile()
+State.AutoOffense.BehaviorProfile = Profile
+State.AutoOffense.BehaviorStatus = string.upper(Profile.Mode)
+State.AutoOffense.RouteResponse = Profile.Response
+State.AutoOffense.RouteRepeatWindow = Profile.RepeatWindow
+State.AutoOffense.RouteRepeatPenalty = Profile.RepeatPenalty
+State.AutoOffense.DefenderPredictionTime = Profile.PredictionTime
+State.AutoOffense.ShotCooldown = Profile.ShotCooldown
+return Profile
+end
+
+function State.AutoOffense.SetBehaviorMode(Mode)
+Mode = string.lower(tostring(Mode or 'adaptive'))
+if Mode ~= 'humanized' and Mode ~= 'robotic' and Mode ~= 'adaptive' then
+Mode = 'adaptive'
+end
+State.AutoOffense.BehaviorMode = Mode
+CONFIG.AutoOffenseBehavior = Mode
+State.AutoOffense.ApplyBehaviorProfile()
+State.AutoOffense.LastEscapeRoute = nil
+State.AutoOffense.LastEscapeRouteAt = 0
+if HubUI and HubUI.Sync then pcall(HubUI.Sync) end
 end
 
 function State.AutoOffense.SetSimple(Key, Value)
@@ -24520,6 +24691,8 @@ State.AutoOffense.OppositeBallClearance = math.huge
 State.AutoOffense.StrafeReason = 'GOAL ROUTE'
 State.AutoOffense.LastBallClearance = math.huge
 State.AutoOffense.LastDefenderDistance = math.huge
+State.AutoOffense.LastEscapeRoute = nil
+State.AutoOffense.LastEscapeRouteAt = 0
 State.AutoOffense.StealLaneAligned = false
 State.AutoOffense.StealLaneAlignment = -1
 State.AutoOffense.StealLaneWidth = math.huge
@@ -24909,6 +25082,34 @@ State.AutoOffense.LastAction = os.clock()
 State.AutoOffense.Status = Status or 'READY'
 end
 
+function State.AutoOffense.IsNaturalShotPosition(Root, Humanoid, Rim, Distance, DefenderRoot, DefenderDistance, BallClearance)
+if not (Root and Humanoid and Rim) then return false, 'NO SHOT POSITION' end
+if Humanoid.PlatformStand or Humanoid.FloorMaterial == Enum.Material.Air then
+return false, 'WAITING FOR GROUND'
+end
+if Distance < 48 or Distance > 72 then return false, 'OUTSIDE SHOT WINDOW' end
+local Velocity = Root.AssemblyLinearVelocity
+local HorizontalVelocity = Vector3.new(Velocity.X, 0, Velocity.Z).Magnitude
+if HorizontalVelocity > 5.5 then return false, 'SET FEET' end
+local ToRim = Vector3.new(
+Rim.Position.X - Root.Position.X, 0,
+Rim.Position.Z - Root.Position.Z)
+if ToRim.Magnitude <= 0.05 then return false, 'NO SHOT DIRECTION' end
+local Facing = Vector3.new(Root.CFrame.LookVector.X, 0, Root.CFrame.LookVector.Z)
+if Facing.Magnitude <= 0.05 or Facing.Unit:Dot(ToRim.Unit) < 0.20 then
+return false, 'FACE THE RIM'
+end
+local MinimumSeparation = math.max(
+8.5, tonumber(State.AutoOffense.StealThreatDistance) or 6.5)
+if DefenderRoot and DefenderDistance < MinimumSeparation then
+return false, 'CREATE SEPARATION'
+end
+if (tonumber(BallClearance) or math.huge) < 5.5 then
+return false, 'PROTECT BALL'
+end
+return true, 'READY'
+end
+
 function State.AutoOffense.PerformShoot()
 if State.AutoOffense.InProgress then return false end
 local CanShoot, RimOrReason, Distance = State.AutoOffense.CanShoot()
@@ -24921,6 +25122,8 @@ State.AutoOffense.Generation += 1
 local Generation = State.AutoOffense.Generation
 State.AutoOffense.InProgress = true
 State.AutoOffense.ActionType = 'SHOOT'
+local Profile = State.AutoOffense.ApplyBehaviorProfile()
+State.AutoOffense.ShotRecoveryUntil = os.clock() + Profile.ShotCooldown
 State.AutoOffense.Status = 'SHOOTING'
 State.AutoOffense.Target = RimOrReason
 State.AutoOffense.TargetDistance = Distance or math.huge
@@ -24937,6 +25140,16 @@ State.AutoOffense.StopSmoothMovement(Humanoid)
 Humanoid.Jump = true
 pcall(function() Humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end)
 
+-- Release the action lock quickly. The shot still completes, but the route
+-- controller resumes walking during recovery instead of freezing mid-play.
+State.Lifecycle:Delay(0.18, function()
+if Generation == State.AutoOffense.Generation then
+State.AutoOffense.InProgress = false
+State.AutoOffense.LastAction = os.clock()
+State.AutoOffense.ActionType = 'POST SHOT ROUTE'
+State.AutoOffense.Status = 'POST-SHOT CONTINUE'
+end
+end)
 State.Lifecycle:Delay(1.2, function()
 State.AutoOffense.FinishAction(Generation, 'READY')
 end)
@@ -25170,8 +25383,8 @@ end
 Target = Target.Unit
 local Current = State.AutoOffense.SmoothedMoveDirection or Vector3.zero
 local Step = math.clamp(tonumber(DeltaTime) or (1 / 60), 0, 0.1)
-local Response = 14
-local Alpha = 1 - math.exp(-Response * Step)
+local Profile = State.AutoOffense.ApplyBehaviorProfile()
+local Alpha = 1 - math.exp(-Profile.Response * Step)
 if Avoiding then Alpha = math.max(Alpha, 0.55) end
 local Smoothed = Current:Lerp(Target, Alpha)
 if Smoothed.Magnitude > 1 then Smoothed = Smoothed.Unit end
@@ -25477,6 +25690,202 @@ local Direction = Forward * 0.52 + Right * Sign
 return Direction.Magnitude > 0.001 and Direction.Unit or Forward
 end
 
+function State.AutoOffense.SelectAdaptiveDriveDirection(Root, DefenderRoot, Forward, Right, Court, Rim)
+if not (Root and Forward and Right) then return Forward, 'FORWARD' end
+local Now = os.clock()
+local Routes = {
+{ Name = 'FORWARD LEFT', Direction = Forward * 0.92 - Right * 0.55 },
+{ Name = 'FORWARD RIGHT', Direction = Forward * 0.92 + Right * 0.55 },
+{ Name = 'LEFT', Direction = Forward * 0.38 - Right * 0.94 },
+{ Name = 'RIGHT', Direction = Forward * 0.38 + Right * 0.94 },
+{ Name = 'BODY LEFT', Direction = Forward * 0.18 - Right * 0.98 },
+{ Name = 'BODY RIGHT', Direction = Forward * 0.18 + Right * 0.98 },
+}
+local Opponents = {}
+for _, Player in ipairs(Players:GetPlayers()) do
+if Player ~= LP and IsGuardOpponent(Player) then
+local Character = Player.Character
+local OpponentRoot = Character and Character:FindFirstChild('HumanoidRootPart')
+if OpponentRoot then Opponents[#Opponents + 1] = OpponentRoot end
+end
+end
+if DefenderRoot and not table.find(Opponents, DefenderRoot) then
+Opponents[#Opponents + 1] = DefenderRoot
+end
+local CrowdFactor = 1 + math.clamp(#Opponents - 1, 0, 4) * 0.12
+local LastRoute = State.AutoOffense.LastEscapeRoute
+local LastRouteAt = State.AutoOffense.LastEscapeRouteAt or 0
+local Profile = State.AutoOffense.ApplyBehaviorProfile()
+if State.AutoOffense.PredictiveEnabled == false then
+return Forward, 'DIRECT'
+end
+local RepeatWindow = Profile.RepeatWindow
+local RepeatPenalty = Profile.RepeatPenalty
+local Best, BestScore = nil, -math.huge
+for _, Route in ipairs(Routes) do
+local Direction = Route.Direction
+if Direction.Magnitude <= 0.01 then continue end
+Direction = Direction.Unit
+local Probe = Root.Position + Direction * math.clamp(
+State.AutoOffense.DriveLaneDistance or 9, 6, 14)
+local Score = Direction:Dot(Forward) * 9
+local LaneRoom = State.AutoOffense.LaneRoom(
+Root.Position, Direction, Court, State.AutoOffense.KeepInDistance,
+'adaptive-' .. Route.Name)
+Score += math.clamp(LaneRoom, -20, 20) * 1.4
+if Rim then
+local ToRim = Vector3.new(
+Rim.Position.X - Probe.X, 0, Rim.Position.Z - Probe.Z)
+if ToRim.Magnitude > 0.01 then
+Score += Direction:Dot(ToRim.Unit) * 5
+end
+end
+local MinimumClearance = 60
+for _, OpponentRoot in ipairs(Opponents) do
+local Velocity = OpponentRoot.AssemblyLinearVelocity
+local FlatVelocity = Vector3.new(Velocity.X, 0, Velocity.Z)
+local Predicted = OpponentRoot.Position
++ FlatVelocity * math.clamp(
+State.AutoOffense.DefenderPredictionTime or 0.28, 0.12, 0.65)
+local Clearance = (Predicted - Probe).Magnitude
+MinimumClearance = math.min(MinimumClearance, Clearance)
+local Closing = FlatVelocity.Magnitude > 0.05
+and FlatVelocity.Unit:Dot((Root.Position - Predicted).Unit) or 0
+local SameRouteMotion = FlatVelocity.Magnitude > 0.05
+and FlatVelocity.Unit:Dot(Direction) or 0
+Score += Clearance * (2.2 * CrowdFactor)
+Score -= math.max(0, Closing) * 1.8
+-- Do not follow the defender’s travel vector. Cross or oppose it instead.
+Score -= math.max(0, SameRouteMotion - 0.10) * 22
+Score += math.max(0, -SameRouteMotion) * 4
+end
+Score += math.clamp(MinimumClearance, 0, 24) * CrowdFactor
+if LastRoute == Route.Name
+and Now - LastRouteAt < math.max(RepeatWindow,
+State.AutoOffense.StrafeFlipCooldown or 0.45) then
+Score -= RepeatPenalty
+end
+if State.AutoOffense.PendingHardCut then
+Score += (Route.Name:find('LEFT', 1, true) and 2 or 0)
+end
+local Inside, _, EdgeClearance = State.AutoOffense.GetSafeCourtBounds(Probe, Court)
+if not Inside then Score -= 100 end
+Score += math.clamp(tonumber(EdgeClearance) or 0, 0, 10) * 0.5
+if Score > BestScore then
+Best, BestScore = { Direction = Direction, Name = Route.Name }, Score
+end
+end
+if not Best then return Forward, 'FORWARD' end
+if Best.Name ~= LastRoute then
+State.AutoOffense.LastEscapeRoute = Best.Name
+State.AutoOffense.LastEscapeRouteAt = Now
+end
+return Best.Direction, Best.Name
+end
+
+function State.AutoOffense.GetProtectedHand(Root, DefenderRoot, Forward, Right, RouteName)
+if not (Root and Forward and Right) then return nil end
+local DesiredHand
+local RouteText = tostring(RouteName or '')
+if RouteText:find('RIGHT', 1, true) then
+DesiredHand = 'R'
+elseif RouteText:find('LEFT', 1, true) then
+DesiredHand = 'L'
+else
+local Rim = State.AutoOffense.Target
+if not (Rim and Rim.Parent) then Rim = select(1, State.AutoOffense.GetScoringGoal()) end
+if Rim then
+local ToRim = Vector3.new(
+Rim.Position.X - Root.Position.X, 0,
+Rim.Position.Z - Root.Position.Z)
+if ToRim.Magnitude > 0.05 then
+DesiredHand = Right:Dot(ToRim.Unit) >= 0 and 'R' or 'L'
+end
+end
+end
+if DefenderRoot then
+local Offset = DefenderRoot.Position - Root.Position
+local Flat = Vector3.new(Offset.X, 0, Offset.Z)
+local Distance = Flat.Magnitude
+if Distance <= 13 and Distance > 0.05 then
+local DefenderSide = Flat.Unit:Dot(Right)
+if math.abs(DefenderSide) >= 0.18 then
+-- Keep the ball on the hand opposite the defender during pressure.
+DesiredHand = DefenderSide > 0 and 'L' or 'R'
+end
+end
+end
+return DesiredHand
+end
+
+function State.AutoOffense.TryBallProtection(Root, DefenderRoot, Forward, Right, RouteName)
+if not (Root and DefenderRoot and State.AutoMix) then return nil end
+if State.AutoOffense.NativeHandlesEnabled == false then return nil end
+if not GetHeldBasketballModel(LP) then return nil end
+local Now = os.clock()
+local Offset = DefenderRoot.Position - Root.Position
+local FlatOffset = Vector3.new(Offset.X, 0, Offset.Z)
+local Distance = FlatOffset.Magnitude
+if Distance > 16 then return nil end
+local Velocity = DefenderRoot.AssemblyLinearVelocity
+local FlatVelocity = Vector3.new(Velocity.X, 0, Velocity.Z)
+local Closing = FlatOffset.Magnitude > 0.05
+and FlatVelocity:Dot(-FlatOffset.Unit) or 0
+local Action
+if RouteName and RouteName:find('LEFT', 1, true) then
+Action = 'BehindLeft'
+elseif RouteName and RouteName:find('RIGHT', 1, true) then
+Action = 'BehindRight'
+elseif (Closing >= 5 or Distance <= 6.5) then
+Action = 'SwitchHandles'
+else
+Action = (State.AutoOffense.BackdownStrafeSign or 1) < 0
+and 'BehindLeft' or 'BehindRight'
+end
+local CurrentHand = State.AutoBody and State.AutoBody.CurrentHand
+local DesiredHand = State.AutoOffense.GetProtectedHand(
+Root, DefenderRoot, Forward, Right, RouteName)
+local HandUnsafe = State.AutoOffense.RimSafeHandEnabled ~= false
+and DesiredHand and CurrentHand and CurrentHand ~= DesiredHand
+if HandUnsafe then
+Action = 'SwitchHandles'
+end
+local Cooldown = Action == 'SwitchHandles' and 0.85 or 0.55
+if Now - (State.AutoOffense.LastHandleActionAt or 0) >= Cooldown
+and not State.AutoMix.Busy then
+if State.AutoMix.Perform(Action) then
+State.AutoOffense.LastHandleActionAt = Now
+State.AutoOffense.LastHandleAction = Action
+State.AutoOffense.LastAutoHandAt = Now
+State.AutoOffense.AutoHandStatus = Action == 'SwitchHandles'
+and 'H SWITCH' or tostring(Action)
+local ExpectedHand = State.AutoMix.GetExpectedHand(
+Action, State.AutoBody.CurrentHand or 'R')
+if ExpectedHand then State.AutoBody.CurrentHand = ExpectedHand end
+return Action
+end
+end
+if Distance >= 9 and Closing <= 1
+and Now - (State.AutoOffense.LastTauntAt or 0) >= 2.5
+and not State.AutoMix.Busy then
+local Pressed = State.AutoMix.Perform('FakeOut')
+if Pressed then
+State.AutoOffense.LastTauntAt = Now
+return 'FAKE OUT R'
+end
+end
+return nil
+end
+
+function State.AutoOffense.PrepareShotFacing(Root, Humanoid, Rim, DeltaTime)
+-- Auto Offense always shoots outside shift lock. Keep this hook as a
+-- lightweight compatibility point for the existing shot pipeline.
+State.AutoOffense.ShotShiftLockOwned = false
+State.AutoOffense.ShotFacingAt = os.clock()
+State.AutoOffense.ShotFacingGeneration =
+(State.AutoOffense.ShotFacingGeneration or 0) + 1
+end
+
 function State.AutoOffense.Step(DeltaTime)
 if not (State.Active and State.AutoOffense.Enabled) then return end
 if false then
@@ -25506,6 +25915,26 @@ end
 
 local HeldBall = GetHeldBasketballModel(LP)
 if not HeldBall then
+local LooseBall, LooseDistance = State.AutoGetOpen.GetNearestLooseBall(Root)
+if LooseBall and LooseDistance <= 85 then
+local BallDirection = Vector3.new(
+LooseBall.Position.X - Root.Position.X, 0,
+LooseBall.Position.Z - Root.Position.Z)
+if LooseDistance <= 4.5 and State.BallAssist.TryTouch then
+local TouchPart = State.BallAssist.GetNearestLocalPart(LooseBall)
+pcall(State.BallAssist.TryTouch, LooseBall, TouchPart, false)
+end
+if BallDirection.Magnitude > 0.08 then
+State.AutoOffense.MoveSmooth(Humanoid, Root, BallDirection, DeltaTime, State.AutoOffense.GetCourt())
+else
+State.AutoOffense.StopSmoothMovement(Humanoid)
+end
+State.AutoOffense.Status = string.format('RECOVERING LOOSE BALL | %.1f', LooseDistance)
+State.AutoOffense.ActionType = 'BALL RECOVERY'
+State.AutoOffense.Target = LooseBall.Position
+State.AutoOffense.TargetDistance = LooseDistance
+return
+end
 State.AutoOffense.HadBall = false
 State.AutoOffense.InboundActive = false
 State.AutoOffense.InboundStartPosition = nil
@@ -25522,6 +25951,23 @@ local NewPossession = not State.AutoOffense.HadBall
 if NewPossession then
 State.AutoOffense.HadBall = true
 State.AutoOffense.PossessionAt = os.clock()
+-- A recovered ball cancels any stale shot/action lock from the previous
+-- possession so the offense immediately resumes movement and protection.
+State.AutoOffense.InProgress = false
+State.AutoOffense.ShotRecoveryUntil = 0
+State.AutoOffense.Generation += 1
+State.AutoOffense.LastAction = 0
+State.AutoOffense.ActionType = 'POSSESSION RECOVERED'
+State.AutoOffense.SmoothedMoveDirection = Vector3.zero
+State.AutoOffense.LastIssuedDirection = Vector3.zero
+State.AutoOffense.DriveActive = false
+State.AutoOffense.BodyingSince = os.clock()
+State.AutoOffense.LastHandleActionAt = 0
+State.AutoOffense.LastLineAttempt = 0
+State.AutoOffense.LastTauntAt = 0
+State.AutoOffense.ShotFacingGeneration =
+(State.AutoOffense.ShotFacingGeneration or 0) + 1
+State.AutoOffense.ReleaseBackdown()
 end
 if State.AutoOffense.InProgress then return end
 local ManualDirection = State.AutoOffense.GetManualDirection(Humanoid, Root)
@@ -25555,6 +26001,17 @@ local Court = State.AutoOffense.GetCourt()
 local Defender, DefenderDistance = State.AutoOffense.GetDefender()
 local DefenderRoot = Defender and Defender.Character
 and Defender.Character:FindFirstChild('HumanoidRootPart')
+local NearbyDefenderCount = 0
+for _, Player in ipairs(Players:GetPlayers()) do
+if Player ~= LP and IsGuardOpponent(Player) then
+local OtherCharacter = Player.Character
+local OtherRoot = OtherCharacter and OtherCharacter:FindFirstChild('HumanoidRootPart')
+if OtherRoot and (OtherRoot.Position - Root.Position).Magnitude <= 14 then
+NearbyDefenderCount += 1
+end
+end
+end
+State.AutoOffense.NearbyDefenderCount = NearbyDefenderCount
 State.AutoOffense.LastDefenderDistance = DefenderDistance
 local BallThreat, EscapeSign, BallClearance =
 State.AutoOffense.EvaluateBallThreat(Root, DefenderRoot, Right)
@@ -25563,6 +26020,22 @@ or (DefenderRoot and DefenderDistance <= 8.5)
 local ShieldThreat = BallThreat
 or State.AutoOffense.StealLaneAligned
 or Now < (State.AutoOffense.ShieldTurnUntil or 0)
+local TurnAround = State.AutoOffense.EvaluateCutoff(Root, DefenderRoot, Forward)
+local DriveLane = State.AutoOffense.UpdateDriveState(
+Root, DefenderRoot, Forward, Court, Rim, TurnAround,
+BallThreat, BallClearance, DefenderDistance)
+local MultiDefenderThreat = NearbyDefenderCount >= 2
+if MultiDefenderThreat then
+-- Never let bodying rotation own the character against a crowd. Release the
+-- rotation owner and let the adaptive route scorer choose a real escape lane.
+TurnAround = false
+DriveLane = true
+ShieldThreat = true
+if State.AutoOffense.RotationOwned then
+State.AutoBody.ReleaseRotation()
+State.AutoOffense.RotationOwned = false
+end
+end
 -- Do not permit an old-side hand switch on the same frame that a steal-range
 -- cutback is about to begin. Rotation must settle on the new side first.
 if DefenderRoot and ImmediateThreat and not State.AutoOffense.StealRangeLatched then
@@ -25573,13 +26046,19 @@ State.AutoOffense.HandTurnAlignedSince = 0
 State.AutoOffense.HandCandidate = nil
 State.AutoOffense.HandCandidateSince = 0
 end
-if DefenderRoot then
+if DefenderRoot and not DriveLane then
 State.AutoOffense.ApplyBackToDefender(
-Root, Humanoid, DefenderRoot, DeltaTime, true,
+Root, Humanoid, DefenderRoot, DeltaTime, TurnAround or ShieldThreat,
 ShieldThreat, BallClearance)
 State.AutoOffense.DriveStatus = ShieldThreat
 and 'SHIELD TURN | FAST TO 72 LINE'
 or 'BACK TURNED | FAST TO 72 LINE'
+elseif DefenderRoot and DriveLane then
+if State.AutoOffense.RotationOwned then
+State.AutoBody.ReleaseRotation()
+State.AutoOffense.RotationOwned = false
+end
+State.AutoOffense.DriveStatus = 'PREDICTIVE DRIVE | FAST TO 72 LINE'
 else
 State.AutoOffense.ReleaseBackdown()
 end
@@ -25591,21 +26070,88 @@ State.AutoOffense.BeginInboundEscape(
 Root, Forward, Right, Court, DefenderRoot)
 end
 
--- The 72-stud line is the hard finish: stop, set 85, and let Silent Aim shoot.
+-- The 72-stud line is only a shot range, not an automatic shot trigger.
+-- First create separation if the defender or ball lane is still threatening.
 if Distance <= 72.0 then
+if State.AutoOffense.ContinueAfterShot ~= false
+and Now < (State.AutoOffense.ShotRecoveryUntil or 0) then
+local ContinueDirection
+if DefenderRoot then
+ContinueDirection = select(1, State.AutoOffense.SelectAdaptiveDriveDirection(
+Root, DefenderRoot, Forward, Right, Court, Rim))
+else
+ContinueDirection = Forward
+end
+State.AutoOffense.MoveSmooth(
+Humanoid, Root, ContinueDirection, DeltaTime, Court)
+State.AutoOffense.ActionType = 'POST SHOT ROUTE'
+State.AutoOffense.DriveStatus = 'POST-SHOT CONTINUE'
+State.AutoOffense.Status = 'POST-SHOT CONTINUE'
+return
+end
+local MinimumShotSeparation = math.max(
+8.5, tonumber(State.AutoOffense.StealThreatDistance) or 6.5)
+local SeparationBlocked = DefenderRoot and (
+DefenderDistance < MinimumShotSeparation
+or (tonumber(BallClearance) or math.huge) < 5.5
+or TurnAround
+or MultiDefenderThreat)
+if SeparationBlocked then
+local EscapeDirection, EscapeRoute =
+State.AutoOffense.SelectAdaptiveDriveDirection(
+Root, DefenderRoot, Forward, Right, Court, Rim)
+local EscapeAction = State.AutoOffense.TryBallProtection(
+Root, DefenderRoot, Forward, Right, EscapeRoute)
+State.AutoOffense.MoveSmooth(
+Humanoid, Root, EscapeDirection, DeltaTime, Court)
+State.AutoOffense.ActionType = 'SEPARATE BEFORE SHOT'
+State.AutoOffense.DriveStatus = string.format(
+'SEPARATING %s | %.1f TO 72 LINE%s',
+EscapeRoute, Distance - 72,
+EscapeAction and (' | ' .. EscapeAction) or '')
+State.AutoOffense.Status = State.AutoOffense.DriveStatus
+return
+end
 State.AutoOffense.InboundActive = false
 State.AutoOffense.LineShotDistance = Distance
+local NaturalShot, NaturalReason = State.AutoOffense.IsNaturalShotPosition(
+Root, Humanoid, Rim, Distance, DefenderRoot, DefenderDistance, BallClearance)
+if not NaturalShot then
+State.AutoOffense.ActionType = 'SETUP SHOT'
+State.AutoOffense.Status = NaturalReason or 'SETUP SHOT'
+local SetupDirection = Vector3.zero
+if Distance < 48 then
+-- Never continue driving into the paint when the shot window was passed.
+SetupDirection = -Forward
+elseif NaturalReason == 'CREATE SEPARATION' or NaturalReason == 'PROTECT BALL' then
+SetupDirection = select(1, State.AutoOffense.SelectAdaptiveDriveDirection(
+Root, DefenderRoot, Forward, Right, Court, Rim))
+end
+if SetupDirection.Magnitude > 0.05 then
+State.AutoOffense.MoveSmooth(
+Humanoid, Root, SetupDirection, DeltaTime, Court)
+else
+State.AutoOffense.StopSmoothMovement(Humanoid)
+end
+return
+end
 State.AutoOffense.ActionType = 'SHOOT'
-State.AutoOffense.DriveStatus = 'AT 72 STUDS | SILENT SHOT'
-State.AutoOffense.BoundaryStatus = '72 STUD LINE'
+local ShotPower = Distance >= 66 and 85
+or (Distance >= 56 and 80 or 75)
+State.AutoOffense.DriveStatus = string.format('OPEN RANGE | %d POWER', ShotPower)
+State.AutoOffense.BoundaryStatus = 'SHOT RANGE'
 State.AutoOffense.StopSmoothMovement(Humanoid)
 State.AutoOffense.ClearPathVisual()
-safe_set_attribute(LP, 'Power', 85)
-if Now - (State.AutoOffense.LastLineAttempt or 0) >= 0.06 then
+State.AutoOffense.PrepareShotFacing(Root, Humanoid, Rim, DeltaTime)
+State.AutoOffense.SelectedShotPower = ShotPower
+safe_set_attribute(LP, 'Power', ShotPower)
+if Now - (State.AutoOffense.LastLineAttempt or 0) >= math.clamp(
+ tonumber(State.AutoOffense.ShotCooldown)
+or tonumber(CONFIG.AutoOffenseShotCooldown) or 0.45, 0.25, 2.0) then
 State.AutoOffense.LastLineAttempt = Now
 if State.AutoOffense.PerformShoot() then
 State.AutoOffense.Status = string.format(
-'SILENT JUMP SHOT | 72 LINE | %.1f', Distance)
+'REGULAR JUMP SHOT | %d POWER | %.1f', ShotPower, Distance)
 else
 State.AutoOffense.Status = 'HOLDING 72 LINE | '
 .. tostring(State.AutoOffense.Status or 'WAITING')
@@ -25788,8 +26334,23 @@ State.AutoOffense.BackdownHasCommittedSide = true
 State.AutoOffense.DefenderCanReachBall = BallThreat or CurrentReach
 State.AutoOffense.OppositeBallClearance = OppositeClearance
 
-local Direction = State.AutoOffense.GetGoalStrafeDirection(
-Forward, Right, Sign)
+local Direction
+if DriveLane then
+local AdaptiveDirection, AdaptiveRoute =
+State.AutoOffense.SelectAdaptiveDriveDirection(
+Root, DefenderRoot, Forward, Right, Court, Rim)
+Direction = AdaptiveDirection
+State.AutoOffense.DriveStatus = string.format(
+'PREDICTIVE %s | FAST TO 72 LINE', AdaptiveRoute)
+local HandleAction = State.AutoOffense.TryBallProtection(
+Root, DefenderRoot, Forward, Right, AdaptiveRoute)
+if HandleAction then
+State.AutoOffense.DriveStatus = State.AutoOffense.DriveStatus
+.. ' | ' .. HandleAction
+end
+else
+Direction = State.AutoOffense.GetGoalStrafeDirection(Forward, Right, Sign)
+end
 if State.AutoOffense.PendingHardCut then
 -- Drop the old smoothed lateral vector immediately. Carrying it through the
 -- new direction caused a visible left-right twitch on the cut frame.
@@ -25879,6 +26440,12 @@ CONFIG.AutoOffense = Enabled
 State.AutoOffense.LastAction = 0
 State.AutoOffense.LastLineAttempt = 0
 State.AutoOffense.LineShotDistance = math.huge
+State.AutoOffense.LastHandleActionAt = 0
+State.AutoOffense.LastHandleAction = nil
+State.AutoOffense.LastTauntAt = 0
+State.AutoOffense.ShotFacingAt = 0
+State.AutoOffense.ShotShiftLockOwned = false
+State.AutoOffense.ShotFacingGeneration = 0
 State.AutoOffense.HadBall = false
 State.AutoOffense.PossessionAt = 0
 State.AutoOffense.InboundActive = false
@@ -27136,23 +27703,23 @@ function State.BuildSilentAimHub()
 local HttpService = game:GetService('HttpService')
 local InterfaceFile = 'SilverSurfer_Interface.json'
 local InterfaceDefaults = {
-Version = 7,
-ThemePreset = 'Silver Surfer',
+Version = 8,
+ThemePreset = 'Midnight',
 Theme = {
--- Silver Surfer light mode: polished silver panels with dark chrome text.
-Background = '#EEF1F4',
-Panel = '#F8FAFC',
-Surface = '#DEE3E8',
-SurfaceHover = '#CDD4DB',
-Border = '#A8B1BC',
-Text = '#18202A',
-Muted = '#5B6570',
-Off = '#C6CDD5',
-Bad = '#B8323E',
-Success = '#24734A',
-Warning = '#8A6512',
-Accent = '#8793A1',
-AccentBright = '#3A4653',
+-- Midnight chrome: layered navy panels with cyan-violet depth accents.
+Background = '#070A12',
+Panel = '#0C1220',
+Surface = '#151D2D',
+SurfaceHover = '#202B40',
+Border = '#35415C',
+Text = '#EDF3FF',
+Muted = '#93A1BB',
+Off = '#111827',
+Bad = '#FF5E73',
+Success = '#56D69B',
+Warning = '#F6C15D',
+Accent = '#4EA1FF',
+AccentBright = '#91C9FF',
 },
 Scale = 1,
 WindowTransparency = 0,
@@ -27166,6 +27733,7 @@ BorderStyle = 'Silver Sweep',
 BorderThickness = 2.5,
 BorderSpeed = 1,
 BorderGlow = 0.08,
+BorderColor = '#F2F5F8',
 WindowRadius = 10,
 PanelRadius = 8,
 ButtonRadius = 7,
@@ -27622,9 +28190,9 @@ local InterfaceConfig = DeepCopy(InterfaceDefaults)
 local function NormalizeInterfaceConfig()
 local LoadedVersion = tonumber(InterfaceConfig.Version) or 0
 InterfaceConfig.Version = InterfaceDefaults.Version
-if LoadedVersion < 7 then
-InterfaceConfig.ThemePreset = 'Silver Surfer'
-InterfaceConfig.Theme = DeepCopy(ThemePresets['Silver Surfer'])
+if LoadedVersion < 8 then
+InterfaceConfig.ThemePreset = 'Midnight'
+InterfaceConfig.Theme = DeepCopy(ThemePresets['Midnight'])
 InterfaceConfig.Font = 'Code'
 end
 InterfaceConfig.Scale = math.clamp(tonumber(InterfaceConfig.Scale) or 1, 0.65, 1.35)
@@ -27639,7 +28207,7 @@ InterfaceConfig.TabOrder = type(InterfaceConfig.TabOrder) == 'table' and Interfa
 InterfaceConfig.Theme = type(InterfaceConfig.Theme) == 'table' and InterfaceConfig.Theme or DeepCopy(InterfaceDefaults.Theme)
 InterfaceConfig.ThemePreset = tostring(InterfaceConfig.ThemePreset or 'Custom')
 if InterfaceConfig.ThemePreset ~= 'Custom' and not ThemePresets[InterfaceConfig.ThemePreset] then
-InterfaceConfig.ThemePreset = 'Silver Surfer'
+InterfaceConfig.ThemePreset = 'Midnight'
 end
 if InterfaceConfig.ThemePreset ~= 'Custom' and ThemePresets[InterfaceConfig.ThemePreset] then
 InterfaceConfig.Theme = DeepCopy(ThemePresets[InterfaceConfig.ThemePreset])
@@ -27719,8 +28287,8 @@ end
 -- Preserve visual-only theme roles that the UI theme does not define.
 -- Replacing Visuals.Theme wholesale wiped HighlightFill/White and crashed
 -- the visual overlay with 'Argument 2 missing or nil' on Color3:Lerp.
-Theme.HighlightFill = Theme.HighlightFill or Visuals.Theme.HighlightFill
-or Color3.fromRGB(255, 225, 125)
+Theme.HighlightFill = Theme.Accent:Lerp(Theme.AccentBright, 0.45)
+
 Theme.White = Theme.White or Visuals.Theme.White or Color3.fromRGB(255, 255, 255)
 Theme.Muted = Theme.Muted or Visuals.Theme.Muted or Color3.fromRGB(146, 146, 155)
 Theme.Background = Theme.Background or Visuals.Theme.Background or Color3.fromRGB(8, 8, 9)
@@ -27769,8 +28337,8 @@ if string.sub(tostring(Property), 1, 2) ~= '__' then
 local Role = not SkipThemeBinding and ResolveThemeRole(Value) or nil
 if Role and string.find(Property, 'Color', 1, true) then
 table.insert(HubUI.ThemeBindings, { Object = Object, Property = Property, Role = Role })
-if ClassName == 'UIStroke' and Role == 'Border' then
-table.insert(HubUI.PrismBorders, Object)
+if ClassName == 'UIStroke' and Role == 'Border' and Properties.__OuterBorder == true then
+ table.insert(HubUI.PrismBorders, Object)
 end
 elseif Property == 'Font' then
 table.insert(HubUI.FontBindings, {
@@ -28216,8 +28784,19 @@ Visible = false,
 GroupTransparency = 1,
 ZIndex = 2,
 }, ScreenGui)
+local DepthPlate = New('Frame', {
+Name = 'ChromeDepthPlate',
+Position = UDim2.fromOffset(6, 7),
+Size = UDim2.new(1, -12, 1, -10),
+BackgroundColor3 = Color3.new(0, 0, 0),
+BackgroundTransparency = 0.48,
+BorderSizePixel = 0,
+ZIndex = 1,
+}, Main)
+New('UICorner', { CornerRadius = UDim.new(0, InterfaceConfig.WindowRadius + 2) }, DepthPlate)
 local MainBorder = New('UIStroke', {
 __SkipThemeBinding = true,
+__OuterBorder = true,
 Color = Color3.fromRGB(224, 229, 235),
 Thickness = InterfaceConfig.BorderThickness,
 Transparency = InterfaceConfig.BorderGlow,
@@ -28241,6 +28820,13 @@ function HubUI.RefreshSpecialThemeSurfaces()
 if MainBorder and MainBorder.Parent then MainBorder.Color = Theme.Border end
 if HubUI.Topbar and HubUI.Topbar.Parent then
 HubUI.Topbar.BackgroundColor3 = Theme.Surface:Lerp(Theme.SurfaceHover, 0.5)
+end
+if HubUI.TopbarGradient and HubUI.TopbarGradient.Parent then
+HubUI.TopbarGradient.Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0, Theme.Panel),
+ColorSequenceKeypoint.new(0.52, Theme.Surface),
+ColorSequenceKeypoint.new(1, Theme.Panel),
+})
 end
 if HubUI.StaticBackdrop and HubUI.StaticBackdrop.Parent then
 HubUI.StaticBackdrop.BackgroundColor3 = Theme.Background
@@ -28309,7 +28895,7 @@ HubUI.Window = Main
 HubUI.MainCorner = New('UICorner', { CornerRadius = UDim.new(0, InterfaceConfig.WindowRadius) }, Main)
 local MainScale = New('UIScale', { Scale = 1 }, Main)
 local MainAccentLine = New('Frame', {
-Name = 'LinoriaAccent', Position = UDim2.fromOffset(1, 1),
+Name = 'ChromeAccentLine', Position = UDim2.fromOffset(1, 1),
 Size = UDim2.new(1, -2, 0, 2), BackgroundColor3 = Theme.Accent,
 BorderSizePixel = 0, ZIndex = 101,
 }, Main)
@@ -28324,6 +28910,16 @@ BorderSizePixel = 0,
 Active = true,
 ZIndex = 3,
 }, Main)
+local TopbarGradient = New('UIGradient', {
+__SkipThemeBinding = true,
+Color = ColorSequence.new({
+ColorSequenceKeypoint.new(0, Theme.Panel),
+ColorSequenceKeypoint.new(0.52, Theme.Surface),
+ColorSequenceKeypoint.new(1, Theme.Panel),
+}),
+Rotation = 0,
+}, Topbar)
+HubUI.TopbarGradient = TopbarGradient
 HubUI.Topbar = Topbar
 New('Frame', {
 Position = UDim2.new(0, 0, 1, -1),
@@ -28615,11 +29211,17 @@ end
 local Sidebar = New('Frame', {
 Position = UDim2.fromOffset(0, 48),
 Size = UDim2.new(0, 170, 1, -69),
-BackgroundColor3 = Theme.Panel,
+BackgroundColor3 = Theme.Background,
 BorderSizePixel = 0,
 ClipsDescendants = true,
 ZIndex = 3,
 }, Main)
+New('UICorner', { CornerRadius = UDim.new(0, 4) }, Sidebar)
+DarkStroke(Sidebar).Transparency = 0.25
+New('Frame', {
+Position = UDim2.fromOffset(5, 4), Size = UDim2.new(1, -10, 0, 1),
+BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.92, BorderSizePixel = 0, ZIndex = 6,
+}, Sidebar)
 New('Frame', {
 Position = UDim2.new(0, 0, 1, -1), Size = UDim2.new(1, 0, 0, 1),
 BackgroundColor3 = Theme.Border, BorderSizePixel = 0, ZIndex = 6,
@@ -28650,11 +29252,12 @@ ScrollBarImageColor3 = Theme.Accent,
 ScrollingDirection = Enum.ScrollingDirection.Y,
 ZIndex = 4,
 }, Sidebar)
+New('UIPadding', { PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4) }, NavList)
 local NavLayout = New('UIListLayout', {
 FillDirection = Enum.FillDirection.Vertical,
 HorizontalAlignment = Enum.HorizontalAlignment.Left,
 SortOrder = Enum.SortOrder.LayoutOrder,
-Padding = UDim.new(0, 0),
+Padding = UDim.new(0, 2),
 }, NavList)
 
 local Content = New('Frame', {
@@ -28667,7 +29270,9 @@ BorderSizePixel = 0,
 ClipsDescendants = true,
 ZIndex = 3,
 }, Main)
-DarkStroke(Content)
+New('UICorner', { CornerRadius = UDim.new(0, 4) }, Content)
+DarkStroke(Content).Transparency = 0.18
+New('Frame', { Position = UDim2.fromOffset(5, 4), Size = UDim2.new(1, -10, 0, 1), BackgroundColor3 = Color3.new(1,1,1), BackgroundTransparency = .94, BorderSizePixel = 0, ZIndex = 4 }, Content)
 
 -- A real command line: keyboard-driven navigation and search, not decoration.
 -- References needed later are kept on HubUI; build-only locals die at this
@@ -28968,12 +29573,11 @@ local LayoutOrder = 0
 local function CreateNavCategory(Name)
 local Label = New('TextLabel', {
 Name = 'Category_' .. Name,
-Size = UDim2.new(1, 0, 0, 20),
-BackgroundColor3 = Theme.Background,
-BackgroundTransparency = 0,
+Size = UDim2.new(1, 0, 0, 18),
+BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = '  v  ' .. string.upper(Name), TextColor3 = Theme.Muted,
-TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left, Visible = true,
+Text = '  ' .. string.upper(Name), TextColor3 = Theme.Muted,
+TextSize = 8, TextXAlignment = Enum.TextXAlignment.Left, Visible = true,
 LayoutOrder = LayoutOrder,
 ZIndex = 4,
 }, NavList)
@@ -29023,16 +29627,16 @@ local DisplayName = Definition.DisplayName or Name
 local InitiallySelected = Name == HubUI.ActiveTab
 -- Width follows the real advance of Code at 11px (~6.6px per glyph)
 -- plus symmetric padding, so longer labels stop clipping.
-local Width = 170
+local Width = 162
 local Button = New('TextButton', {
 Name = 'Tab_' .. Name,
-Size = UDim2.fromOffset(Width, 22),
-BackgroundColor3 = InitiallySelected and Theme.Surface or Theme.Panel,
+Size = UDim2.fromOffset(Width, 24),
+BackgroundColor3 = InitiallySelected and Theme.SurfaceHover or Theme.Background,
 BackgroundTransparency = 0,
 BorderSizePixel = 0,
 AutoButtonColor = false,
 Font = Enum.Font.Code,
-Text = '      ' .. DisplayName,
+Text = '    ' .. DisplayName,
 TextColor3 = InitiallySelected and Theme.Text or Theme.Muted,
 TextSize = 11,
 TextXAlignment = Enum.TextXAlignment.Left,
@@ -29041,9 +29645,10 @@ ZIndex = 4,
 Selectable = true,
 SelectionOrder = LayoutOrder,
 }, NavList)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, Button)
 local Marker = New('Frame', {
 Position = UDim2.new(0, 0, 0, 0),
-Size = UDim2.new(0, 3, 1, 0),
+Size = UDim2.new(0, 2, 1, -6),
 BackgroundColor3 = Theme.Accent,
 BorderSizePixel = 0,
 BackgroundTransparency = InitiallySelected and 0 or 1,
@@ -29075,13 +29680,13 @@ Tween(Button, 0.14, { BackgroundColor3 = Theme.SurfaceHover, TextColor3 = Theme.
 elseif Data.Hovered then
 Tween(Button, 0.12, { BackgroundColor3 = Theme.Surface, TextColor3 = Theme.Text })
 else
-MotionOut(Button, 0.16, { BackgroundColor3 = Theme.Panel, TextColor3 = Theme.Muted })
+MotionOut(Button, 0.16, { BackgroundColor3 = Theme.Background, TextColor3 = Theme.Muted })
 end
 Button.BackgroundTransparency = 0
 Marker.BackgroundColor3 = Theme.Accent
 Tween(Marker, 0.14, { BackgroundTransparency = Selected and 0 or 1 })
-Marker.Size = UDim2.new(0, 2, 1, 0)
-Marker.Position = UDim2.fromOffset(0, 0)
+Marker.Size = UDim2.new(0, 2, 1, -6)
+Marker.Position = UDim2.fromOffset(0, 3)
 end
 Data.RefreshRow = RefreshRow
 GiveSignal(Button.MouseButton1Click:Connect(function() SwitchTab(Name) end))
@@ -29172,12 +29777,20 @@ NextPage.Position = UDim2.fromOffset(0, 0)
 NextPage.GroupTransparency = 0
 else
 NextPage.Position = UDim2.fromOffset(8, 0)
+NextPage.Rotation = -0.65
 NextPage.GroupTransparency = 1
-Tween(NextPage, 0.20, { Position = UDim2.fromOffset(0, 0), GroupTransparency = 0 })
+Tween(NextPage, 0.22, {
+Position = UDim2.fromOffset(0, 0),
+Rotation = 0,
+GroupTransparency = 0,
+}, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 end
 if PreviousPage and PreviousPage ~= NextPage then
-Tween(PreviousPage, 0.12, { Position = UDim2.fromOffset(-6, 0), GroupTransparency = 1 },
-Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+Tween(PreviousPage, 0.14, {
+Position = UDim2.fromOffset(-6, 0),
+Rotation = 0.65,
+GroupTransparency = 1,
+}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 end
 
 for _, TabData in pairs(HubUI.TabButtons) do
@@ -29516,12 +30129,11 @@ Name = Name:gsub('%s+', '') .. 'Groupbox',
 Position = Position,
 Size = Size,
 BackgroundColor3 = Theme.Panel,
--- The panel gets its own theme gradient, so it remains visible instead
--- of being hidden behind an opaque group background.
 BackgroundTransparency = 0,
 BorderSizePixel = 0,
 ZIndex = 4,
 }, Parent)
+New('UICorner', { CornerRadius = UDim.new(0, 4) }, Group)
 local PanelGradient = New('UIGradient', {
 Enabled = false,
 Color = ColorSequence.new({
@@ -29535,17 +30147,18 @@ Rotation = 18,
 HubUI.GroupGradients = HubUI.GroupGradients or {}
 table.insert(HubUI.GroupGradients, PanelGradient)
 local GroupStroke = DarkStroke(Group)
-GroupStroke.Transparency = 0.18
+GroupStroke.Transparency = 0.12
+New('Frame', { Position = UDim2.fromOffset(3, 3), Size = UDim2.new(1, -6, 1, -6), BackgroundColor3 = Color3.new(0,0,0), BackgroundTransparency = .78, BorderSizePixel = 0, ZIndex = 4 }, Group)
 
--- ImGui collapsing-header style: a full width header bar with a hard 1px rule.
 local TitleBack = New('Frame', {
-Position = UDim2.fromOffset(0, 0),
-Size = UDim2.new(1, 0, 0, 16),
-BackgroundColor3 = Theme.Panel,
+Position = UDim2.fromOffset(1, 1),
+Size = UDim2.new(1, -2, 0, 20),
+BackgroundColor3 = Theme.Surface,
 BackgroundTransparency = 0,
 BorderSizePixel = 0,
 ZIndex = 7,
 }, Group)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, TitleBack)
 New('Frame', {
 Position = UDim2.new(0, 0, 1, 0),
 Size = UDim2.new(1, 0, 0, 1),
@@ -29554,11 +30167,11 @@ BorderSizePixel = 0,
 ZIndex = 8,
 }, TitleBack)
 local Title = New('TextLabel', {
-Position = UDim2.fromOffset(5, 0),
-Size = UDim2.new(1, -10, 1, 0),
+Position = UDim2.fromOffset(7, 0),
+Size = UDim2.new(1, -14, 1, 0),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = '  ' .. string.upper(Name),
+Text = string.upper(Name),
 TextColor3 = Color3.new(1, 1, 1),
 __SkipThemeBinding = true,
 TextSize = 10,
@@ -29567,14 +30180,14 @@ ZIndex = 8,
 }, TitleBack)
 ApplyThemedTextGradient(Title, Theme.Text)
 local GroupAccent = New('Frame', {
-Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(2, 16),
+Position = UDim2.fromOffset(0, 4), Size = UDim2.fromOffset(2, 12),
 BackgroundColor3 = Theme.Accent, BorderSizePixel = 0, ZIndex = 9,
 }, TitleBack)
 BindAccent(GroupAccent, 'BackgroundColor3')
 local Body = New('ScrollingFrame', {
 Name = 'Content',
-Position = UDim2.fromOffset(0, 17),
-Size = UDim2.new(1, 0, 1, -17),
+Position = UDim2.fromOffset(4, 24),
+Size = UDim2.new(1, -8, 1, -28),
 BackgroundTransparency = 1,
 BorderSizePixel = 0,
 ClipsDescendants = true,
@@ -29591,10 +30204,10 @@ ZIndex = 5,
 Body:SetAttribute('SilverSurferGroupScroll', true)
 
 GiveSignal(Group.MouseEnter:Connect(function()
-Tween(GroupStroke, 0.12, { Color = Theme.Accent, Transparency = 0.38 })
+Tween(GroupStroke, 0.12, { Color = Theme.Accent, Transparency = 0.28 })
 end))
 GiveSignal(Group.MouseLeave:Connect(function()
-MotionOut(GroupStroke, 0.16, { Color = Theme.Border, Transparency = 0.18 })
+MotionOut(GroupStroke, 0.16, { Color = Theme.Border, Transparency = 0.12 })
 end))
 return Body
 end
@@ -29606,7 +30219,7 @@ Position = UDim2.fromOffset(8, Y),
 Size = UDim2.new(1, -16, 0, 13),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
-Text = '-- ' .. HeaderText .. ' ' .. string.rep('-', math.max(4, 34 - #HeaderText)),
+Text = HeaderText,
 TextColor3 = Color3.new(1, 1, 1),
 __SkipThemeBinding = true,
 TextSize = 8,
@@ -29723,24 +30336,26 @@ ZIndex = 5,
 local Track = New('Frame', {
 AnchorPoint = Vector2.new(0, 0.5),
 Position = UDim2.new(0, 0, 0.5, 0),
-Size = UDim2.fromOffset(13, 13),
-BackgroundColor3 = Theme.Surface,
+Size = UDim2.fromOffset(26, 12),
+BackgroundColor3 = InitialValue and Theme.Accent or Theme.Off,
 BorderSizePixel = 0,
 ZIndex = 6,
 }, Button)
 local TrackStroke = DarkStroke(Track)
+TrackStroke.Transparency = 0.2
+New('UICorner', { CornerRadius = UDim.new(1, 0) }, Track)
 local Knob = New('Frame', {
 AnchorPoint = Vector2.new(0.5, 0.5),
-Position = UDim2.fromScale(0.5, 0.5),
-Size = InitialValue and UDim2.fromOffset(9, 9) or UDim2.fromOffset(0, 0),
-BackgroundColor3 = Theme.Accent,
+Position = InitialValue and UDim2.fromOffset(20, 6) or UDim2.fromOffset(6, 6),
+Size = UDim2.fromOffset(8, 8),
+BackgroundColor3 = Theme.Text,
 BorderSizePixel = 0,
 ZIndex = 7,
 }, Track)
-BindAccent(Knob, 'BackgroundColor3')
+New('UICorner', { CornerRadius = UDim.new(1, 0) }, Knob)
 local LabelObject = New('TextLabel', {
-Position = UDim2.fromOffset(19, 0),
-Size = UDim2.new(1, -72, 1, 0),
+Position = UDim2.fromOffset(33, 0),
+Size = UDim2.new(1, -86, 1, 0),
 BackgroundTransparency = 1,
 Font = Enum.Font.Code,
 Text = Label,
@@ -29765,6 +30380,7 @@ TextColor3 = Theme.Muted,
 TextSize = 8,
 ZIndex = 8,
 }, Parent)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, KeyButton)
 local KeyStroke = DarkStroke(KeyButton)
 
 local Control = {
@@ -29779,9 +30395,9 @@ KeyButton = KeyButton,
 }
 function Control:RefreshTheme()
 LabelObject.TextColor3 = Theme.Text
-Track.BackgroundColor3 = Theme.Surface
-TrackStroke.Color = Theme.Border
-Knob.BackgroundColor3 = Theme.Accent
+Track.BackgroundColor3 = Control.Value and Theme.Accent or Theme.Off
+TrackStroke.Color = Control.Value and Theme.Accent or Theme.Border
+Knob.BackgroundColor3 = Theme.Text
 KeyButton.BackgroundColor3 = Theme.Surface
 KeyStroke.Color = Theme.Border
 end
@@ -29789,15 +30405,15 @@ function Control:Set(Value, FireCallback)
 Value = Value == true
 Control.AnimationSerial += 1
 Control.Value = Value
+Tween(Track, 0.14, { BackgroundColor3 = Value and Theme.Accent or Theme.Off }, Enum.EasingStyle.Quint)
 Tween(Knob, 0.16, {
-Size = Value and UDim2.fromOffset(9, 9) or UDim2.fromOffset(0, 0),
-Rotation = 0,
-BackgroundColor3 = Theme.Accent,
-}, Value and Enum.EasingStyle.Quint or Enum.EasingStyle.Quad,
-Value and Enum.EasingDirection.Out or Enum.EasingDirection.In)
+Position = Value and UDim2.fromOffset(20, 6) or UDim2.fromOffset(6, 6),
+Size = UDim2.fromOffset(8, 8),
+BackgroundColor3 = Theme.Text,
+}, Enum.EasingStyle.Quint)
 Tween(TrackStroke, 0.13, {
 Color = Value and Theme.Accent or Theme.Border,
-Transparency = Value and 0.05 or 0,
+Transparency = Value and 0.05 or 0.2,
 })
 if FireCallback ~= false then Callback(Value) end
 end
@@ -29845,6 +30461,7 @@ BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
 ZIndex = 6,
 }, Parent)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, Container)
 local ContainerStroke = DarkStroke(Container)
 local PreviousButton = New('TextButton', {
 Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1,
@@ -29951,6 +30568,7 @@ TextSize = 10,
 TextTruncate = Enum.TextTruncate.AtEnd,
 ZIndex = 21,
 }, Parent)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, Button)
 local DropdownStroke = DarkStroke(Button)
 
 local RowHeight = 23
@@ -30206,23 +30824,34 @@ ZIndex = 5,
 local Container = New('Frame', {
 AnchorPoint = Vector2.new(1, 0),
 Position = UDim2.new(1, -8, 0, Y),
-Size = UDim2.fromOffset(108, 21),
+Size = UDim2.fromOffset(110, 22),
 BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
 Active = true,
 ZIndex = 6,
 }, Parent)
 local ContainerStroke = DarkStroke(Container)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, Container)
 
 local Track = New('Frame', {
 Position = UDim2.fromOffset(4, 4),
-Size = UDim2.new(1, -8, 0, 13),
+Size = UDim2.new(1, -8, 0, 14),
 BackgroundColor3 = Theme.Surface,
 BorderSizePixel = 0,
 ClipsDescendants = true,
 ZIndex = 7,
 }, Container)
 local TrackStroke = DarkStroke(Track)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, Track)
+local TrackGloss = New('Frame', {
+Position = UDim2.fromOffset(1, 1),
+Size = UDim2.new(1, -2, 0, 1),
+BackgroundColor3 = Color3.new(1, 1, 1),
+BackgroundTransparency = 0.9,
+BorderSizePixel = 0,
+ZIndex = 8,
+}, Track)
+New('UICorner', { CornerRadius = UDim.new(1, 0) }, TrackGloss)
 
 local Fill = New('Frame', {
 Size = UDim2.fromScale(0, 1),
@@ -30230,6 +30859,8 @@ BackgroundColor3 = Theme.Accent,
 BorderSizePixel = 0,
 ZIndex = 8,
 }, Track)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, Fill)
+local FillGradient = New('UIGradient', { Enabled = false, Color = ColorSequence.new(Theme.Accent, Theme.AccentBright), Rotation = 0 }, Fill)
 BindAccent(Fill, 'BackgroundColor3')
 
 local Knob = New('Frame', {
@@ -30241,6 +30872,7 @@ BackgroundColor3 = Theme.Accent,
 BorderSizePixel = 0,
 ZIndex = 9,
 }, Track)
+New('UICorner', { CornerRadius = UDim.new(1, 0) }, Knob)
 
 local Hitbox = New('TextButton', {
 Position = UDim2.fromOffset(0, 0),
@@ -30454,6 +31086,7 @@ function Control:RefreshTheme()
 Divider.BackgroundColor3 = Theme.Border
 Track.BackgroundColor3 = Theme.Surface
 Fill.BackgroundColor3 = Theme.Accent
+FillGradient.Color = ColorSequence.new(Theme.Accent, Theme.AccentBright)
 Knob.BackgroundColor3 = Theme.Accent
 end
 
@@ -30640,12 +31273,14 @@ Transparency = NumberSequence.new({
 NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0),
 }), Rotation = 90,
 }, SVBlack)
-local SVCursor = New('Frame', {
+local SVCursor = New('TextLabel', {
 AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(1, 0),
-Size = UDim2.fromOffset(10, 10), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 305,
+Size = UDim2.fromOffset(18, 18), BackgroundTransparency = 1, BorderSizePixel = 0,
+Font = Enum.Font.SourceSansBold, Text = '◆', TextColor3 = Theme.Text,
+TextSize = 16, TextXAlignment = Enum.TextXAlignment.Center, TextYAlignment = Enum.TextYAlignment.Center,
+ZIndex = 305,
 }, SVField)
-local SVCursorStroke = New('UIStroke', { Color = Theme.Text, Thickness = 2, Transparency = 0 }, SVCursor)
-New('UICorner', { CornerRadius = UDim.new(1, 0) }, SVCursor)
+local SVCursorStroke = New('UIStroke', { Color = Color3.new(0, 0, 0), Thickness = 1, Transparency = 0.08 }, SVCursor)
 
 local HueField = New('Frame', {
 __SkipThemeBinding = true,
@@ -33243,24 +33878,34 @@ HubUI.Controls.AutoPower = CreateCheckbox(LeftGroup, 59, 'Auto Power', CONFIG.Au
 CONFIG.AutoPower = Value
 if HubUI.Sync then HubUI.Sync() end
 end)
+HubUI.Controls.HumanAiming = CreateCheckbox(LeftGroup, 89, 'Human Aiming', CONFIG.HumanizeEnabled == true, function(Value)
+CONFIG.HumanizeEnabled = Value == true
+State.Humanize.Status = CONFIG.HumanizeEnabled and 'READY' or 'IDLE'
+State.Humanize.NewShot()
+SilentAim.ArcSolveCache = {}
+SilentAim.ArcSolveCacheCount = 0
+pcall(SilentAim.ClearActorAim)
+if HubUI.Controls.HumanizeEnabled then HubUI.Controls.HumanizeEnabled:Set(CONFIG.HumanizeEnabled, false) end
+Notify('SILVER SURFER', CONFIG.HumanizeEnabled and 'Human Aiming enabled: accurate aim with natural variation.' or 'Human Aiming disabled.')
+end)
 
 HubUI.Controls.AutoPowerPreference = CreateSelector(
-LeftGroup, 89, 'Power preference',
+LeftGroup, 119, 'Power preference',
 { 'Lowest', 'Highest', 'Closest Current' },
 CONFIG.AutoPowerPreference,
 function(Value) CONFIG.AutoPowerPreference = Value end,
 118
 )
 
-CreateSectionHeader(LeftGroup, 121, 'Requirements')
-HubUI.Controls.RequireBall = CreateCheckbox(LeftGroup, 141, 'Require basketball', CONFIG.AimRequireBall, function(Value)
+CreateSectionHeader(LeftGroup, 151, 'Requirements')
+HubUI.Controls.RequireBall = CreateCheckbox(LeftGroup, 171, 'Require basketball', CONFIG.AimRequireBall, function(Value)
 CONFIG.AimRequireBall = Value
 end)
-HubUI.Controls.PerfectRelease = CreateCheckbox(LeftGroup, 171, 'Perfect release', CONFIG.PerfectRelease, function(Value)
+HubUI.Controls.PerfectRelease = CreateCheckbox(LeftGroup, 201, 'Perfect release', CONFIG.PerfectRelease, function(Value)
 CONFIG.PerfectRelease = Value
 end)
 HubUI.Controls.PerfectReleaseAutoCalibrate = CreateCheckbox(
-LeftGroup, 201, 'Self-calibrate release', CONFIG.PerfectReleaseAutoCalibrate,
+LeftGroup, 231, 'Self-calibrate release', CONFIG.PerfectReleaseAutoCalibrate,
 function(Value)
 CONFIG.PerfectReleaseAutoCalibrate = Value
 if Value then
@@ -33272,11 +33917,11 @@ or 'Release timing locked to the manual value.')
 end
 )
 HubUI.Controls.AimOnlyInMatch = CreateCheckbox(
-LeftGroup, 231, 'Auto-arm only in matches', CONFIG.AimOnlyInMatch == true,
+LeftGroup, 261, 'Auto-arm only in matches', CONFIG.AimOnlyInMatch == true,
 function(Value) CONFIG.AimOnlyInMatch = Value == true end
 )
 HubUI.Controls.SilentAimMethod = CreateSelector(
-LeftGroup, 291, 'Aim method', { 'Camera Ray Spoof', 'Mouse.Hit Spoof', 'Mouse.UnitRay Spoof' },
+LeftGroup, 321, 'Aim method', { 'Camera Ray Spoof', 'Mouse.Hit Spoof', 'Mouse.UnitRay Spoof' },
 CONFIG.SilentAimMethod or 'Camera Ray Spoof',
 function(Value)
 CONFIG.SilentAimMethod = Value
@@ -33286,7 +33931,7 @@ end,
 118
 )
 HubUI.Controls.ArcMode = CreateSelector(
-LeftGroup, 321, 'Arc mode', { 'High', 'Low' },
+LeftGroup, 351, 'Arc mode', { 'High', 'Low' },
 (CONFIG.SilentMode == 'Low' and 'Low' or 'High'),
 function(Value)
 CONFIG.SilentMode = Value
@@ -33549,18 +34194,61 @@ if ShouldSave~=false then SaveInterfaceConfig() end
 end
 function HubUI.RefreshBorderStyle(Now,Force)
 local Style=tostring(InterfaceConfig.BorderStyle or 'Silver Sweep')
-local ThemeKey=Style=='Theme Pulse' and table.concat({tostring(Theme.Accent),tostring(Theme.AccentBright)},'|') or ''
+local ThemeKey=Style=='Theme Pulse' and table.concat({tostring(Theme.Accent),tostring(Theme.AccentBright)},'|') or tostring(InterfaceConfig.BorderColor or '#F2F5F8')
 local Key=Style..'|'..ThemeKey
 if not Force and HubUI.LastBorderStyleKey==Key then return end
 HubUI.LastBorderStyleKey=Key
 if Style=='Theme Pulse' then
 MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Theme.Accent),ColorSequenceKeypoint.new(.5,Theme.AccentBright),ColorSequenceKeypoint.new(1,Theme.Accent)})
-elseif Style=='Prism' then
--- A fixed rainbow sequence rotates smoothly; changing the sequence itself at
--- frame rate produced stepping/flicker around UIStroke corners.
-MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromHSV(0,1,1)),ColorSequenceKeypoint.new(.17,Color3.fromHSV(.17,1,1)),ColorSequenceKeypoint.new(.33,Color3.fromHSV(.33,1,1)),ColorSequenceKeypoint.new(.5,Color3.fromHSV(.5,1,1)),ColorSequenceKeypoint.new(.67,Color3.fromHSV(.67,1,1)),ColorSequenceKeypoint.new(.83,Color3.fromHSV(.83,1,1)),ColorSequenceKeypoint.new(1,Color3.fromHSV(1,1,1))})
+elseif Style=='Prism' or Style=='Spectrum' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(255,74,74)),ColorSequenceKeypoint.new(.16,Color3.fromRGB(255,214,72)),ColorSequenceKeypoint.new(.32,Color3.fromRGB(94,255,143)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(66,211,255)),ColorSequenceKeypoint.new(.68,Color3.fromRGB(111,105,255)),ColorSequenceKeypoint.new(.84,Color3.fromRGB(239,90,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(255,74,74))})
+elseif Style=='Aurora' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(34,220,189)),ColorSequenceKeypoint.new(.25,Color3.fromRGB(56,131,255)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(198,92,255)),ColorSequenceKeypoint.new(.75,Color3.fromRGB(56,131,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(34,220,189))})
+elseif Style=='Ember' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(125,24,37)),ColorSequenceKeypoint.new(.22,Color3.fromRGB(255,75,38)),ColorSequenceKeypoint.new(.48,Color3.fromRGB(255,225,96)),ColorSequenceKeypoint.new(.72,Color3.fromRGB(255,101,34)),ColorSequenceKeypoint.new(1,Color3.fromRGB(125,24,37))})
+elseif Style=='Ocean Drift' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(24,68,139)),ColorSequenceKeypoint.new(.24,Color3.fromRGB(30,180,194)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(205,255,250)),ColorSequenceKeypoint.new(.76,Color3.fromRGB(30,180,194)),ColorSequenceKeypoint.new(1,Color3.fromRGB(24,68,139))})
+elseif Style=='Plasma' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(103,34,209)),ColorSequenceKeypoint.new(.24,Color3.fromRGB(255,47,178)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(255,237,255)),ColorSequenceKeypoint.new(.76,Color3.fromRGB(255,47,178)),ColorSequenceKeypoint.new(1,Color3.fromRGB(103,34,209))})
+elseif Style=='Ice Shard' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(38,91,155)),ColorSequenceKeypoint.new(.24,Color3.fromRGB(123,225,255)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(245,255,255)),ColorSequenceKeypoint.new(.76,Color3.fromRGB(123,225,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(38,91,155))})
+elseif Style=='Neon Circuit' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(16,78,74)),ColorSequenceKeypoint.new(.25,Color3.fromRGB(32,255,198)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(225,255,239)),ColorSequenceKeypoint.new(.75,Color3.fromRGB(32,255,198)),ColorSequenceKeypoint.new(1,Color3.fromRGB(16,78,74))})
+elseif Style=='Rose Gold' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(110,43,63)),ColorSequenceKeypoint.new(.25,Color3.fromRGB(255,121,151)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(255,239,228)),ColorSequenceKeypoint.new(.75,Color3.fromRGB(255,121,151)),ColorSequenceKeypoint.new(1,Color3.fromRGB(110,43,63))})
+elseif Style=='Toxic Lime' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(44,81,30)),ColorSequenceKeypoint.new(.25,Color3.fromRGB(163,255,42)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(241,255,194)),ColorSequenceKeypoint.new(.75,Color3.fromRGB(163,255,42)),ColorSequenceKeypoint.new(1,Color3.fromRGB(44,81,30))})
+elseif Style=='Violet Arc' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(54,30,125)),ColorSequenceKeypoint.new(.25,Color3.fromRGB(126,83,255)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(241,225,255)),ColorSequenceKeypoint.new(.75,Color3.fromRGB(126,83,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(54,30,125))})
+elseif Style=='Solar Flare' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(130,34,23)),ColorSequenceKeypoint.new(.25,Color3.fromRGB(255,118,36)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(255,248,164)),ColorSequenceKeypoint.new(.75,Color3.fromRGB(255,118,36)),ColorSequenceKeypoint.new(1,Color3.fromRGB(130,34,23))})
+elseif Style=='Comet Trail' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(17,21,35)),ColorSequenceKeypoint.new(.30,Color3.fromRGB(79,115,196)),ColorSequenceKeypoint.new(.52,Color3.fromRGB(255,255,255)),ColorSequenceKeypoint.new(.62,Color3.fromRGB(79,115,196)),ColorSequenceKeypoint.new(1,Color3.fromRGB(17,21,35))})
+elseif Style=='Double Pulse' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(28,35,47)),ColorSequenceKeypoint.new(.18,Color3.fromRGB(239,244,250)),ColorSequenceKeypoint.new(.32,Color3.fromRGB(75,90,110)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(28,35,47)),ColorSequenceKeypoint.new(.68,Color3.fromRGB(239,244,250)),ColorSequenceKeypoint.new(.82,Color3.fromRGB(75,90,110)),ColorSequenceKeypoint.new(1,Color3.fromRGB(28,35,47))})
+elseif Style=='Mono Sweep' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(42,48,58)),ColorSequenceKeypoint.new(.30,Color3.fromRGB(120,132,148)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(255,255,255)),ColorSequenceKeypoint.new(.70,Color3.fromRGB(120,132,148)),ColorSequenceKeypoint.new(1,Color3.fromRGB(42,48,58))})
+elseif Style=='Chrome Orbit' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(47,53,64)),ColorSequenceKeypoint.new(.24,Color3.fromRGB(156,168,184)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(255,255,255)),ColorSequenceKeypoint.new(.76,Color3.fromRGB(156,168,184)),ColorSequenceKeypoint.new(1,Color3.fromRGB(47,53,64))})
+elseif Style=='Crimson Sweep' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(93,20,30)),ColorSequenceKeypoint.new(.26,Color3.fromRGB(255,53,70)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(255,226,229)),ColorSequenceKeypoint.new(.74,Color3.fromRGB(255,53,70)),ColorSequenceKeypoint.new(1,Color3.fromRGB(93,20,30))})
+elseif Style=='Cobalt Flow' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(22,53,135)),ColorSequenceKeypoint.new(.25,Color3.fromRGB(51,132,255)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(221,242,255)),ColorSequenceKeypoint.new(.75,Color3.fromRGB(51,132,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(22,53,135))})
+elseif Style=='Mint Current' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(21,91,70)),ColorSequenceKeypoint.new(.25,Color3.fromRGB(54,255,187)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(227,255,244)),ColorSequenceKeypoint.new(.75,Color3.fromRGB(54,255,187)),ColorSequenceKeypoint.new(1,Color3.fromRGB(21,91,70))})
+elseif Style=='Amethyst Ring' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(61,32,116)),ColorSequenceKeypoint.new(.25,Color3.fromRGB(172,92,255)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(248,234,255)),ColorSequenceKeypoint.new(.75,Color3.fromRGB(172,92,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(61,32,116))})
+elseif Style=='Golden Rail' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(103,68,18)),ColorSequenceKeypoint.new(.25,Color3.fromRGB(255,204,61)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(255,248,208)),ColorSequenceKeypoint.new(.75,Color3.fromRGB(255,204,61)),ColorSequenceKeypoint.new(1,Color3.fromRGB(103,68,18))})
+elseif Style=='Arctic Pulse' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(26,70,116)),ColorSequenceKeypoint.new(.25,Color3.fromRGB(109,220,255)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(245,255,255)),ColorSequenceKeypoint.new(.75,Color3.fromRGB(109,220,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(26,70,116))})
+elseif Style=='Voltage' then
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(68,49,7)),ColorSequenceKeypoint.new(.23,Color3.fromRGB(255,238,34)),ColorSequenceKeypoint.new(.50,Color3.fromRGB(255,255,234)),ColorSequenceKeypoint.new(.77,Color3.fromRGB(255,238,34)),ColorSequenceKeypoint.new(1,Color3.fromRGB(68,49,7))})
 else
-MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(112,122,134)),ColorSequenceKeypoint.new(.18,Color3.fromRGB(242,246,250)),ColorSequenceKeypoint.new(.38,Color3.fromRGB(174,184,195)),ColorSequenceKeypoint.new(.58,Color3.new(1,1,1)),ColorSequenceKeypoint.new(.78,Color3.fromRGB(145,155,168)),ColorSequenceKeypoint.new(1,Color3.fromRGB(236,241,246))})
+local Silver = HexToColor(tostring(InterfaceConfig.BorderColor or '#F2F5F8'), Color3.fromRGB(242,245,248))
+local SilverDeep = Silver:Lerp(Color3.fromRGB(38,45,56), 0.54)
+local SilverBright = Silver:Lerp(Color3.new(1,1,1), 0.28)
+MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,SilverDeep),ColorSequenceKeypoint.new(.18,SilverBright),ColorSequenceKeypoint.new(.38,Silver:Lerp(Color3.fromRGB(170,180,191),0.34)),ColorSequenceKeypoint.new(.58,Color3.new(1,1,1)),ColorSequenceKeypoint.new(.78,Silver:Lerp(Color3.fromRGB(142,154,168),0.22)),ColorSequenceKeypoint.new(1,SilverBright)})
 end
 end
 
@@ -33632,17 +34320,48 @@ HubUI.Controls.InterfaceWindowRadius=CreateNumberInput(InterfaceLayoutGroup,642,
 HubUI.Controls.InterfacePanelRadius=CreateNumberInput(InterfaceLayoutGroup,672,'Panel corner radius',InterfaceConfig.PanelRadius,0,24,0,function(Value) InterfaceConfig.PanelRadius=Value; HubUI.ApplyCustomization(true) end)
 HubUI.Controls.InterfaceButtonRadius=CreateNumberInput(InterfaceLayoutGroup,702,'Button corner radius',InterfaceConfig.ButtonRadius,0,24,0,function(Value) InterfaceConfig.ButtonRadius=Value; HubUI.ApplyCustomization(true) end)
 CreateSectionHeader(InterfaceLayoutGroup,734,'Animated border')
-HubUI.Controls.InterfaceAnimatedBorder=CreateCheckbox(InterfaceLayoutGroup,754,'Silver / white animated border',InterfaceConfig.AnimatedBorder~=false,function(Value) InterfaceConfig.AnimatedBorder=Value==true; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfaceBorderStyle=CreateDropdown(InterfaceLayoutGroup,784,'Border style',{'Silver Sweep','Theme Pulse','Prism','Static'},InterfaceConfig.BorderStyle,function(Value) InterfaceConfig.BorderStyle=Value; HubUI.ApplyCustomization(true) end,128)
+HubUI.Controls.InterfaceAnimatedBorder=CreateCheckbox(InterfaceLayoutGroup,754,'Animated banner border',InterfaceConfig.AnimatedBorder~=false,function(Value) InterfaceConfig.AnimatedBorder=Value==true; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceBorderStyle=CreateDropdown(InterfaceLayoutGroup,784,'Border style',{'Silver Sweep','Theme Pulse','Prism','Aurora','Ember','Ocean Drift','Plasma','Ice Shard','Neon Circuit','Rose Gold','Toxic Lime','Violet Arc','Solar Flare','Comet Trail','Double Pulse','Mono Sweep','Chrome Orbit','Crimson Sweep','Cobalt Flow','Mint Current','Amethyst Ring','Golden Rail','Arctic Pulse','Voltage','Spectrum','Static'},InterfaceConfig.BorderStyle,function(Value) InterfaceConfig.BorderStyle=Value; HubUI.ApplyCustomization(true) end,128)
 HubUI.Controls.InterfaceBorderThickness=CreateNumberInput(InterfaceLayoutGroup,814,'Border thickness',InterfaceConfig.BorderThickness,.5,8,1,function(Value) InterfaceConfig.BorderThickness=Value; HubUI.ApplyCustomization(true) end)
 HubUI.Controls.InterfaceBorderSpeed=CreateNumberInput(InterfaceLayoutGroup,844,'Border animation speed',InterfaceConfig.BorderSpeed,.05,5,2,function(Value) InterfaceConfig.BorderSpeed=Value; SaveInterfaceConfig() end)
 HubUI.Controls.InterfaceBorderGlow=CreateNumberInput(InterfaceLayoutGroup,874,'Border transparency',InterfaceConfig.BorderGlow,0,.9,2,function(Value) InterfaceConfig.BorderGlow=Value; HubUI.ApplyCustomization(true) end)
-CreateSectionHeader(InterfaceLayoutGroup,914,'Panels and scrolling')
-HubUI.Controls.InterfacePanelGradients=CreateCheckbox(InterfaceLayoutGroup,934,'Animated panel gradients',InterfaceConfig.PanelGradients~=false,function(Value) InterfaceConfig.PanelGradients=Value==true; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfaceAccentLine=CreateCheckbox(InterfaceLayoutGroup,964,'Top accent line',InterfaceConfig.AccentLine~=false,function(Value) InterfaceConfig.AccentLine=Value==true; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfaceScrollbarWidth=CreateNumberInput(InterfaceLayoutGroup,994,'Scrollbar width',InterfaceConfig.ScrollbarWidth,0,10,0,function(Value) InterfaceConfig.ScrollbarWidth=Value; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfaceHoverAnimations=CreateCheckbox(InterfaceLayoutGroup,1024,'Hover animations',InterfaceConfig.HoverAnimations~=false,function(Value) InterfaceConfig.HoverAnimations=Value==true; SaveInterfaceConfig() end)
-CreateParagraph(InterfaceLayoutGroup,UDim2.fromOffset(8,1058),UDim2.new(1,-16,0,70),'Every feature panel now scrolls independently.\nMouse wheel, trackpad, and touch drag keep\nall controls inside their panel on every tab.')
+local BannerColorButton = New('TextButton', {
+Position = UDim2.fromOffset(8, 904), Size = UDim2.fromOffset(240, 23),
+BackgroundColor3 = Theme.Surface, BorderSizePixel = 0, AutoButtonColor = false,
+Font = Enum.Font.Code, Text = 'BANNER COLOR  ' .. tostring(InterfaceConfig.BorderColor or '#F2F5F8'),
+TextColor3 = Theme.Text, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 8,
+}, InterfaceLayoutGroup)
+New('UICorner', { CornerRadius = UDim.new(0, 3) }, BannerColorButton)
+local BannerColorStroke = DarkStroke(BannerColorButton)
+HubUI.Controls.InterfaceBorderColor = BannerColorButton
+GiveSignal(BannerColorButton.MouseButton1Click:Connect(function()
+HubUI.OpenColorPicker(nil, HexToColor(tostring(InterfaceConfig.BorderColor or '#F2F5F8'), Color3.fromRGB(242,245,248)), function(Color)
+InterfaceConfig.BorderColor = ColorToHex(Color)
+HubUI.RefreshBorderStyle(os.clock(), true)
+BannerColorButton.Text = 'BANNER COLOR  ' .. InterfaceConfig.BorderColor
+end, function(Color)
+InterfaceConfig.BorderColor = ColorToHex(Color)
+HubUI.RefreshBorderStyle(os.clock(), true)
+SaveInterfaceConfig()
+BannerColorButton.Text = 'BANNER COLOR  ' .. InterfaceConfig.BorderColor
+end, 'BANNER COLOR')
+end))
+GiveSignal(BannerColorButton.MouseEnter:Connect(function()
+BannerColorButton.BackgroundColor3 = Theme.SurfaceHover
+BannerColorButton.TextColor3 = Theme.AccentBright
+BannerColorStroke.Color = Theme.Accent
+end))
+GiveSignal(BannerColorButton.MouseLeave:Connect(function()
+BannerColorButton.BackgroundColor3 = Theme.Surface
+BannerColorButton.TextColor3 = Theme.Text
+BannerColorStroke.Color = Theme.Border
+end))
+CreateSectionHeader(InterfaceLayoutGroup,944,'Panels and scrolling')
+HubUI.Controls.InterfacePanelGradients=CreateCheckbox(InterfaceLayoutGroup,964,'Animated panel gradients',InterfaceConfig.PanelGradients~=false,function(Value) InterfaceConfig.PanelGradients=Value==true; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceAccentLine=CreateCheckbox(InterfaceLayoutGroup,994,'Top accent line',InterfaceConfig.AccentLine~=false,function(Value) InterfaceConfig.AccentLine=Value==true; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceScrollbarWidth=CreateNumberInput(InterfaceLayoutGroup,1024,'Scrollbar width',InterfaceConfig.ScrollbarWidth,0,10,0,function(Value) InterfaceConfig.ScrollbarWidth=Value; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceHoverAnimations=CreateCheckbox(InterfaceLayoutGroup,1054,'Hover animations',InterfaceConfig.HoverAnimations~=false,function(Value) InterfaceConfig.HoverAnimations=Value==true; SaveInterfaceConfig() end)
+CreateParagraph(InterfaceLayoutGroup,UDim2.fromOffset(8,1088),UDim2.new(1,-16,0,70),'Every feature panel now scrolls independently.\nMouse wheel, trackpad, and touch drag keep\nall controls inside their panel on every tab.')
 HubUI.ApplyCustomization(false)
 
 CreateSectionHeader(HubUI.HumanizerGroup, 307, 'How it works')
@@ -33821,35 +34540,75 @@ HubUI.OffenseCoreGroup, 61, 'Show pathfinding', State.AutoOffense.PathVisualEnab
 function(Value) State.AutoOffense.SetPathVisualEnabled(Value) end
 )
 
-CreateSectionHeader(HubUI.OffenseCoreGroup, 93, 'Live status')
+CreateSectionHeader(HubUI.OffenseCoreGroup, 93, 'Behavior mode')
+HubUI.Controls.AutoOffenseBehavior = CreateSelector(
+HubUI.OffenseCoreGroup, 113, 'Movement profile',
+{ 'adaptive', 'humanized', 'robotic' },
+State.AutoOffense.BehaviorMode or 'adaptive',
+function(Value) State.AutoOffense.SetBehaviorMode(Value) end,
+118
+)
+HubUI.Controls.AutoOffensePredictive = CreateCheckbox(
+HubUI.OffenseCoreGroup, 145, 'Predictive defender routes',
+State.AutoOffense.PredictiveEnabled,
+function(Value)
+State.AutoOffense.PredictiveEnabled = Value == true
+CONFIG.AutoOffensePredictive = Value == true
+end
+)
+HubUI.Controls.AutoOffenseNativeHandles = CreateCheckbox(
+HubUI.OffenseCoreGroup, 175, 'Use native game handles',
+State.AutoOffense.NativeHandlesEnabled,
+function(Value)
+State.AutoOffense.NativeHandlesEnabled = Value == true
+CONFIG.AutoOffenseNativeHandles = Value == true
+end
+)
+HubUI.Controls.AutoOffenseRimSafeHand = CreateCheckbox(
+HubUI.OffenseCoreGroup, 205, 'Protect rim-side hand',
+State.AutoOffense.RimSafeHandEnabled,
+function(Value)
+State.AutoOffense.RimSafeHandEnabled = Value == true
+CONFIG.AutoOffenseRimSafeHand = Value == true
+end
+)
+HubUI.Controls.AutoOffenseContinueAfterShot = CreateCheckbox(
+HubUI.OffenseCoreGroup, 235, 'Continue route after shot',
+State.AutoOffense.ContinueAfterShot,
+function(Value)
+State.AutoOffense.ContinueAfterShot = Value == true
+CONFIG.AutoOffenseContinueAfterShot = Value == true
+end
+)
+CreateSectionHeader(HubUI.OffenseCoreGroup, 267, 'Live status')
 HubUI.OffenseStatusText = CreateParagraph(
 HubUI.OffenseCoreGroup,
-UDim2.fromOffset(8, 113),
-UDim2.new(1, -16, 0, 151),
+UDim2.fromOffset(8, 287),
+UDim2.new(1, -16, 0, 79),
 'STATUS  OFF\nTARGET  85-power line\nPLAN    Manual blend + guarded route\nCOURT   --\nSHOT    Jump + Silent Aim'
 )
 
-CreateSectionHeader(HubUI.OffenseCoreGroup, 268, 'Perfect anti-rip')
+CreateSectionHeader(HubUI.OffenseCoreGroup, 382, 'Perfect anti-rip')
 HubUI.Controls.AutoOffenseAntiRip=CreateCheckbox(
-HubUI.OffenseCoreGroup,288,'PreSimulation anti-rip',CONFIG.AutoOffenseAntiRip~=false,
+HubUI.OffenseCoreGroup,402,'PreSimulation anti-rip',CONFIG.AutoOffenseAntiRip~=false,
 function(Value) CONFIG.AutoOffenseAntiRip=Value==true; if not Value then State.Runtime.ReleaseMovement('AntiRip'); State.AutoOffense.AntiRipActive=false end end)
 HubUI.Controls.AutoOffenseAntiRipPingLead=CreateCheckbox(
-HubUI.OffenseCoreGroup,318,'Ping-compensated prediction',CONFIG.AutoOffenseAntiRipPingLead~=false,
+HubUI.OffenseCoreGroup,432,'Ping-compensated prediction',CONFIG.AutoOffenseAntiRipPingLead~=false,
 function(Value) CONFIG.AutoOffenseAntiRipPingLead=Value==true end)
 HubUI.Controls.AutoOffenseAntiRipPadding=CreateNumberInput(
-HubUI.OffenseCoreGroup,348,'Ball safety padding',CONFIG.AutoOffenseAntiRipPadding,0,3,2,
+HubUI.OffenseCoreGroup,462,'Ball safety padding',CONFIG.AutoOffenseAntiRipPadding,0,3,2,
 function(Value) CONFIG.AutoOffenseAntiRipPadding=Value end)
 HubUI.Controls.AutoOffenseAntiRipExtraLead=CreateNumberInput(
-HubUI.OffenseCoreGroup,378,'Extra reaction lead',CONFIG.AutoOffenseAntiRipExtraLead,0,.20,3,
+HubUI.OffenseCoreGroup,492,'Extra reaction lead',CONFIG.AutoOffenseAntiRipExtraLead,0,.20,3,
 function(Value) CONFIG.AutoOffenseAntiRipExtraLead=Value end)
 HubUI.Controls.AutoOffenseAntiRipInstantCut=CreateCheckbox(
-HubUI.OffenseCoreGroup,408,'Instant emergency strafe',CONFIG.AutoOffenseAntiRipInstantCut~=false,
+HubUI.OffenseCoreGroup,522,'Instant emergency strafe',CONFIG.AutoOffenseAntiRipInstantCut~=false,
 function(Value) CONFIG.AutoOffenseAntiRipInstantCut=Value==true end)
 HubUI.Controls.AutoOffenseAntiRipNoSteal=CreateCheckbox(
-HubUI.OffenseCoreGroup,438,'Early NoSteal shield',CONFIG.AutoOffenseAntiRipNoSteal~=false,
+HubUI.OffenseCoreGroup,552,'Early NoSteal shield',CONFIG.AutoOffenseAntiRipNoSteal~=false,
 function(Value) CONFIG.AutoOffenseAntiRipNoSteal=Value==true end)
 HubUI.Controls.AutoOffenseAntiRipNoStealCooldown=CreateNumberInput(
-HubUI.OffenseCoreGroup,468,'NoSteal request cooldown',CONFIG.AutoOffenseAntiRipNoStealCooldown,.15,1.5,2,
+HubUI.OffenseCoreGroup,582,'NoSteal request cooldown',CONFIG.AutoOffenseAntiRipNoStealCooldown,.15,1.5,2,
 function(Value) CONFIG.AutoOffenseAntiRipNoStealCooldown=Value end)
 
 
@@ -36896,6 +37655,7 @@ CONFIG.SilentMode = CONFIG.SilentMode == 'Low' and 'Low' or 'High'
 CONFIG.BackboardEnabled = CONFIG.BackboardEnabled == true
 local SyncValues = {
 { HubUI.Controls.SilentAim, State.RequestedEnabled },
+{ HubUI.Controls.HumanAiming, CONFIG.HumanizeEnabled == true },
 { HubUI.Controls.AutoPass, State.AutoPassEnabled },
 { HubUI.Controls.PassArcMode, CONFIG.PassArcMode },
 { HubUI.Controls.PassLead, CONFIG.PassLead },
@@ -36930,6 +37690,10 @@ State.Movement.BodyColliderIncludeSelf },
 { HubUI.Controls.DunkRandomOwned, State.AutoDunkRandomOwned },
 { HubUI.Controls.DunkRangeIndicator, CONFIG.DunkRangeIndicator },
 { HubUI.Controls.AutoOffense, State.AutoOffense.Enabled },
+{ HubUI.Controls.AutoOffensePredictive, State.AutoOffense.PredictiveEnabled },
+{ HubUI.Controls.AutoOffenseNativeHandles, State.AutoOffense.NativeHandlesEnabled },
+{ HubUI.Controls.AutoOffenseRimSafeHand, State.AutoOffense.RimSafeHandEnabled },
+{ HubUI.Controls.AutoOffenseContinueAfterShot, State.AutoOffense.ContinueAfterShot },
 { HubUI.Controls.AutoOffenseShowPath, State.AutoOffense.PathVisualEnabled },
 { HubUI.Controls.AutoOffenseAntiRip, CONFIG.AutoOffenseAntiRip },
 { HubUI.Controls.AutoOffenseAntiRipPingLead, CONFIG.AutoOffenseAntiRipPingLead },
@@ -37143,6 +37907,7 @@ State.AutoGetOpen.NormalizeSpot(CONFIG.AutoGetOpenPreferredSpot) },
 { HubUI.Controls.AimMode, CONFIG.AimMode },
 { HubUI.Controls.FadeawayDirection, CONFIG.FadeawayDirection },
 { HubUI.Controls.TurnaroundDirection, CONFIG.TurnaroundDirection },
+{ HubUI.Controls.AutoOffenseBehavior, State.AutoOffense.BehaviorMode },
 { HubUI.Controls.SmartShotStrategy, CONFIG.SmartShotStrategy },
 { HubUI.Controls.SmartShotOpenBehavior, CONFIG.SmartShotOpenBehavior },
 { HubUI.Controls.SmartShotAirborneReaction, CONFIG.SmartShotAirborneReaction },
@@ -38713,10 +39478,10 @@ end
 end
 end))
 
-local Dragging = false
-local DragStart
-local StartPosition
-local LastTopbarClick = 0
+HubUI.Dragging = false
+HubUI.DragStart = nil
+HubUI.DragStartPosition = nil
+HubUI.LastTopbarClick = 0
 GiveSignal(Topbar.InputBegan:Connect(function(Input)
 if InterfaceConfig.LockWindow then return end
 local Point = Vector2.new(Input.Position.X, Input.Position.Y)
@@ -38724,43 +39489,45 @@ if PointInside(GlobalSearchBox, Point) or PointInside(ClearGlobalSearchButton, P
 if Input.UserInputType == Enum.UserInputType.MouseButton1
 or Input.UserInputType == Enum.UserInputType.Touch then
 local Now = os.clock()
-if Input.UserInputType == Enum.UserInputType.MouseButton1 and Now - LastTopbarClick <= 0.28 then
+if Input.UserInputType == Enum.UserInputType.MouseButton1 and Now - (HubUI.LastTopbarClick or 0) <= 0.28 then
 Main.Position = UDim2.fromScale(0.5, 0.5)
 ClampWindowToViewport()
 SaveWindowPosition()
-LastTopbarClick = 0
+HubUI.LastTopbarClick = 0
 return
 end
-LastTopbarClick = Now
-Dragging = true
+HubUI.LastTopbarClick = Now
+HubUI.Dragging = true
 HubUI.WindowDragging = true
 if HubUI.Motion and HubUI.Motion.Cancel then
 HubUI.Motion.Cancel(Main, { Position = true, Rotation = true })
 end
-DragStart = Input.Position
-StartPosition = Main.Position
+HubUI.DragStart = Input.Position
+HubUI.DragStartPosition = Main.Position
 end
 end))
 GiveSignal(UserInputService.InputChanged:Connect(function(Input)
-if Dragging and (Input.UserInputType == Enum.UserInputType.MouseMovement
+if HubUI.Dragging and (Input.UserInputType == Enum.UserInputType.MouseMovement
 or Input.UserInputType == Enum.UserInputType.Touch) then
-local Delta = Input.Position - DragStart
+local Delta = Input.Position - HubUI.DragStart
 Main.Position = UDim2.new(
-StartPosition.X.Scale,
-StartPosition.X.Offset + Delta.X,
-StartPosition.Y.Scale,
-StartPosition.Y.Offset + Delta.Y
+HubUI.DragStartPosition.X.Scale,
+HubUI.DragStartPosition.X.Offset + Delta.X,
+HubUI.DragStartPosition.Y.Scale,
+HubUI.DragStartPosition.Y.Offset + Delta.Y
 )
 end
 end))
 GiveSignal(UserInputService.InputEnded:Connect(function(Input)
 if Input.UserInputType == Enum.UserInputType.MouseButton1
 or Input.UserInputType == Enum.UserInputType.Touch then
-if Dragging then
+if HubUI.Dragging then
 ClampWindowToViewport()
 SaveWindowPosition()
 end
-Dragging = false
+HubUI.Dragging = false
+HubUI.DragStart = nil
+HubUI.DragStartPosition = nil
 HubUI.WindowDragging = false
 end
 end))
@@ -38770,6 +39537,7 @@ end))
 HubUI.LastStatsAt = 0
 HubUI.LastGradientAt = 0
 HubUI.LastControlSyncAt = 0
+HubUI.LastControlVisualAt = 0
 HubUI.LastViewport = Vector2.zero
 GiveSignal(RunService.RenderStepped:Connect(WYNF_JIT(function()
 if not (State.Active and Main.Parent) then return end
@@ -38786,13 +39554,8 @@ local Now = os.clock()
 local IsWindowDragging = HubUI.WindowDragging == true
 local LinoriaStatic = InterfaceConfig.ThemePreset == 'Linoria'
 local MotionEnabled = not InterfaceConfig.ReducedMotion and not LinoriaStatic
-local PrismActive = InterfaceConfig.ThemePreset == 'Prism'
 local GradientSpeed = math.max(0.01, tonumber(CONFIG.GradientCycleSpeed) or 0.18) * math.max(0.25, tonumber(InterfaceConfig.AnimationSpeed) or 1)
-local GoldPhase = MotionEnabled and (Now * GradientSpeed * math.pi * 2) or 0
-local GoldAlpha = MotionEnabled and (math.sin(GoldPhase) + 1) * 0.5 or 0
-local Accent = PrismActive
-and Color3.fromHSV(MotionEnabled and ((Now * GradientSpeed * 0.16) % 1) or 0.86, 0.96, 1)
-or (MotionEnabled and Theme.Accent:Lerp(Theme.AccentBright, GoldAlpha) or Theme.Accent)
+local Accent = Theme.Accent
 local Pulse = MotionEnabled and (math.sin(Now * 4.2) + 1) * 0.5 or 0.5
 
 MainBorder.Thickness = math.clamp(tonumber(InterfaceConfig.BorderThickness) or 2.5,.5,8)
@@ -38801,15 +39564,10 @@ MainBorder.Color = InterfaceConfig.BorderStyle=='Static' and Color3.fromRGB(226,
 MainFlameGradient.Enabled = InterfaceConfig.AnimatedBorder~=false and InterfaceConfig.BorderStyle~='Static'
 if HubUI.RefreshBorderStyle then HubUI.RefreshBorderStyle(Now,false) end
 BackgroundGradient.Enabled = not LinoriaStatic
-MainFlameGradient.Rotation = MotionEnabled and ((Now * 52 * math.clamp(tonumber(InterfaceConfig.BorderSpeed) or 1,.05,5)) % 360) or 0
-MainFlameGradient.Offset = Vector2.zero
-BackgroundGradient.Rotation = MotionEnabled and (18 + math.sin(Now * 0.45) * 20) or 18
-BackgroundGradient.Offset = MotionEnabled and Vector2.new(
-math.sin(Now * 0.30) * 0.42,
-math.cos(Now * 0.24) * 0.10
-) or Vector2.zero
+MainFlameGradient.Rotation = MotionEnabled and ((Now * 42 * math.clamp(tonumber(InterfaceConfig.BorderSpeed) or 1,.05,5)) % 360) or 0
+MainFlameGradient.Offset = MotionEnabled and Vector2.new(math.sin(Now * 0.72) * 0.42, math.cos(Now * 0.44) * 0.08) or Vector2.zero
 
-if Intro and Intro.Parent then
+if Intro and Intro.Parent and Intro.Visible then
 IntroStroke.Thickness = 2.2 + Pulse * 0.65
 IntroStroke.Transparency = 0.03 + (1 - Pulse) * 0.10
 IntroStrokeGradient.Rotation = MotionEnabled and ((Now * 64) % 360) or 0
@@ -38817,98 +39575,34 @@ IntroStrokeGradient.Offset = MotionEnabled and Vector2.new(math.sin(Now * 1.8) *
 IntroFillGradient.Offset = MotionEnabled and Vector2.new(math.sin(Now * 2.1) * 0.45, 0) or Vector2.zero
 end
 
-if not IsWindowDragging and Now - HubUI.LastGradientAt >= (InterfaceConfig.ReducedMotion and 0.20 or 0.05) then
+if not IsWindowDragging and Now - HubUI.LastGradientAt >= (InterfaceConfig.ReducedMotion and 0.20 or 0.10) then
 HubUI.LastGradientAt = Now
-if PrismActive then
-local RainbowPhase = MotionEnabled and ((Now * GradientSpeed * 0.10) % 1) or 0
-local function Rainbow(Offset, Value)
-return Color3.fromHSV((RainbowPhase + Offset) % 1, 0.96, Value or 1)
-end
-HubUI.LegacyBorderColor = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Rainbow(0.00)),
-ColorSequenceKeypoint.new(0.17, Rainbow(0.17)),
-ColorSequenceKeypoint.new(0.33, Rainbow(0.33)),
-ColorSequenceKeypoint.new(0.50, Rainbow(0.50)),
-ColorSequenceKeypoint.new(0.67, Rainbow(0.67)),
-ColorSequenceKeypoint.new(0.83, Rainbow(0.83)),
-ColorSequenceKeypoint.new(1.00, Rainbow(1.00)),
-})
-BackgroundGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Theme.Background),
-ColorSequenceKeypoint.new(0.16, Theme.Panel:Lerp(Rainbow(0.00), 0.34)),
-ColorSequenceKeypoint.new(0.32, Theme.Panel:Lerp(Rainbow(0.20), 0.28)),
-ColorSequenceKeypoint.new(0.50, Theme.Panel:Lerp(Rainbow(0.45), 0.42)),
-ColorSequenceKeypoint.new(0.68, Theme.Panel:Lerp(Rainbow(0.68), 0.28)),
-ColorSequenceKeypoint.new(0.84, Theme.Panel:Lerp(Rainbow(0.86), 0.34)),
-ColorSequenceKeypoint.new(1.00, Theme.Background),
-})
-if Intro and Intro.Parent then
-IntroStrokeGradient.Color = MainFlameGradient.Color
-IntroFillGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Rainbow(0.00)),
-ColorSequenceKeypoint.new(0.34, Rainbow(0.34)),
-ColorSequenceKeypoint.new(0.67, Rainbow(0.67)),
-ColorSequenceKeypoint.new(1.00, Rainbow(1.00)),
-})
-end
-local BorderCount = #HubUI.PrismBorders
-if BorderCount > 0 then
-local StartIndex = math.clamp(tonumber(HubUI.PrismBorderCursor) or 1, 1, BorderCount)
-local BatchSize = math.min(24, BorderCount)
-for Step = 0, BatchSize - 1 do
-local BorderIndex = ((StartIndex + Step - 1) % BorderCount) + 1
-local BorderStroke = HubUI.PrismBorders[BorderIndex]
-if BorderStroke and BorderStroke.Parent then
-BorderStroke.Color = Rainbow(BorderIndex / BorderCount)
-end
-end
-HubUI.PrismBorderCursor = ((StartIndex + BatchSize - 1) % BorderCount) + 1
-end
+local BorderStyle = tostring(InterfaceConfig.BorderStyle or 'Silver Sweep')
+local BorderMotion = MotionEnabled and math.clamp(tonumber(InterfaceConfig.BorderSpeed) or 1, .05, 5) or 0
+local BorderPhase = Now * BorderMotion
+MainFlameGradient.Enabled = InterfaceConfig.AnimatedBorder ~= false and BorderStyle ~= 'Static'
+if BorderStyle == 'Theme Pulse' then
+MainFlameGradient.Offset = Vector2.new(math.sin(BorderPhase * 1.6) * .32, 0)
+MainFlameGradient.Rotation = (BorderPhase * 38) % 360
+elseif BorderStyle == 'Double Pulse' then
+MainFlameGradient.Offset = Vector2.new(math.sin(BorderPhase * 2.2) * .48, 0)
+MainFlameGradient.Rotation = (BorderPhase * 22) % 360
+elseif BorderStyle == 'Comet Trail' then
+MainFlameGradient.Offset = Vector2.new(((BorderPhase * .16) % 2) - 1, 0)
+MainFlameGradient.Rotation = (BorderPhase * 14) % 360
+elseif BorderStyle == 'Neon Circuit' then
+MainFlameGradient.Offset = Vector2.new(((BorderPhase * .24) % 2) - 1, math.sin(BorderPhase * 2.5) * .08)
+MainFlameGradient.Rotation = (BorderPhase * 54) % 360
+elseif BorderStyle == 'Mono Sweep' then
+MainFlameGradient.Offset = Vector2.new(((BorderPhase * .18) % 2) - 1, 0)
+MainFlameGradient.Rotation = 0
 else
-local DarkGold = Theme.Accent:Lerp(Theme.Background, 0.72)
-local DeepGold = Theme.Accent:Lerp(Theme.Background, 0.48)
-local RichGold = Theme.Accent:Lerp(Theme.AccentBright, 0.25)
-local MetallicGold = Theme.Accent
-local BrightGold = Theme.AccentBright
-local function CycleGold(Offset, LowColor, HighColor)
-local Alpha = (math.sin(GoldPhase + Offset) + 1) * 0.5
-return LowColor:Lerp(HighColor, Alpha)
-end
-HubUI.LegacyBorderColor = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Theme.Background),
-ColorSequenceKeypoint.new(0.14, Theme.Background),
-ColorSequenceKeypoint.new(0.27, CycleGold(0.00, DarkGold, DeepGold)),
-ColorSequenceKeypoint.new(0.39, CycleGold(1.05, MetallicGold, BrightGold)),
-ColorSequenceKeypoint.new(0.50, Theme.Background),
-ColorSequenceKeypoint.new(0.64, Theme.Background),
-ColorSequenceKeypoint.new(0.77, CycleGold(3.15, DeepGold, MetallicGold)),
-ColorSequenceKeypoint.new(0.90, CycleGold(4.20, MetallicGold, BrightGold)),
-ColorSequenceKeypoint.new(1.00, Theme.Background),
-})
-BackgroundGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, Theme.Background),
-ColorSequenceKeypoint.new(0.28, Theme.Panel:Lerp(Theme.Accent, 0.08)),
-ColorSequenceKeypoint.new(0.50, Theme.Panel:Lerp(Accent, 0.30)),
-ColorSequenceKeypoint.new(0.72, Theme.Panel:Lerp(Theme.Accent, 0.08)),
-ColorSequenceKeypoint.new(1.00, Theme.Background),
-})
-if Intro and Intro.Parent then
-IntroStrokeGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, CycleGold(0.00, DarkGold, RichGold)),
-ColorSequenceKeypoint.new(0.36, CycleGold(1.40, RichGold, MetallicGold)),
-ColorSequenceKeypoint.new(0.58, CycleGold(2.80, MetallicGold, BrightGold)),
-ColorSequenceKeypoint.new(1.00, CycleGold(4.20, DarkGold, RichGold)),
-})
-IntroFillGradient.Color = ColorSequence.new({
-ColorSequenceKeypoint.new(0.00, CycleGold(0.00, DarkGold, RichGold)),
-ColorSequenceKeypoint.new(0.55, CycleGold(2.10, MetallicGold, BrightGold)),
-ColorSequenceKeypoint.new(1.00, CycleGold(4.20, DeepGold, MetallicGold)),
-})
-end
+MainFlameGradient.Offset = Vector2.new(math.sin(BorderPhase * .72) * .42, math.cos(BorderPhase * .44) * .08)
+MainFlameGradient.Rotation = (BorderPhase * 42) % 360
 end
 end
 
-if not IsWindowDragging and Now - (HubUI.LastAccentAt or 0) >= (InterfaceConfig.ReducedMotion and 0.20 or 0.05) then
+if not IsWindowDragging and Now - (HubUI.LastAccentAt or 0) >= (InterfaceConfig.ReducedMotion and 0.20 or 0.10) then
 HubUI.LastAccentAt = Now
 for Index = #HubUI.Accents, 1, -1 do
 local Binding = HubUI.Accents[Index]
@@ -38918,6 +39612,8 @@ else
 table.remove(HubUI.Accents, Index)
 end
 end
+if Now - (HubUI.LastControlVisualAt or 0) >= 0.22 then
+HubUI.LastControlVisualAt = Now
 for Name, Data in pairs(HubUI.TabButtons) do
 Data.Button.TextColor3 = Name == HubUI.ActiveTab and Theme.Text or Theme.Muted
 Data.Button.BackgroundColor3 = Name == HubUI.ActiveTab and Theme.SurfaceHover or Theme.Panel
@@ -38934,6 +39630,7 @@ SearchBox.PlaceholderColor3 = SearchBox:IsFocused() and Accent or Theme.Muted
 GlobalSearchBox.PlaceholderColor3 = GlobalSearchBox:IsFocused() and Accent or Theme.Muted
 GlobalSearchStroke.Color = GlobalSearchBox:IsFocused() and Accent or Theme.Border
 GlobalSearchStroke.Thickness = GlobalSearchBox:IsFocused() and 1.5 or 1
+end
 end
 
 local Camera = Workspace.CurrentCamera
@@ -38999,10 +39696,12 @@ and string.format('%.1f studs', State.AutoHeadRide.TargetDistance) or '--'
 end
 if HubUI.OffenseStatusText then
 HubUI.OffenseStatusText.Text = string.format(
-'STATUS  %s\nTARGET  %s\nPLAN    %s\nANTIRIP %s\nBALL REACH  %s\nCOURT   %s | EDGE %s\nSHOT    at 72 studs with Silent Aim',
+'STATUS  %s\nMODE    %s\nTARGET  %s\nPLAN    %s\nHAND    %s\nANTIRIP %s\nBALL REACH  %s\nCOURT   %s | EDGE %s\nSHOT    at 72 studs with regular setup',
 State.AutoOffense.Status,
+State.AutoOffense.BehaviorStatus or string.upper(State.AutoOffense.BehaviorMode or 'ADAPTIVE'),
 State.AutoOffense.Target and string.format('%.1f studs', State.AutoOffense.TargetDistance) or '--',
 State.AutoOffense.DriveStatus or 'GOAL STRAFE TO 72 LINE',
+State.AutoOffense.AutoHandStatus or 'WAITING',
 State.AutoOffense.AntiRipStatus or 'ARMED',
 State.AutoOffense.DefenderCanReachBall and 'YES - CUT BACK' or 'NO - HOLD SIDE',
 State.AutoOffense.BoundaryStatus or 'CLEAR',
