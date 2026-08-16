@@ -27176,6 +27176,7 @@ AccentLine = true,
 ScrollbarWidth = 4,
 HoverAnimations = true,
 KeybindMenuVisible = true,
+KeybindMenuToggleKey = 'KC:K',
 KeybindMenuPosition = { X = -14, Y = 86 },
 ActiveHudVisible = false,
 ActiveHudPosition = { X = 14, Y = 220 },
@@ -27659,6 +27660,7 @@ InterfaceConfig.AccentLine = InterfaceConfig.AccentLine ~= false
 InterfaceConfig.ScrollbarWidth = math.clamp(math.floor(tonumber(InterfaceConfig.ScrollbarWidth) or 4), 0, 10)
 InterfaceConfig.HoverAnimations = InterfaceConfig.HoverAnimations ~= false
 InterfaceConfig.KeybindMenuVisible = InterfaceConfig.KeybindMenuVisible ~= false
+InterfaceConfig.KeybindMenuToggleKey = tostring(InterfaceConfig.KeybindMenuToggleKey or InterfaceDefaults.KeybindMenuToggleKey or 'KC:K')
 InterfaceConfig.KeybindMenuPosition = type(InterfaceConfig.KeybindMenuPosition) == 'table'
 and InterfaceConfig.KeybindMenuPosition or DeepCopy(InterfaceDefaults.KeybindMenuPosition)
 InterfaceConfig.KeybindMenuPosition.X = tonumber(InterfaceConfig.KeybindMenuPosition.X) or -14
@@ -28000,6 +28002,28 @@ end)
 
 Motion:Play()
 return Motion
+end
+
+function HubUI.Motion.Cancel(Object, Properties)
+local ObjectTweens = HubUI.ActiveTweens[Object]
+if not ObjectTweens then return end
+for Index = #ObjectTweens, 1, -1 do
+local Entry = ObjectTweens[Index]
+local Overlaps = false
+if Entry and not Entry.Done and Entry.Motion then
+for Property in pairs(Entry.Properties or {}) do
+if Properties[Property] then Overlaps = true; break end
+end
+end
+if Overlaps then
+Entry.Done = true
+pcall(function() Entry.Motion:Cancel() end)
+table.remove(ObjectTweens, Index)
+elseif not Entry or Entry.Done then
+ table.remove(ObjectTweens, Index)
+end
+end
+if #ObjectTweens == 0 then HubUI.ActiveTweens[Object] = nil end
 end
 
 local function MotionOut(Object, Duration, Properties, EasingStyle, EasingDirection)
@@ -33540,9 +33564,22 @@ MainFlameGradient.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fr
 end
 end
 
-CreateSectionHeader(InterfaceLayoutGroup, 340, 'Mobile action buttons')
+CreateSectionHeader(InterfaceLayoutGroup, 350, 'Keybind overlay')
+HubUI.Controls.KeybindMenuToggle = CreateCheckbox(
+InterfaceLayoutGroup, 370, 'Show keybind list', InterfaceConfig.KeybindMenuVisible ~= false,
+function(Value)
+InterfaceConfig.KeybindMenuVisible = Value == true
+if HubUI.KeybindManager and HubUI.KeybindManager.SetOverlayVisible then
+HubUI.KeybindManager:SetOverlayVisible(InterfaceConfig.KeybindMenuVisible, true)
+else
+SaveInterfaceConfig()
+end
+end
+)
+
+CreateSectionHeader(InterfaceLayoutGroup, 420, 'Mobile action buttons')
 HubUI.Controls.MobileQuickVisible = CreateCheckbox(
-InterfaceLayoutGroup, 360, 'Show on-screen buttons', InterfaceConfig.MobileQuickVisible ~= false,
+InterfaceLayoutGroup, 440, 'Show on-screen buttons', InterfaceConfig.MobileQuickVisible ~= false,
 function(Value)
 InterfaceConfig.MobileQuickVisible = Value == true
 SaveInterfaceConfig()
@@ -33555,7 +33592,7 @@ or 'On-screen buttons hidden. Use the GE launcher to open the menu.')
 end
 )
 HubUI.Controls.MobileQuickPinnedOnly = CreateCheckbox(
-InterfaceLayoutGroup, 390, 'Only pinned buttons', InterfaceConfig.MobileQuickPinnedOnly == true,
+InterfaceLayoutGroup, 470, 'Only pinned buttons', InterfaceConfig.MobileQuickPinnedOnly == true,
 function(Value)
 InterfaceConfig.MobileQuickPinnedOnly = Value == true
 SaveInterfaceConfig()
@@ -33568,7 +33605,7 @@ or 'Every bound keybind gets a button.')
 end
 )
 HubUI.Controls.MobileButtonSize = CreateNumberInput(
-InterfaceLayoutGroup, 420, 'Button size', InterfaceConfig.MobileButtonSize, 34, 82, 0,
+InterfaceLayoutGroup, 500, 'Button size', InterfaceConfig.MobileButtonSize, 34, 82, 0,
 function(Value)
 InterfaceConfig.MobileButtonSize = Value
 SaveInterfaceConfig()
@@ -33578,7 +33615,7 @@ end
 end
 )
 HubUI.Controls.MobileButtonFade = CreateNumberInput(
-InterfaceLayoutGroup, 450, 'Button fade', InterfaceConfig.MobileButtonFade, 0, 0.9, 2,
+InterfaceLayoutGroup, 530, 'Button fade', InterfaceConfig.MobileButtonFade, 0, 0.9, 2,
 function(Value)
 InterfaceConfig.MobileButtonFade = Value
 SaveInterfaceConfig()
@@ -33588,24 +33625,24 @@ end
 end
 )
 
-CreateSectionHeader(InterfaceLayoutGroup,482,'Shape and corners')
-HubUI.Controls.InterfaceRoundedUI=CreateCheckbox(InterfaceLayoutGroup,502,'Rounded UI',InterfaceConfig.RoundedUI~=false,function(Value) InterfaceConfig.RoundedUI=Value==true; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfaceButtonStyle=CreateDropdown(InterfaceLayoutGroup,532,'Button shape',{'Rounded','Pill','Square'},InterfaceConfig.ButtonStyle,function(Value) InterfaceConfig.ButtonStyle=Value; HubUI.ApplyCustomization(true) end,128)
-HubUI.Controls.InterfaceWindowRadius=CreateNumberInput(InterfaceLayoutGroup,562,'Window corner radius',InterfaceConfig.WindowRadius,0,30,0,function(Value) InterfaceConfig.WindowRadius=Value; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfacePanelRadius=CreateNumberInput(InterfaceLayoutGroup,592,'Panel corner radius',InterfaceConfig.PanelRadius,0,24,0,function(Value) InterfaceConfig.PanelRadius=Value; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfaceButtonRadius=CreateNumberInput(InterfaceLayoutGroup,622,'Button corner radius',InterfaceConfig.ButtonRadius,0,24,0,function(Value) InterfaceConfig.ButtonRadius=Value; HubUI.ApplyCustomization(true) end)
-CreateSectionHeader(InterfaceLayoutGroup,654,'Animated border')
-HubUI.Controls.InterfaceAnimatedBorder=CreateCheckbox(InterfaceLayoutGroup,674,'Silver / white animated border',InterfaceConfig.AnimatedBorder~=false,function(Value) InterfaceConfig.AnimatedBorder=Value==true; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfaceBorderStyle=CreateDropdown(InterfaceLayoutGroup,704,'Border style',{'Silver Sweep','Theme Pulse','Prism','Static'},InterfaceConfig.BorderStyle,function(Value) InterfaceConfig.BorderStyle=Value; HubUI.ApplyCustomization(true) end,128)
-HubUI.Controls.InterfaceBorderThickness=CreateNumberInput(InterfaceLayoutGroup,734,'Border thickness',InterfaceConfig.BorderThickness,.5,8,1,function(Value) InterfaceConfig.BorderThickness=Value; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfaceBorderSpeed=CreateNumberInput(InterfaceLayoutGroup,764,'Border animation speed',InterfaceConfig.BorderSpeed,.05,5,2,function(Value) InterfaceConfig.BorderSpeed=Value; SaveInterfaceConfig() end)
-HubUI.Controls.InterfaceBorderGlow=CreateNumberInput(InterfaceLayoutGroup,794,'Border transparency',InterfaceConfig.BorderGlow,0,.9,2,function(Value) InterfaceConfig.BorderGlow=Value; HubUI.ApplyCustomization(true) end)
-CreateSectionHeader(InterfaceLayoutGroup,826,'Panels and scrolling')
-HubUI.Controls.InterfacePanelGradients=CreateCheckbox(InterfaceLayoutGroup,846,'Animated panel gradients',InterfaceConfig.PanelGradients~=false,function(Value) InterfaceConfig.PanelGradients=Value==true; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfaceAccentLine=CreateCheckbox(InterfaceLayoutGroup,876,'Top accent line',InterfaceConfig.AccentLine~=false,function(Value) InterfaceConfig.AccentLine=Value==true; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfaceScrollbarWidth=CreateNumberInput(InterfaceLayoutGroup,906,'Scrollbar width',InterfaceConfig.ScrollbarWidth,0,10,0,function(Value) InterfaceConfig.ScrollbarWidth=Value; HubUI.ApplyCustomization(true) end)
-HubUI.Controls.InterfaceHoverAnimations=CreateCheckbox(InterfaceLayoutGroup,936,'Hover animations',InterfaceConfig.HoverAnimations~=false,function(Value) InterfaceConfig.HoverAnimations=Value==true; SaveInterfaceConfig() end)
-CreateParagraph(InterfaceLayoutGroup,UDim2.fromOffset(8,970),UDim2.new(1,-16,0,70),'Every feature panel now scrolls independently.\nMouse wheel, trackpad, and touch drag keep\nall controls inside their panel on every tab.')
+CreateSectionHeader(InterfaceLayoutGroup,562,'Shape and corners')
+HubUI.Controls.InterfaceRoundedUI=CreateCheckbox(InterfaceLayoutGroup,582,'Rounded UI',InterfaceConfig.RoundedUI~=false,function(Value) InterfaceConfig.RoundedUI=Value==true; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceButtonStyle=CreateDropdown(InterfaceLayoutGroup,612,'Button shape',{'Rounded','Pill','Square'},InterfaceConfig.ButtonStyle,function(Value) InterfaceConfig.ButtonStyle=Value; HubUI.ApplyCustomization(true) end,128)
+HubUI.Controls.InterfaceWindowRadius=CreateNumberInput(InterfaceLayoutGroup,642,'Window corner radius',InterfaceConfig.WindowRadius,0,30,0,function(Value) InterfaceConfig.WindowRadius=Value; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfacePanelRadius=CreateNumberInput(InterfaceLayoutGroup,672,'Panel corner radius',InterfaceConfig.PanelRadius,0,24,0,function(Value) InterfaceConfig.PanelRadius=Value; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceButtonRadius=CreateNumberInput(InterfaceLayoutGroup,702,'Button corner radius',InterfaceConfig.ButtonRadius,0,24,0,function(Value) InterfaceConfig.ButtonRadius=Value; HubUI.ApplyCustomization(true) end)
+CreateSectionHeader(InterfaceLayoutGroup,734,'Animated border')
+HubUI.Controls.InterfaceAnimatedBorder=CreateCheckbox(InterfaceLayoutGroup,754,'Silver / white animated border',InterfaceConfig.AnimatedBorder~=false,function(Value) InterfaceConfig.AnimatedBorder=Value==true; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceBorderStyle=CreateDropdown(InterfaceLayoutGroup,784,'Border style',{'Silver Sweep','Theme Pulse','Prism','Static'},InterfaceConfig.BorderStyle,function(Value) InterfaceConfig.BorderStyle=Value; HubUI.ApplyCustomization(true) end,128)
+HubUI.Controls.InterfaceBorderThickness=CreateNumberInput(InterfaceLayoutGroup,814,'Border thickness',InterfaceConfig.BorderThickness,.5,8,1,function(Value) InterfaceConfig.BorderThickness=Value; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceBorderSpeed=CreateNumberInput(InterfaceLayoutGroup,844,'Border animation speed',InterfaceConfig.BorderSpeed,.05,5,2,function(Value) InterfaceConfig.BorderSpeed=Value; SaveInterfaceConfig() end)
+HubUI.Controls.InterfaceBorderGlow=CreateNumberInput(InterfaceLayoutGroup,874,'Border transparency',InterfaceConfig.BorderGlow,0,.9,2,function(Value) InterfaceConfig.BorderGlow=Value; HubUI.ApplyCustomization(true) end)
+CreateSectionHeader(InterfaceLayoutGroup,914,'Panels and scrolling')
+HubUI.Controls.InterfacePanelGradients=CreateCheckbox(InterfaceLayoutGroup,934,'Animated panel gradients',InterfaceConfig.PanelGradients~=false,function(Value) InterfaceConfig.PanelGradients=Value==true; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceAccentLine=CreateCheckbox(InterfaceLayoutGroup,964,'Top accent line',InterfaceConfig.AccentLine~=false,function(Value) InterfaceConfig.AccentLine=Value==true; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceScrollbarWidth=CreateNumberInput(InterfaceLayoutGroup,994,'Scrollbar width',InterfaceConfig.ScrollbarWidth,0,10,0,function(Value) InterfaceConfig.ScrollbarWidth=Value; HubUI.ApplyCustomization(true) end)
+HubUI.Controls.InterfaceHoverAnimations=CreateCheckbox(InterfaceLayoutGroup,1024,'Hover animations',InterfaceConfig.HoverAnimations~=false,function(Value) InterfaceConfig.HoverAnimations=Value==true; SaveInterfaceConfig() end)
+CreateParagraph(InterfaceLayoutGroup,UDim2.fromOffset(8,1058),UDim2.new(1,-16,0,70),'Every feature panel now scrolls independently.\nMouse wheel, trackpad, and touch drag keep\nall controls inside their panel on every tab.')
 HubUI.ApplyCustomization(false)
 
 CreateSectionHeader(HubUI.HumanizerGroup, 307, 'How it works')
@@ -35307,6 +35344,7 @@ Entry.Key = Token
 self:UpdateLegacyKeys(Entry)
 self:RefreshEntry(Entry)
 self:RefreshOverlay()
+self:ApplyOverlayWindowState(HubUI.Open == true)
 if ShouldSave ~= false then self:Store(Entry) end
 end
 
@@ -35654,7 +35692,10 @@ local OverlayVisibilitySerial = 0
 function KeybindManager:ApplyOverlayWindowState(WindowOpen)
 OverlayVisibilitySerial += 1
 local ThisSerial = OverlayVisibilitySerial
-local ShouldShow = InterfaceConfig.KeybindMenuVisible and WindowOpen == true
+local ToggleEntry = self.Entries and self.Entries.KeybindMenuToggle
+local HasAssignedToggle = ToggleEntry and ToggleEntry.Key ~= nil
+local ShouldShow = InterfaceConfig.KeybindMenuVisible
+and (WindowOpen == true or HasAssignedToggle == true)
 if ShouldShow then
 local WasVisible = Overlay.Visible
 Overlay.Visible = true
@@ -35682,15 +35723,25 @@ self:ApplyOverlayWindowState(HubUI.Open == true)
 if self.OverlayVisibilityButton then
 self.OverlayVisibilityButton.Text = Value and 'HIDE MENU' or 'SHOW MENU'
 end
+local ToggleControl = HubUI.Controls and HubUI.Controls.KeybindMenuToggle
+if ToggleControl and ToggleControl.Value ~= Value then
+ToggleControl:Set(Value, false)
+end
 if ShouldSave ~= false then self:ScheduleSave() end
+end
+
+function KeybindManager:RefreshOverlayState(VisibleEntries)
+for _, Entry in ipairs(VisibleEntries or {}) do
+local RowData = self.OverlayRows[Entry.Id]
+if RowData and RowData.Label and RowData.Label.Parent then
+local Active = self:GetActive(Entry)
+RowData.Label.TextColor3 = Active and Theme.AccentBright or Theme.Text
+end
+end
 end
 
 function KeybindManager:RefreshOverlay()
 if not OverlayList then return end
-for _, Child in ipairs(OverlayList:GetChildren()) do
-if Child:IsA('Frame') then Child:Destroy() end
-end
-
 local VisibleEntries = {}
 for _, Entry in ipairs(self.Ordered) do
 if Entry.Show ~= false and (Entry.Key or Entry.Mode == 'Always') then
@@ -35703,6 +35754,20 @@ return A.Page < B.Page
 end)
 
 local Count = #VisibleEntries
+local SignatureParts = { tostring(InterfaceConfig.KeybindMenuVisible), tostring(Count) }
+for _, Entry in ipairs(VisibleEntries) do
+SignatureParts[#SignatureParts + 1] = table.concat({Entry.Id, tostring(Entry.Key), tostring(Entry.Mode)}, ':')
+end
+local Signature = table.concat(SignatureParts, '|')
+if self.OverlaySignature == Signature then
+self:RefreshOverlayState(VisibleEntries)
+return
+end
+self.OverlaySignature = Signature
+for _, Child in ipairs(OverlayList:GetChildren()) do
+if Child:IsA('Frame') then Child:Destroy() end
+end
+table.clear(self.OverlayRows)
 if Count == 0 then
 local Empty = New('Frame', {
 Size = UDim2.new(1, 0, 0, OverlayRowHeight), BackgroundColor3 = Theme.Background,
@@ -35734,7 +35799,7 @@ TextSize = 10, TextTruncate = Enum.TextTruncate.AtEnd,
 TextXAlignment = Enum.TextXAlignment.Left,
 TextYAlignment = Enum.TextYAlignment.Center, ZIndex = 123,
 }, Row)
-if Active then BindAccent(Label, 'TextColor3') end
+self.OverlayRows[Entry.Id] = { Row = Row, Label = Label }
 end
 end
 
@@ -35906,6 +35971,7 @@ end
 local DefaultKeys = {
 SilentAim = KeyCodeToken(CONFIG.ToggleKey),
 SilentMode = KeyCodeToken(CONFIG.SilentModeToggleKey),
+KeybindMenuToggle = InterfaceConfig.KeybindMenuToggleKey or 'KC:K',
 AutoGuard = KeyCodeToken(CONFIG.AutoGuardOnBallKey),
 AutoGetOpen = KeyCodeToken(CONFIG.AutoGetOpenKey),
 AutoMix = KeyCodeToken(CONFIG.AutoMixKey),
@@ -37253,8 +37319,8 @@ function HubUI.SetOpen(Value)
 if HubUI.IntroPlaying then return end
 Value = Value == true
 OpenSerial += 1
-local ThisSerial = OpenSerial
 HubUI.Open = Value
+HubUI.Transitioning = false
 if HubUI.KeybindManager and HubUI.KeybindManager.ApplyOverlayWindowState then
 HubUI.KeybindManager:ApplyOverlayWindowState(Value)
 end
@@ -37272,28 +37338,15 @@ and Viewport and Viewport.Y > Viewport.X and type(SavedWindowPosition) ~= 'table
 Main.Position = UDim2.new(0, 8 + 290 * TargetScale, 0.5, 0)
 end
 ClampWindowToViewport()
-local WasVisible = Main.Visible
-local RestingPosition = Main.Position
 Main.Visible = true
-if not WasVisible then
-Main.GroupTransparency = 1
-MainScale.Scale = TargetScale * 0.92
-Main.Position = UDim2.new(RestingPosition.X.Scale, RestingPosition.X.Offset, RestingPosition.Y.Scale, RestingPosition.Y.Offset + 14)
-end
-Main.Rotation = 0
-Tween(Main, 0.30, { GroupTransparency = 0, Rotation = 0, Position = RestingPosition }, Enum.EasingStyle.Quint)
-Tween(MainScale, 0.28, { Scale = TargetScale }, Enum.EasingStyle.Quint)
-elseif Main.Visible then
-Tween(Main, 0.22, { GroupTransparency = 1, Rotation = 0 }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-Tween(MainScale, 0.14, { Scale = TargetScale * 0.99 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-State.Lifecycle:Delay(HubUI.Motion.Hold(0.23), function()
-if ThisSerial == OpenSerial and not HubUI.Open and Main.Parent then
-Main.Visible = false
-Main.Rotation = 0
 Main.GroupTransparency = 0
+Main.Rotation = 0
 MainScale.Scale = TargetScale
-end
-end)
+else
+Main.Visible = false
+Main.GroupTransparency = 0
+Main.Rotation = 0
+MainScale.Scale = TargetScale
 end
 end
 
@@ -38680,6 +38733,10 @@ return
 end
 LastTopbarClick = Now
 Dragging = true
+HubUI.WindowDragging = true
+if HubUI.Motion and HubUI.Motion.Cancel then
+HubUI.Motion.Cancel(Main, { Position = true, Rotation = true })
+end
 DragStart = Input.Position
 StartPosition = Main.Position
 end
@@ -38694,14 +38751,17 @@ StartPosition.X.Offset + Delta.X,
 StartPosition.Y.Scale,
 StartPosition.Y.Offset + Delta.Y
 )
-ClampWindowToViewport()
 end
 end))
 GiveSignal(UserInputService.InputEnded:Connect(function(Input)
 if Input.UserInputType == Enum.UserInputType.MouseButton1
 or Input.UserInputType == Enum.UserInputType.Touch then
-if Dragging then SaveWindowPosition() end
+if Dragging then
+ClampWindowToViewport()
+SaveWindowPosition()
+end
 Dragging = false
+HubUI.WindowDragging = false
 end
 end))
 
@@ -38723,6 +38783,7 @@ if HubNow - (HubUI.HubRenderAt or 0) < HubInterval then return end
 HubUI.HubRenderAt = HubNow
 local RenderOk, RenderError = pcall(function()
 local Now = os.clock()
+local IsWindowDragging = HubUI.WindowDragging == true
 local LinoriaStatic = InterfaceConfig.ThemePreset == 'Linoria'
 local MotionEnabled = not InterfaceConfig.ReducedMotion and not LinoriaStatic
 local PrismActive = InterfaceConfig.ThemePreset == 'Prism'
@@ -38756,7 +38817,7 @@ IntroStrokeGradient.Offset = MotionEnabled and Vector2.new(math.sin(Now * 1.8) *
 IntroFillGradient.Offset = MotionEnabled and Vector2.new(math.sin(Now * 2.1) * 0.45, 0) or Vector2.zero
 end
 
-if Now - HubUI.LastGradientAt >= 0.08 then
+if not IsWindowDragging and Now - HubUI.LastGradientAt >= (InterfaceConfig.ReducedMotion and 0.20 or 0.05) then
 HubUI.LastGradientAt = Now
 if PrismActive then
 local RainbowPhase = MotionEnabled and ((Now * GradientSpeed * 0.10) % 1) or 0
@@ -38826,9 +38887,9 @@ ColorSequenceKeypoint.new(1.00, Theme.Background),
 })
 BackgroundGradient.Color = ColorSequence.new({
 ColorSequenceKeypoint.new(0.00, Theme.Background),
-ColorSequenceKeypoint.new(0.28, Theme.Panel:Lerp(Theme.Accent, 0.12)),
-ColorSequenceKeypoint.new(0.50, Theme.Panel:Lerp(Accent, 0.42)),
-ColorSequenceKeypoint.new(0.72, Theme.Panel:Lerp(Theme.Accent, 0.12)),
+ColorSequenceKeypoint.new(0.28, Theme.Panel:Lerp(Theme.Accent, 0.08)),
+ColorSequenceKeypoint.new(0.50, Theme.Panel:Lerp(Accent, 0.30)),
+ColorSequenceKeypoint.new(0.72, Theme.Panel:Lerp(Theme.Accent, 0.08)),
 ColorSequenceKeypoint.new(1.00, Theme.Background),
 })
 if Intro and Intro.Parent then
@@ -38847,7 +38908,7 @@ end
 end
 end
 
-if Now - (HubUI.LastAccentAt or 0) >= 0.08 then
+if not IsWindowDragging and Now - (HubUI.LastAccentAt or 0) >= (InterfaceConfig.ReducedMotion and 0.20 or 0.05) then
 HubUI.LastAccentAt = Now
 for Index = #HubUI.Accents, 1, -1 do
 local Binding = HubUI.Accents[Index]
@@ -39312,7 +39373,7 @@ if HubUI.IntroPercent then
 Tween(HubUI.IntroPercent, 0.22, { TextTransparency = 0.15 }, Enum.EasingStyle.Sine)
 end
 
-local FillTween = Tween(IntroFill, 1.10, { Size = UDim2.fromScale(1, 1) }, Enum.EasingStyle.Linear)
+local FillTween = Tween(IntroFill, 0.62, { Size = UDim2.fromScale(1, 1) }, Enum.EasingStyle.Linear)
 -- Counter is driven off the real fill width, so it can never drift out
 -- of sync with the bar or with a reduced-motion duration.
 State.Lifecycle:Spawn(function()
@@ -39341,9 +39402,9 @@ task.wait(HubUI.Motion.Hold(0.22))
 Main.Visible = true
 Main.GroupTransparency = 1
 MainScale.Scale = EffectiveScale()
-MainScale.Scale = EffectiveScale() * 0.98
-Tween(Main, 0.38, { GroupTransparency = 0 }, Enum.EasingStyle.Sine)
-Tween(MainScale, 0.44, { Scale = EffectiveScale() }, Enum.EasingStyle.Quint)
+MainScale.Scale = EffectiveScale() * 0.975
+Tween(Main, 0.24, { GroupTransparency = 0 }, Enum.EasingStyle.Quart)
+Tween(MainScale, 0.28, { Scale = EffectiveScale() }, Enum.EasingStyle.Quart)
 Tween(Intro, 0.34, { GroupTransparency = 1 }, Enum.EasingStyle.Sine)
 Tween(IntroScale, 0.34, { Scale = 1.03 }, Enum.EasingStyle.Quint)
 if HubUI.IntroScrim then
