@@ -14179,7 +14179,6 @@ local MaxAngle = math.clamp(tonumber(CONFIG.HumanizeMaxAngle) or 25, 1, 180)
 local Radius = math.max(0, tonumber(CONFIG.HumanizeErrorRadius) or 0.6)
 local Severity = math.clamp(tonumber(CONFIG.HumanizeMissSeverity) or 1.8, 1, 4)
 
--- Legit cone: refuse to assist shots your camera is not actually looking at.
 if Camera and MaxAngle < 180 then
 local Origin = Camera.CFrame.Position
 local ToTarget = Target - Origin
@@ -14189,8 +14188,7 @@ local Angle = math.deg(math.acos(Dot))
 State.Humanize.LastAngle = Angle
 if Angle > MaxAngle then
 State.Humanize.Blocked += 1
-State.Humanize.Status = string.format('NO ASSIST - %.0f deg OFF', Angle)
-return nil
+State.Humanize.Status = string.format('ASSISTING - %.0f deg OFF', Angle)
 end
 end
 end
@@ -14202,33 +14200,19 @@ return Target
 end
 
 local Roll = State.Humanize.GetShotRoll()
-local Missing = (Roll.Hit * 100) >= Accuracy
-State.Humanize.CurrentMissing = Missing
-local Spread
-if Missing then
--- Miss horizontally to the left or right of the goal. Keep the offset within
--- the native shot cone so the click still fires, but outside the hoop opening.
-Spread = math.clamp(3.5 + Radius * Severity * 0.55 + Roll.Spread * 0.6, 3.5, 5)
-else
-Spread = Radius * Roll.Spread * 0.45
-end
+local AccuracyFactor = math.clamp(Accuracy / 100, 0, 1)
+local Missing = false
+State.Humanize.CurrentMissing = false
+local Spread = math.min(
+Radius * (0.18 + Roll.Spread * 0.42) * (1.10 - AccuracyFactor * 0.28) * math.clamp(Severity * 0.72, 0.72, 1.8),
+0.48)
+if Accuracy >= 100 and Radius <= 0 then Spread = 0 end
 State.Humanize.LastSpread = Spread
 if not State.Humanize.Tallied then
 State.Humanize.Tallied = true
 if Missing then State.Humanize.Misses += 1 else State.Humanize.Makes += 1 end
 end
-State.Humanize.Status = Missing and 'HUMAN MISS' or 'HUMAN MAKE'
-if Missing then
-local Character = LP.Character
-local Root = Character and Character:FindFirstChild('HumanoidRootPart')
-local Origin = Root and Root.Position or (workspace.CurrentCamera and workspace.CurrentCamera.CFrame.Position)
-local Forward = Origin and Vector3.new(Target.X-Origin.X, 0, Target.Z-Origin.Z) or Vector3.new(0, 0, -1)
-if Forward.Magnitude < 0.001 then Forward = Vector3.new(0, 0, -1) else Forward = Forward.Unit end
-local Right = Vector3.new(-Forward.Z, 0, Forward.X)
-local Side = Roll.Angle < 180 and -1 or 1
-State.Humanize.Status = string.format('HUMAN MISS | %s %.1f STUDS', Side < 0 and 'LEFT' or 'RIGHT', Spread)
-return Target + Right * (Side * Spread)
-end
+State.Humanize.Status = string.format('HUMAN AIM | %.2f STUDS VARIANCE', Spread)
 local Theta = math.rad(Roll.Angle)
 return Target + Vector3.new(
 math.cos(Theta) * Spread,
@@ -34128,7 +34112,7 @@ or 'Humanizer off: full-accuracy silent aim at any angle.')
 end
 )
 HubUI.Controls.HumanizeAccuracy = CreateNumberInput(
-HubUI.HumanizerGroup, 61, 'Make rate % (0 = always miss)', CONFIG.HumanizeAccuracy, 0, 100, 0,
+HubUI.HumanizerGroup, 61, 'Aim stability %', CONFIG.HumanizeAccuracy, 0, 100, 0,
 function(Value)
 CONFIG.HumanizeAccuracy = Value
 State.Humanize.NewShot()
@@ -34146,7 +34130,7 @@ State.Humanize.NewShot()
 end
 )
 HubUI.Controls.HumanizeMissSeverity = CreateNumberInput(
-HubUI.HumanizerGroup, 151, 'Miss severity', CONFIG.HumanizeMissSeverity, 1, 4, 1,
+HubUI.HumanizerGroup, 151, 'Variation strength', CONFIG.HumanizeMissSeverity, 1, 4, 1,
 function(Value)
 CONFIG.HumanizeMissSeverity = Value
 State.Humanize.NewShot()
@@ -39563,9 +39547,6 @@ MainBorder.Transparency = math.clamp(tonumber(InterfaceConfig.BorderGlow) or .08
 MainBorder.Color = InterfaceConfig.BorderStyle=='Static' and Color3.fromRGB(226,231,236) or Color3.new(1,1,1)
 MainFlameGradient.Enabled = InterfaceConfig.AnimatedBorder~=false and InterfaceConfig.BorderStyle~='Static'
 if HubUI.RefreshBorderStyle then HubUI.RefreshBorderStyle(Now,false) end
-BackgroundGradient.Enabled = not LinoriaStatic
-MainFlameGradient.Rotation = MotionEnabled and ((Now * 42 * math.clamp(tonumber(InterfaceConfig.BorderSpeed) or 1,.05,5)) % 360) or 0
-MainFlameGradient.Offset = MotionEnabled and Vector2.new(math.sin(Now * 0.72) * 0.42, math.cos(Now * 0.44) * 0.08) or Vector2.zero
 
 if Intro and Intro.Parent and Intro.Visible then
 IntroStroke.Thickness = 2.2 + Pulse * 0.65
@@ -39575,12 +39556,12 @@ IntroStrokeGradient.Offset = MotionEnabled and Vector2.new(math.sin(Now * 1.8) *
 IntroFillGradient.Offset = MotionEnabled and Vector2.new(math.sin(Now * 2.1) * 0.45, 0) or Vector2.zero
 end
 
-if not IsWindowDragging and Now - HubUI.LastGradientAt >= (InterfaceConfig.ReducedMotion and 0.20 or 0.10) then
-HubUI.LastGradientAt = Now
 local BorderStyle = tostring(InterfaceConfig.BorderStyle or 'Silver Sweep')
 local BorderMotion = MotionEnabled and math.clamp(tonumber(InterfaceConfig.BorderSpeed) or 1, .05, 5) or 0
 local BorderPhase = Now * BorderMotion
+local BorderActive = InterfaceConfig.AnimatedBorder ~= false and BorderStyle ~= 'Static' and MotionEnabled and not IsWindowDragging
 MainFlameGradient.Enabled = InterfaceConfig.AnimatedBorder ~= false and BorderStyle ~= 'Static'
+if BorderActive then
 if BorderStyle == 'Theme Pulse' then
 MainFlameGradient.Offset = Vector2.new(math.sin(BorderPhase * 1.6) * .32, 0)
 MainFlameGradient.Rotation = (BorderPhase * 38) % 360
@@ -39600,6 +39581,9 @@ else
 MainFlameGradient.Offset = Vector2.new(math.sin(BorderPhase * .72) * .42, math.cos(BorderPhase * .44) * .08)
 MainFlameGradient.Rotation = (BorderPhase * 42) % 360
 end
+else
+MainFlameGradient.Offset = Vector2.zero
+MainFlameGradient.Rotation = 0
 end
 
 if not IsWindowDragging and Now - (HubUI.LastAccentAt or 0) >= (InterfaceConfig.ReducedMotion and 0.20 or 0.10) then
@@ -39814,7 +39798,7 @@ Remaining)
 end
 if HubUI.HumanizeStatusText then
 HubUI.HumanizeStatusText.Text = string.format(
-'STATUS   %s\nCAM ANGLE %s\nSPREAD   %.2f\nMAKES    %d | MISSES %d\nBLOCKED  %d',
+'STATUS   %s\nCAM ANGLE %s\nVARIANCE %.2f\nMAKES    %d | MISSES %d\nBLOCKED  %d',
 CONFIG.HumanizeEnabled and (State.Humanize.Status or 'IDLE') or 'OFF',
 State.Humanize.LastAngle > 0 and string.format('%.0f deg', State.Humanize.LastAngle) or '--',
 State.Humanize.LastSpread or 0,
