@@ -165,33 +165,33 @@ LegitAimMaxDegreesPerSecond = 420,
 LegitAimAccelerationDegreesPerSecond = 1500,
 LegitAimPitchSpeedScale = 0.82,
 LegitAimFlickTime = 0.28,
-LegitAimFlickMinTime = 0.10,
-LegitAimFlickMaxTime = 0.24,
+LegitAimFlickMinTime = 0.18,
+LegitAimFlickMaxTime = 0.46,
 LegitAimFlickAngleDivisor = 420,
 LegitAimRampTime = 0.025,
 LegitAimManualInputScale = 0.42,
 LegitAimManualOwnershipTime = 0.14,
 LegitAimDeadzoneDegrees = 0.10,
-LegitAimFlickMaxDegreesPerSecond = 1600,
-LegitAimReactionMin = 0, -- immediate: jump input is the intentional cue
-LegitAimReactionMax = 0,
-LegitAimSwayDegrees = 0.08,
+LegitAimFlickMaxDegreesPerSecond = 900,
+LegitAimReactionMin = 0.015, -- subtle reaction without a visible frozen pause
+LegitAimReactionMax = 0.045,
+LegitAimSwayDegrees = 0.06,
 LegitAimSwaySpeed = 3.8,
 LegitAimCorrectionMin = 0.09,
 LegitAimCorrectionMax = 0.16,
-LegitAimOvershootChance = 55,
-LegitAimOvershootMinAngle = 18,
-LegitAimOvershootMinScale = 0.015,
-LegitAimOvershootMaxScale = 0.06,
+LegitAimOvershootChance = 35,
+LegitAimOvershootMinAngle = 25,
+LegitAimOvershootMinScale = 0.008,
+LegitAimOvershootMaxScale = 0.028,
 -- Human flick model: Fitts's-law duration, minimum-jerk bell velocity,
 -- overshoot-then-correct on large flicks, undershoot on small ones.
-LegitAimFlickBaseTime = 0.060,
-LegitAimFlickBitTime = 0.025,
+LegitAimFlickBaseTime = 0.105,
+LegitAimFlickBitTime = 0.050,
 LegitAimFlickTargetWidthDegrees = 3,
 LegitAimFlickTimeJitter = 0.12,
-LegitAimUndershootChance = 30,
-LegitAimUndershootMinScale = 0.01,
-LegitAimUndershootMaxScale = 0.035,
+LegitAimUndershootChance = 25,
+LegitAimUndershootMinScale = 0.008,
+LegitAimUndershootMaxScale = 0.025,
 LegitAimCorrectionLatencyMin = 0.08,
 LegitAimCorrectionLatencyMax = 0.14,
 LegitAimCorrectionTimeMin = 0.15,
@@ -199,7 +199,7 @@ LegitAimCorrectionTimeMax = 0.30,
 LegitAimYawWarp = 0.80,
 LegitAimPitchWarp = 0.95,
 -- Critically damped camera layer removes frame steps without adding input lag.
-LegitAimCameraSmoothTime = 0.030,
+LegitAimCameraSmoothTime = 0.055,
 LegitAimCameraPitchSmoothScale = 1.08,
 LegitAimLargeTurnThreshold = 145,
 LegitAimLargeTurnSpeedBoost = 1.10,
@@ -14557,102 +14557,117 @@ return Points
 end)
 
 State.Humanize = {
-Status = 'IDLE',
-LastAngle = 0,
-LastSpread = 0,
-Blocked = 0,
-Makes = 0,
-Misses = 0,
-Rng = Random.new(),
-Roll = nil,
-RollAt = 0,
-Tallied = true,
-CurrentMissing = false,
+Status = 'IDLE', LastAngle = 0, LastSpread = 0, LastResult = '--',
+Blocked = 0, Makes = 0, Misses = 0, Rng = Random.new(),
+Roll = nil, RollAt = 0, Tallied = true,
+CurrentMissing = false, CurrentBlocked = false,
 }
 
--- One deterministic roll per jump, so the aim point stays fixed for the whole
--- shot instead of jittering every frame while the solver re-runs.
--- Roll fresh randomness for a brand new shot attempt.
+-- One stable decision per jump; preview solves and final release cannot disagree.
 function State.Humanize.NewShot()
-local R = State.Humanize.Rng
-if not R then R = Random.new(); State.Humanize.Rng = R end
+local R = State.Humanize.Rng or Random.new()
+State.Humanize.Rng = R
 State.Humanize.Roll = {
-Angle = R:NextNumber(0, 360),
-Hit = R:NextNumber(),
-Spread = R:NextNumber(),
-Lift = R:NextNumber(),
+Angle = R:NextNumber(0, 360), Hit = R:NextNumber(),
+Spread = R:NextNumber(), Lift = R:NextNumber(),
 }
 State.Humanize.RollAt = os.clock()
 State.Humanize.Tallied = false
 State.Humanize.CurrentMissing = false
+State.Humanize.CurrentBlocked = false
+State.Humanize.LastResult = 'PREVIEW'
 return State.Humanize.Roll
 end
 
--- Stable for the full jump/release. The old 0.45-second timeout rerolled while
--- airborne, so the final release often lost the intended make/miss result.
 function State.Humanize.GetShotRoll()
-local Roll = State.Humanize.Roll
-if not Roll or (os.clock() - (State.Humanize.RollAt or 0)) > 3 then
-return State.Humanize.NewShot()
-end
-return Roll
+return State.Humanize.Roll or State.Humanize.NewShot()
 end
 
-function State.Humanize.Apply(Target, Rim)
+-- Commit is true only for the target used by a real release. Live re-solves can
+-- update the preview without inflating make/miss/block counters every frame.
+function State.Humanize.Apply(Target, Rim, Commit)
 if typeof(Target) ~= 'Vector3' then return Target end
-local Camera = workspace.CurrentCamera
+local Camera = Workspace.CurrentCamera
 local Accuracy = math.clamp(tonumber(CONFIG.HumanizeAccuracy) or 92, 0, 100)
 local MaxAngle = math.clamp(tonumber(CONFIG.HumanizeMaxAngle) or 25, 1, 180)
-local Radius = math.max(0, tonumber(CONFIG.HumanizeErrorRadius) or 0.6)
+local Radius = math.clamp(tonumber(CONFIG.HumanizeErrorRadius) or 0.6, 0, 3)
 local Severity = math.clamp(tonumber(CONFIG.HumanizeMissSeverity) or 1.8, 1, 4)
+local Roll = State.Humanize.GetShotRoll()
+State.Humanize.CurrentBlocked = false
 
 if Camera and MaxAngle < 180 then
-local Origin = Camera.CFrame.Position
-local ToTarget = Target - Origin
+local CameraOrigin = Camera.CFrame.Position
+local ToTarget = Target - CameraOrigin
 if ToTarget.Magnitude > 0.05 then
 local Dot = math.clamp(Camera.CFrame.LookVector:Dot(ToTarget.Unit), -1, 1)
 local Angle = math.deg(math.acos(Dot))
 State.Humanize.LastAngle = Angle
 if Angle > MaxAngle then
+State.Humanize.CurrentBlocked = true
+State.Humanize.CurrentMissing = false
+State.Humanize.LastSpread = 0
+State.Humanize.LastResult = 'PASSTHROUGH'
+State.Humanize.Status = string.format('OUTSIDE CONE | %.0f > %.0f DEG', Angle, MaxAngle)
+if Commit and not State.Humanize.Tallied then
+State.Humanize.Tallied = true
 State.Humanize.Blocked += 1
-State.Humanize.Status = string.format('ASSISTING - %.0f deg OFF', Angle)
+end
+-- Outside the cone the shot still fires along the player's real camera ray.
+local Character = LP.Character
+local Head = Character and safe_find(Character, 'Head')
+local Origin = Head and Head.Position or CameraOrigin
+local RayLength = math.max((Target - Origin).Magnitude, 1000)
+return Origin + Camera.CFrame.LookVector.Unit * RayLength
 end
 end
 end
 
-if Radius <= 0 and Accuracy >= 100 then
-State.Humanize.Status = 'PURE (NO ERROR)'
-State.Humanize.CurrentMissing = false
-return Target
+local Missing = Roll.Hit > (Accuracy / 100)
+local Spread
+if Missing then
+local MissBase = math.max(Radius, 0.65)
+Spread = math.clamp(math.max(1.15,
+MissBase * Severity * (0.80 + Roll.Spread * 0.45)), 1.15, 5.5)
+else
+Spread = math.clamp(
+Radius * (0.05 + Roll.Spread * 0.13) * (1.05 - Accuracy / 200), 0, 0.18)
 end
 
-local Roll = State.Humanize.GetShotRoll()
-local AccuracyFactor = math.clamp(Accuracy / 100, 0, 1)
-local Missing = false
-State.Humanize.CurrentMissing = false
-local Spread = math.min(
-Radius * (0.18 + Roll.Spread * 0.42) * (1.10 - AccuracyFactor * 0.28) * math.clamp(Severity * 0.72, 0.72, 1.8),
-0.48)
-if Accuracy >= 100 and Radius <= 0 then Spread = 0 end
+State.Humanize.CurrentMissing = Missing
 State.Humanize.LastSpread = Spread
-if not State.Humanize.Tallied then
+State.Humanize.LastResult = Missing and 'MISS' or 'MAKE'
+State.Humanize.Status = string.format('%s | %.2f STUDS AT RIM',
+Missing and 'MISS VARIATION' or 'MAKE VARIATION', Spread)
+if Commit and not State.Humanize.Tallied then
 State.Humanize.Tallied = true
 if Missing then State.Humanize.Misses += 1 else State.Humanize.Makes += 1 end
 end
-State.Humanize.Status = string.format('HUMAN AIM | %.2f STUDS VARIANCE', Spread)
+if Spread <= 0 or not Rim or not safe_is_a(Rim, 'BasePart') then return Target end
+
+local Character = LP.Character
+local Head = Character and safe_find(Character, 'Head')
+local Origin = Head and Head.Position or (Camera and Camera.CFrame.Position)
+if typeof(Origin) ~= 'Vector3' then return Target end
+local TargetVector = Target - Origin
+local RimVector = Rim.Position - Origin
+local TargetFlatDistance = Vector3.new(TargetVector.X, 0, TargetVector.Z).Magnitude
+local RimFlatDistance = Vector3.new(RimVector.X, 0, RimVector.Z).Magnitude
+if TargetFlatDistance <= 0.01 or RimFlatDistance <= 0.01 then return Target end
+-- Convert UI studs at the basket into the equivalent offset on the far formula ray.
+local RayScale = TargetFlatDistance / RimFlatDistance
 local Theta = math.rad(Roll.Angle)
-return Target + Vector3.new(
-math.cos(Theta) * Spread,
-(Roll.Lift - 0.5) * Spread * 0.5,
-math.sin(Theta) * Spread
-)
+local HorizontalOffset = Vector3.new(math.cos(Theta), 0, math.sin(Theta))
+* Spread * RayScale
+local VerticalOffset = Vector3.new(0,
+(Roll.Lift - 0.5) * Spread * 0.20 * RayScale, 0)
+return Target + HorizontalOffset + VerticalOffset
 end
 
 local BuildSilentAimTarget
-BuildSilentAimTarget = WYNF_JIT_MAX(function(Rim, Distance, Power, OriginOverride)
+BuildSilentAimTarget = WYNF_JIT_MAX(function(Rim, Distance, Power, OriginOverride, Commit)
 local Target = GetFormulaTarget(Rim, Power, OriginOverride)
 if Target and CONFIG.HumanizeEnabled then
-return State.Humanize.Apply(Target, Rim), nil
+return State.Humanize.Apply(Target, Rim, Commit == true), nil
 end
 return Target, nil
 end)
@@ -16046,9 +16061,10 @@ State.LegitAimAngularVelocityPitch = 0
 State.LegitAimNoiseYaw, State.LegitAimNoisePitch = 0, 0
 State.LegitAimNoiseTargetYaw, State.LegitAimNoiseTargetPitch = 0, 0
 State.LegitAimManualUntil = 0
--- The player pressing jump is already the intent signal. Waiting a random
--- reaction period here made the camera appear frozen, then snap from a stale pose.
-State.LegitAimReactionDelay = 0
+-- Jump is already an intent signal, so latency stays subtle but not machine-perfect.
+local ReactionMin = math.clamp(tonumber(CONFIG.LegitAimReactionMin) or 0.015, 0, 0.12)
+local ReactionMax = math.clamp(tonumber(CONFIG.LegitAimReactionMax) or 0.045, ReactionMin, 0.16)
+State.LegitAimReactionDelay = ReactionMin + (ReactionMax - ReactionMin) * math.random()
 State.LegitAimSwaySeed = math.random() * 1000
 local InitialDot = math.clamp(StartingLook.Unit:Dot(StartingDirection.Unit), -1, 1)
 local InitialAngle = math.deg(math.acos(InitialDot))
@@ -16235,11 +16251,10 @@ if ManualInput and Plan then
 State.LegitAimFlickPlan = false
 Plan = false
 end
-local MotionElapsed = math.max(0, Elapsed)
+local MotionElapsed = math.max(0, Elapsed - State.LegitAimReactionDelay)
 if Plan then
--- Advance by rendered time instead of jumping to wall-clock progress after
--- a delayed frame. This prevents catch-up teleports under frame hitches.
-local PlaybackStep = DeltaTime -- already clamped to 1/20 above
+-- Render-time playback prevents catch-up teleports under frame hitches.
+local PlaybackStep = Elapsed >= State.LegitAimReactionDelay and DeltaTime or 0
 Plan.Clock = math.max(0, tonumber(Plan.Clock) or 0) + PlaybackStep
 MotionElapsed = Plan.Clock
 end
@@ -16536,7 +16551,7 @@ local Rim, Dist = FindConfiguredGoal()
 local DesiredPower = State.PowerBypass.GetEffectivePower()
 if Rim then
 local ShotTarget, ShotY = BuildSilentAimTarget(
-Rim, Dist, DesiredPower
+Rim, Dist, DesiredPower, nil, true
 )
 if ShotTarget then
 SilentAim.FireActorAim(ShotTarget)
@@ -16661,7 +16676,7 @@ local Rim, Distance = FindConfiguredGoal()
 if not Rim then return end
 local Power = State.PowerBypass.GetEffectivePower()
 local AimDistance = State.Backboard.GetConfiguredAimDistance(Rim, Distance)
-local Target = select(1, BuildSilentAimTarget(Rim, AdjustAimDistance(AimDistance), Power))
+local Target = select(1, BuildSilentAimTarget(Rim, AdjustAimDistance(AimDistance), Power, nil, true))
 if Target then
 SilentAim.FireActorAim(Target)
 State.ClickShoot.Target = Target
@@ -16784,7 +16799,7 @@ State.LastAutoPowerPick = { Power = BestPower, At = os.clock() }
 end
 end
 
-local Target, YOffset = BuildSilentAimTarget(Rim, AimDistance, Power)
+local Target, YOffset = BuildSilentAimTarget(Rim, AimDistance, Power, nil, true)
 if not Target then
 Notify('NO JUMP SHOT', 'No ballistic solution exists at the current power and distance.')
 return false
@@ -34108,15 +34123,17 @@ HubUI.Controls.AutoPower = CreateCheckbox(LeftGroup, 59, 'Auto Power', CONFIG.Au
 CONFIG.AutoPower = Value
 if HubUI.Sync then HubUI.Sync() end
 end)
-HubUI.Controls.HumanAiming = CreateCheckbox(LeftGroup, 89, 'Human Aiming', CONFIG.HumanizeEnabled == true, function(Value)
+HubUI.Controls.HumanAiming = CreateCheckbox(LeftGroup, 89, 'Human Aim', CONFIG.HumanizeEnabled == true, function(Value)
 CONFIG.HumanizeEnabled = Value == true
 State.Humanize.Status = CONFIG.HumanizeEnabled and 'READY' or 'IDLE'
-State.Humanize.NewShot()
-SilentAim.ArcSolveCache = {}
-SilentAim.ArcSolveCacheCount = 0
+if CONFIG.HumanizeEnabled then State.Humanize.NewShot() else
+State.Humanize.Roll = nil; State.Humanize.Tallied = true
+State.Humanize.CurrentMissing = false; State.Humanize.CurrentBlocked = false
+end
+SilentAim.ArcSolveCache = {}; SilentAim.ArcSolveCacheCount = 0
 pcall(SilentAim.ClearActorAim)
 if HubUI.Controls.HumanizeEnabled then HubUI.Controls.HumanizeEnabled:Set(CONFIG.HumanizeEnabled, false) end
-Notify('GOLDEN EAGLE', CONFIG.HumanizeEnabled and 'Human Aiming enabled: accurate aim with natural variation.' or 'Human Aiming disabled.')
+Notify('GOLDEN EAGLE', CONFIG.HumanizeEnabled and 'Human Aim enabled: cone, accuracy, and rim-space variation are active.' or 'Human Aim disabled.')
 end)
 
 HubUI.Controls.AutoPowerPreference = CreateSelector(
@@ -34344,21 +34361,22 @@ end)
 
 CreateSectionHeader(HubUI.HumanizerGroup, 11, 'Humanization')
 HubUI.Controls.HumanizeEnabled = CreateCheckbox(
-HubUI.HumanizerGroup, 31, 'Enable humanizer', CONFIG.HumanizeEnabled == true,
+HubUI.HumanizerGroup, 31, 'Enable Human Aim', CONFIG.HumanizeEnabled == true,
 function(Value)
 CONFIG.HumanizeEnabled = Value == true
-State.Humanize.Status = 'IDLE'
-State.Humanize.NewShot()
-SilentAim.ArcSolveCache = {}
-SilentAim.ArcSolveCacheCount = 0
+State.Humanize.Status = CONFIG.HumanizeEnabled and 'READY' or 'IDLE'
+if CONFIG.HumanizeEnabled then State.Humanize.NewShot() else
+State.Humanize.Roll = nil; State.Humanize.Tallied = true
+State.Humanize.CurrentMissing = false; State.Humanize.CurrentBlocked = false
+end
+SilentAim.ArcSolveCache = {}; SilentAim.ArcSolveCacheCount = 0
 pcall(SilentAim.ClearActorAim)
-Notify('GOLDEN EAGLE', CONFIG.HumanizeEnabled
-and 'Humanizer on: shots now miss on purpose and only assist inside the cone.'
-or 'Humanizer off: full-accuracy silent aim at any angle.')
+if HubUI.Controls.HumanAiming then HubUI.Controls.HumanAiming:Set(CONFIG.HumanizeEnabled, false) end
+Notify('GOLDEN EAGLE', CONFIG.HumanizeEnabled and 'Human Aim on: all humanizer controls are active.' or 'Human Aim off: full-accuracy silent aim restored.')
 end
 )
 HubUI.Controls.HumanizeAccuracy = CreateNumberInput(
-HubUI.HumanizerGroup, 61, 'Aim stability %', CONFIG.HumanizeAccuracy, 0, 100, 0,
+HubUI.HumanizerGroup, 61, 'Make accuracy %', CONFIG.HumanizeAccuracy, 0, 100, 0,
 function(Value)
 CONFIG.HumanizeAccuracy = Value
 State.Humanize.NewShot()
@@ -34366,7 +34384,11 @@ end
 )
 HubUI.Controls.HumanizeMaxAngle = CreateNumberInput(
 HubUI.HumanizerGroup, 91, 'Max redirect (deg)', CONFIG.HumanizeMaxAngle, 1, 90, 0,
-function(Value) CONFIG.HumanizeMaxAngle = Value end
+function(Value)
+CONFIG.HumanizeMaxAngle = Value
+State.Humanize.Status = CONFIG.HumanizeEnabled and 'CONE UPDATED' or 'IDLE'
+pcall(SilentAim.ClearActorAim)
+end
 )
 HubUI.Controls.HumanizeErrorRadius = CreateNumberInput(
 HubUI.HumanizerGroup, 121, 'Error spread (studs)', CONFIG.HumanizeErrorRadius, 0, 3, 1,
@@ -37898,6 +37920,7 @@ CONFIG.BackboardEnabled = CONFIG.BackboardEnabled == true
 local SyncValues = {
 { HubUI.Controls.SilentAim, State.RequestedEnabled },
 { HubUI.Controls.HumanAiming, CONFIG.HumanizeEnabled == true },
+{ HubUI.Controls.HumanizeEnabled, CONFIG.HumanizeEnabled == true },
 { HubUI.Controls.AutoPass, State.AutoPassEnabled },
 { HubUI.Controls.PassArcMode, CONFIG.PassArcMode },
 { HubUI.Controls.PassLead, CONFIG.PassLead },
@@ -40037,8 +40060,9 @@ Remaining)
 end
 if HubUI.HumanizeStatusText then
 HubUI.HumanizeStatusText.Text = string.format(
-'STATUS   %s\nCAM ANGLE %s\nVARIANCE %.2f\nMAKES    %d | MISSES %d\nBLOCKED  %d',
+'STATUS   %s\nRESULT   %s\nCAM ANGLE %s\nRIM ERROR %.2f STUDS\nMAKES %d | MISSES %d | BLOCKED %d',
 CONFIG.HumanizeEnabled and (State.Humanize.Status or 'IDLE') or 'OFF',
+CONFIG.HumanizeEnabled and (State.Humanize.LastResult or '--') or '--',
 State.Humanize.LastAngle > 0 and string.format('%.0f deg', State.Humanize.LastAngle) or '--',
 State.Humanize.LastSpread or 0,
 State.Humanize.Makes or 0,
